@@ -2,7 +2,9 @@
 
 
 def main() -> None:
-    raise SystemExit("Bootstrap is not implemented: add migrations and resource wiring.")
+    raise SystemExit(
+        "Bootstrap is not implemented: add migrations and resource wiring."
+    )
 
 
 if __name__ == "__main__":
