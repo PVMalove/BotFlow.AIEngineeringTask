@@ -7,14 +7,24 @@ from pathlib import Path
 
 
 def main() -> None:
-    directory = Path(__file__).resolve().parents[1] / ".secrets"
+    directory = Path(
+        os.environ.get(
+            "BOTFLOW_SECRETS_DIR", Path(__file__).resolve().parents[1] / ".secrets"
+        )
+    ).resolve()
     directory.mkdir(mode=0o700, exist_ok=True)
     directory.chmod(0o700)
     names = (
-        "identity_db_password", "tasks_db_password", "automation_db_password",
-        "rabbitmq_password", "minio_password", "tasks_service_key",
-        "automation_service_key", "redis_automation_password",
-        "redis_tasks_password", "redis_health_password",
+        "identity_db_password",
+        "tasks_db_password",
+        "automation_db_password",
+        "rabbitmq_password",
+        "minio_password",
+        "tasks_service_key",
+        "automation_service_key",
+        "redis_automation_password",
+        "redis_tasks_password",
+        "redis_health_password",
     )
     for name in names:
         path = directory / name
