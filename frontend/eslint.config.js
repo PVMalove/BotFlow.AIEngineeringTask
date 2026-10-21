@@ -15,7 +15,9 @@ export default [
     ...tseslint.configs.recommended,
     {
         files: ['**/*.{ts,tsx}'],
-        languageOptions: { globals: { document: 'readonly' } },
+        languageOptions: {
+            globals: { document: 'readonly', window: 'readonly' },
+        },
         plugins: { 'react-hooks': reactHooks, 'react-refresh': reactRefresh },
         rules: {
             ...reactHooks.configs.recommended.rules,
