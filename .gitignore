@@ -1,0 +1,49 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+.secrets/
+*.pem
+*.key
+backups/
+
+# Python and build outputs
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+
+# Frontend
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Local working materials and agent tooling
+.harness/
+.agents/
+.claude/
+.codex/
+AGENTS.md
+CLAUDE.md
+/docs/tasks/
+/docs/agents/
+/docs/harness-manifest.md
+/docs/project-design-review.md
+/docs/development-commands.md
+.git_backup*/

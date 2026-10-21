@@ -1,0 +1,335 @@
+name: "${COMPOSE_PROJECT_NAME:-botflow}"
+services:
+  identity-db:
+    image: "postgres:18-bookworm@sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc"
+    restart: "unless-stopped"
+    environment:
+      POSTGRES_USER: "identity"
+      POSTGRES_DB: "identity"
+      POSTGRES_PASSWORD_FILE: "/run/secrets/identity_db_password"
+    secrets:
+      - "identity_db_password"
+    volumes:
+      - "identity_db_data:/var/lib/postgresql"
+    networks:
+      - "backend"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""
+      interval: "5s"
+      timeout: "3s"
+      retries: 10
+  identity-api:
+    image: "botflow-identity:local"
+    build:
+      context: "./backend"
+      dockerfile: "services/identity-service/Dockerfile"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    networks:
+      - "backend"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"
+      interval: "10s"
+      timeout: "3s"
+      retries: 5
+  identity-bootstrap:
+    image: "botflow-identity:local"
+    profiles:
+      - "bootstrap"
+    command:
+      - "python"
+      - "-m"
+      - "botflow_identity.bootstrap"
+    networks:
+      - "backend"
+  identity-worker:
+    image: "botflow-identity:local"
+    profiles:
+      - "workers"
+    command:
+      - "python"
+      - "-m"
+      - "botflow_identity.worker.main"
+    networks:
+      - "backend"
+  tasks-db:
+    image: "postgres:18-bookworm@sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc"
+    restart: "unless-stopped"
+    environment:
+      POSTGRES_USER: "tasks"
+      POSTGRES_DB: "tasks"
+      POSTGRES_PASSWORD_FILE: "/run/secrets/tasks_db_password"
+    secrets:
+      - "tasks_db_password"
+    volumes:
+      - "tasks_db_data:/var/lib/postgresql"
+    networks:
+      - "backend"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""
+      interval: "5s"
+      timeout: "3s"
+      retries: 10
+  tasks-api:
+    image: "botflow-tasks:local"
+    build:
+      context: "./backend"
+      dockerfile: "services/tasks-service/Dockerfile"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    networks:
+      - "backend"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"
+      interval: "10s"
+      timeout: "3s"
+      retries: 5
+  tasks-bootstrap:
+    image: "botflow-tasks:local"
+    profiles:
+      - "bootstrap"
+    command:
+      - "python"
+      - "-m"
+      - "botflow_tasks.bootstrap"
+    networks:
+      - "backend"
+  tasks-worker:
+    image: "botflow-tasks:local"
+    profiles:
+      - "workers"
+    command:
+      - "python"
+      - "-m"
+      - "botflow_tasks.worker.main"
+    networks:
+      - "backend"
+  automation-db:
+    image: "postgres:18-bookworm@sha256:bbf83594798e144bff365a9c191c5d779f181fb3135902064ab8ff11918020fc"
+    restart: "unless-stopped"
+    environment:
+      POSTGRES_USER: "automation"
+      POSTGRES_DB: "automation"
+      POSTGRES_PASSWORD_FILE: "/run/secrets/automation_db_password"
+    secrets:
+      - "automation_db_password"
+    volumes:
+      - "automation_db_data:/var/lib/postgresql"
+    networks:
+      - "backend"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""
+      interval: "5s"
+      timeout: "3s"
+      retries: 10
+  automation-api:
+    image: "botflow-automation:local"
+    build:
+      context: "./backend"
+      dockerfile: "services/automation-service/Dockerfile"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    networks:
+      - "backend"
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"
+      interval: "10s"
+      timeout: "3s"
+      retries: 5
+  automation-bootstrap:
+    image: "botflow-automation:local"
+    profiles:
+      - "bootstrap"
+    command:
+      - "python"
+      - "-m"
+      - "botflow_automation.bootstrap"
+    networks:
+      - "backend"
+  automation-worker:
+    image: "botflow-automation:local"
+    profiles:
+      - "workers"
+    command:
+      - "python"
+      - "-m"
+      - "botflow_automation.worker.main"
+    networks:
+      - "backend"
+  redis:
+    image: "redis:8-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0"
+    command:
+      - "redis-server"
+      - "/usr/local/etc/redis/redis.conf"
+    restart: "unless-stopped"
+    volumes:
+      - "./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro"
+      - "redis_data:/data"
+    secrets:
+      - "redis_acl"
+      - "redis_health_password"
+    networks:
+      - "backend"
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - "REDISCLI_AUTH=\"$$(cat /run/secrets/redis_health_password)\" redis-cli --user health --no-auth-warning ping"
+      interval: "5s"
+      timeout: "3s"
+      retries: 10
+  rabbitmq:
+    image: "rabbitmq:4-management-alpine@sha256:d5c8b200a061242868833c8bbdd0703534a4a06ffe654a853e33acd46c7ce258"
+    entrypoint:
+      - "sh"
+      - "-ec"
+      - "export RABBITMQ_DEFAULT_PASS=\"$$(cat /run/secrets/rabbitmq_password)\"; exec docker-entrypoint.sh rabbitmq-server"
+    environment:
+      RABBITMQ_DEFAULT_USER: "botflow"
+    restart: "unless-stopped"
+    secrets:
+      - "rabbitmq_password"
+    volumes:
+      - "rabbitmq_data:/var/lib/rabbitmq"
+    networks:
+      - "backend"
+    healthcheck:
+      test:
+        - "CMD"
+        - "rabbitmq-diagnostics"
+        - "-q"
+        - "ping"
+      interval: "10s"
+      timeout: "5s"
+      retries: 10
+  minio:
+    image: "botflow-minio:local"
+    build:
+      context: "./infra/minio"
+    environment:
+      MINIO_ROOT_USER: "botflow"
+      MINIO_ROOT_PASSWORD_FILE: "/run/secrets/minio_password"
+    restart: "unless-stopped"
+    secrets:
+      - "minio_password"
+    volumes:
+      - "minio_data:/data"
+    networks:
+      - "backend"
+    healthcheck:
+      test:
+        - "CMD"
+        - "curl"
+        - "-fsS"
+        - "http://127.0.0.1:9000/minio/health/live"
+      interval: "10s"
+      timeout: "3s"
+      retries: 10
+  frontend:
+    image: "botflow-frontend:local"
+    build:
+      context: "./frontend"
+    ports:
+      - "127.0.0.1:${BOTFLOW_HTTP_PORT:-8080}:8080"
+    networks:
+      - "backend"
+    depends_on:
+      identity-api:
+        condition: "service_healthy"
+      tasks-api:
+        condition: "service_healthy"
+  telegram-bot:
+    image: "botflow-automation:local"
+    profiles:
+      - "workers"
+    command:
+      - "python"
+      - "-m"
+      - "botflow_automation.bot.main"
+    secrets:
+      - "telegram_bot_token"
+      - "automation_service_key"
+    networks:
+      - "backend"
+  whisper-worker:
+    image: "botflow-automation:local"
+    profiles:
+      - "workers"
+    command:
+      - "python"
+      - "-m"
+      - "botflow_automation.worker.main"
+      - "transcription"
+    secrets:
+      - "telegram_bot_token"
+      - "redis_automation_password"
+    networks:
+      - "backend"
+    volumes:
+      - "whisper_models:/models"
+  notification-worker:
+    image: "botflow-automation:local"
+    profiles:
+      - "workers"
+    command:
+      - "python"
+      - "-m"
+      - "botflow_automation.worker.main"
+      - "notifications"
+    secrets:
+      - "telegram_bot_token"
+      - "redis_automation_password"
+    networks:
+      - "backend"
+networks:
+  backend: {}
+volumes:
+  identity_db_data: {}
+  tasks_db_data: {}
+  automation_db_data: {}
+  redis_data: {}
+  rabbitmq_data: {}
+  minio_data: {}
+  whisper_models: {}
+secrets:
+  redis_acl:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/redis_acl"
+  redis_health_password:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/redis_health_password"
+  redis_automation_password:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/redis_automation_password"
+  redis_tasks_password:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/redis_tasks_password"
+  rabbitmq_password:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/rabbitmq_password"
+  minio_password:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/minio_password"
+  telegram_bot_token:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/telegram_bot_token"
+  tasks_service_key:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/tasks_service_key"
+  automation_service_key:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/automation_service_key"
+  identity_db_password:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/identity_db_password"
+  tasks_db_password:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/tasks_db_password"
+  automation_db_password:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/automation_db_password"
