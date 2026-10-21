@@ -8,10 +8,10 @@ from uuid import UUID
 
 import httpx
 from aio_pika import DeliveryMode, Message
-from botflow_automation.containers import Container as AutomationContainer
-from botflow_identity.containers import Container as IdentityContainer
+from api.containers import Container as AutomationContainer
 from botflow_platform.http import create_app
-from botflow_tasks.containers import Container as TasksContainer
+from botflow_platform.resources import open_resources
+from botflow_platform.settings import Settings
 from botocore.exceptions import ClientError
 from sqlalchemy import text
 
@@ -26,8 +26,8 @@ logging.disable(logging.CRITICAL)
 
 class InfrastructureSmoke(unittest.IsolatedAsyncioTestCase):
     async def test_http_lifespan_closes_resources_on_exception(self) -> None:
-        container = IdentityContainer()
-        sut = create_app("identity", container)
+        container = AutomationContainer()
+        sut = create_app("automation", container)
         with self.assertRaisesRegex(RuntimeError, "smoke shutdown"):
             async with sut.router.lifespan_context(sut):
                 resources = await container.resources()
@@ -39,11 +39,8 @@ class InfrastructureSmoke(unittest.IsolatedAsyncioTestCase):
     async def test_all_databases_have_isolated_sessions_and_survive_restart(
         self,
     ) -> None:
-        for factory in [IdentityContainer, TasksContainer, AutomationContainer]:
-            container = factory()
-            try:
-                await container.init_resources()
-                resources = await container.resources()
+        for service in ("identity", "tasks", "automation"):
+            async with open_resources(Settings(service=service)) as resources:
                 async with (
                     resources.sessions() as first,
                     resources.sessions() as second,
@@ -70,8 +67,6 @@ class InfrastructureSmoke(unittest.IsolatedAsyncioTestCase):
                     if AFTER:
                         await third.execute(text(f"DROP TABLE {TABLE}"))
                         await third.commit()
-            finally:
-                await container.shutdown_resources()
             self.assertTrue(resources.closed)
             self.assertTrue(resources.rabbitmq.is_closed)
 

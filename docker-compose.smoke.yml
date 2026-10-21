@@ -6,16 +6,11 @@ services:
     image: "botflow-automation:${BOTFLOW_IMAGE_TAG:?isolated image tag required}"
     profiles: ["smoke"]
     environment:
-      PYTHONPATH: "/workspace/backend/libs/platform/src:/workspace/backend/services/identity-service/src:/workspace/backend/services/tasks-service/src:/workspace/backend/services/automation-service/src"
       BOTFLOW_SMOKE_ID: "${BOTFLOW_SMOKE_ID:?isolated smoke ID required}"
       BOTFLOW_SMOKE_PHASE: "${BOTFLOW_SMOKE_PHASE:-before}"
     command: ["python", "/workspace/backend/tests/integration/smoke.py"]
     volumes:
       - "./backend/tests/integration:/workspace/backend/tests/integration:ro"
-      - "./backend/libs/platform/src:/workspace/backend/libs/platform/src:ro"
-      - "./backend/services/identity-service/src:/workspace/backend/services/identity-service/src:ro"
-      - "./backend/services/tasks-service/src:/workspace/backend/services/tasks-service/src:ro"
-      - "./backend/services/automation-service/src:/workspace/backend/services/automation-service/src:ro"
     secrets:
       - identity_db_password
       - tasks_db_password

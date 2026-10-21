@@ -127,22 +127,36 @@ BotFlow.AIEngineeringTask/
         └── automation-service/
             ├── Dockerfile             # у каждого сервиса свой образ
             ├── pyproject.toml
+            ├── src/                   # корень импортов конкретного сервиса
+            │   ├── domain/            # чистая модель и инварианты
+            │   │   ├── entities/
+            │   │   ├── value_objects/
+            │   │   ├── events/
+            │   │   ├── repositories.py
+            │   │   └── unit_of_work.py
+            │   ├── application/       # commands/, queries/, ports/
+            │   ├── infrastructure/    # реализации портов: db/, security/
+            │   │   └── db/
+            │   │       ├── alembic.ini
+            │   │       └── alembic/
+            │   ├── api/               # HTTP, схемы, containers.py — composition root
+            │   ├── contracts/         # framework-independent View: frozen dataclasses
+            │   ├── core/              # кросс-срезная политика сервиса
+            │   └── common/            # локальные утилиты
             ├── tests/
-            └── src/botflow_automation/
-                ├── domain/            # чистая модель и инварианты
-                ├── application/       # команды, запросы и порты
-                ├── infrastructure/    # БД, брокеры, S3 и внешние адаптеры
-                │   └── db/
-                │       ├── alembic.ini
-                │       └── alembic/
-                ├── api/               # HTTP-оболочка
-                ├── bot/               # Telegram ingress
-                ├── worker/            # фоновые процессы
-                ├── containers.py      # composition root dependency-injector
-                └── bootstrap.py       # отдельная подготовка ресурсов
+            │   ├── unit/
+            │   ├── integration/
+            │   ├── e2e/
+            │   └── performance/
+            ├── k8s/
+            ├── docs/
+            ├── ci/
+            └── scripts/               # bootstrap.py, worker.py, bot.py (Automation)
 ```
 
-Identity и Tasks имеют аналогичные слои, собственные миграции и workers.
+Identity и Tasks имеют такую же структуру, собственные миграции и workers.
+Слои лежат непосредственно в `src/`; у каждого процесса свой корень импортов.
+Правила запуска и изоляции описаны в [локальной инфраструктуре](docs/local-infrastructure.md).
 Бизнес-модели не разделяются через общую библиотеку и не читают чужие БД.
 
 ## Начало работы

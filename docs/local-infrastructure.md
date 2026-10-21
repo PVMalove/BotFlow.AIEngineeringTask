@@ -1,8 +1,8 @@
 # Локальная инфраструктура и проверки #2
 
 Общие технические адаптеры находятся в `botflow_platform.resources`. У каждого
-сервиса свой `Container`: при старте HTTP-процесса открываются его PostgreSQL и
-RabbitMQ, у Tasks/Automation также Redis, у Automation — S3-клиент. FastAPI
+сервиса свой `src/api/containers.py` с `Container`: при старте HTTP-процесса
+открываются его PostgreSQL и RabbitMQ, у Tasks/Automation также Redis, у Automation — S3-клиент. FastAPI
 lifespan и `providers.Resource` закрывают их при остановке. `AsyncExitStack`
 освобождает уже открытые подключения при ошибке следующего ресурса.
 
@@ -13,6 +13,41 @@ Commit должен быть явным; закрытие сессии отка�
 `/health/live` сообщает только о процессе. `/health/ready` остаётся 503:
 работающие подключения не означают готовность бизнес-обработчиков. Bootstrap,
 миграции бизнес-данных, Telegram и STT не заменены успешными заглушками.
+
+## Структура сервисов и импорты
+
+Каждый `backend/services/<service>/src/` непосредственно содержит `domain/`,
+`application/`, `infrastructure/`, `api/`, `contracts/`, `core/`, `common/`.
+`api/containers.py` собирает зависимости; `contracts/` предназначен для View
+на основе frozen dataclasses без зависимости от FastAPI и ORM. Доменные
+репозитории и Unit of Work объявляются в `domain/`, реализации — в
+`infrastructure/`. Сущности и порты будут заполнены бизнес-задачами.
+
+В корне каждого сервиса находятся `tests/{unit,integration,e2e,performance}/`,
+`k8s/`, `docs/`, `ci/`, `scripts/`. CLI-точки входа bootstrap, worker и Telegram
+bot находятся в `scripts/`; они пока явно завершаются сообщением об отсутствии
+реализации. Каталоги для будущих артефактов не означают готовность Kubernetes,
+нагрузочных тестов или бизнес-функций.
+
+Сервисы — virtual projects uv (`package = false`): workspace устанавливает их
+зависимости, но не смешивает одноимённые пакеты `api`, `domain` и другие слои в
+`site-packages`. Проверки каждого сервиса выполняются отдельным процессом из
+его каталога; pytest и mypy получают только его `src`. Общая техническая
+библиотека по-прежнему устанавливается как `botflow_platform`.
+
+Docker-образ копирует только исходники выбранного сервиса в `/srv/src`, задаёт
+`PYTHONPATH=/srv/src` и запускает `uvicorn api.main:app`. Smoke использует
+composition root своего Automation-образа и общий ресурсный адаптер для трёх
+БД; чужие исходники сервисов в процесс не подключаются. Запущенные API каждого
+сервиса проверяются по HTTP.
+
+Для локального HTTP-процесса после `make deps` (инфраструктура и secret-файлы
+должны быть доступны по параметрам `BOTFLOW_*`):
+
+```bash
+cd backend/services/identity-service
+PYTHONPATH=src uv run --locked --no-sync uvicorn api.main:app --port 8000
+```
 
 ## Запуск
 

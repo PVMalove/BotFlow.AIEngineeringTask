@@ -395,7 +395,7 @@ wheels = [
 [[package]]
 name = "automation-service"
 version = "0.1.0"
-source = { editable = "services/automation-service" }
+source = { virtual = "services/automation-service" }
 dependencies = [
     { name = "aio-pika" },
     { name = "aioboto3" },
@@ -743,7 +743,7 @@ wheels = [
 [[package]]
 name = "identity-service"
 version = "0.1.0"
-source = { editable = "services/identity-service" }
+source = { virtual = "services/identity-service" }
 dependencies = [
     { name = "aio-pika" },
     { name = "alembic" },
@@ -1525,7 +1525,7 @@ wheels = [
 [[package]]
 name = "tasks-service"
 version = "0.1.0"
-source = { editable = "services/tasks-service" }
+source = { virtual = "services/tasks-service" }
 dependencies = [
     { name = "aio-pika" },
     { name = "alembic" },

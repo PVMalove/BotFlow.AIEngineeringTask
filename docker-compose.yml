@@ -53,8 +53,7 @@ services:
       - "bootstrap"
     command:
       - "python"
-      - "-m"
-      - "botflow_identity.bootstrap"
+      - "scripts/bootstrap.py"
     networks:
       - "backend"
   identity-worker:
@@ -63,8 +62,7 @@ services:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_identity.worker.main"
+      - "scripts/worker.py"
     networks:
       - "backend"
   tasks-db:
@@ -123,8 +121,7 @@ services:
       - "bootstrap"
     command:
       - "python"
-      - "-m"
-      - "botflow_tasks.bootstrap"
+      - "scripts/bootstrap.py"
     networks:
       - "backend"
   tasks-worker:
@@ -133,8 +130,7 @@ services:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_tasks.worker.main"
+      - "scripts/worker.py"
     networks:
       - "backend"
   automation-db:
@@ -196,8 +192,7 @@ services:
       - "bootstrap"
     command:
       - "python"
-      - "-m"
-      - "botflow_automation.bootstrap"
+      - "scripts/bootstrap.py"
     networks:
       - "backend"
   automation-worker:
@@ -206,8 +201,7 @@ services:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_automation.worker.main"
+      - "scripts/worker.py"
     networks:
       - "backend"
   redis:
@@ -300,8 +294,7 @@ services:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_automation.bot.main"
+      - "scripts/bot.py"
     secrets:
       - "telegram_bot_token"
       - "automation_service_key"
@@ -313,8 +306,7 @@ services:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_automation.worker.main"
+      - "scripts/worker.py"
       - "transcription"
     secrets:
       - "telegram_bot_token"
@@ -329,8 +321,7 @@ services:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_automation.worker.main"
+      - "scripts/worker.py"
       - "notifications"
     secrets:
       - "telegram_bot_token"
