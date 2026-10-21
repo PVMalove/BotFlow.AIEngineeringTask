@@ -18,7 +18,7 @@
 повторы, дедупликация и восстановление после рестарта. Расширенные процедуры
 аварийного восстановления и эксплуатации отложены: [ADR-0021](docs/adr/0021-proportionate-reliability.md).
 
-**Состояние:** архитектура и стартовый каркас. Есть манифесты/lockfiles,
+**Состояние:** инфраструктурный каркас с DI lifecycle, изолированным smoke и CI. Есть манифесты/lockfiles,
 Dockerfiles, Compose, HTTP-оболочки сервисов и начальная страница React.
 Создание задач, авторизация, брокерные обработчики, миграции бизнес-данных
 и STT-адаптер ещё не реализованы. `/health/live` проверяет процесс;
@@ -127,22 +127,36 @@ BotFlow.AIEngineeringTask/
         └── automation-service/
             ├── Dockerfile             # у каждого сервиса свой образ
             ├── pyproject.toml
+            ├── src/                   # корень импортов конкретного сервиса
+            │   ├── domain/            # чистая модель и инварианты
+            │   │   ├── entities/
+            │   │   ├── value_objects/
+            │   │   ├── events/
+            │   │   ├── repositories.py
+            │   │   └── unit_of_work.py
+            │   ├── application/       # commands/, queries/, ports/
+            │   ├── infrastructure/    # реализации портов: db/, security/
+            │   │   └── db/
+            │   │       ├── alembic.ini
+            │   │       └── alembic/
+            │   ├── api/               # HTTP, схемы, containers.py — composition root
+            │   ├── contracts/         # framework-independent View: frozen dataclasses
+            │   ├── core/              # кросс-срезная политика сервиса
+            │   └── common/            # локальные утилиты
             ├── tests/
-            └── src/botflow_automation/
-                ├── domain/            # чистая модель и инварианты
-                ├── application/       # команды, запросы и порты
-                ├── infrastructure/    # БД, брокеры, S3 и внешние адаптеры
-                │   └── db/
-                │       ├── alembic.ini
-                │       └── alembic/
-                ├── api/               # HTTP-оболочка
-                ├── bot/               # Telegram ingress
-                ├── worker/            # фоновые процессы
-                ├── containers.py      # composition root dependency-injector
-                └── bootstrap.py       # отдельная подготовка ресурсов
+            │   ├── unit/
+            │   ├── integration/
+            │   ├── e2e/
+            │   └── performance/
+            ├── k8s/
+            ├── docs/
+            ├── ci/
+            └── scripts/               # bootstrap.py, worker.py, bot.py (Automation)
 ```
 
-Identity и Tasks имеют аналогичные слои, собственные миграции и workers.
+Identity и Tasks имеют такую же структуру, собственные миграции и workers.
+Слои лежат непосредственно в `src/`; у каждого процесса свой корень импортов.
+Правила запуска и изоляции описаны в [локальной инфраструктуре](docs/local-infrastructure.md).
 Бизнес-модели не разделяются через общую библиотеку и не читают чужие БД.
 
 ## Начало работы
@@ -158,6 +172,7 @@ make build           # сборка стартовых образов
 make infra           # PostgreSQL, Redis, RabbitMQ, MinIO
 make run             # HTTP-оболочки и начальная страница на localhost:8080
 make down            # остановка с сохранением томов
+make smoke           # собственные PG/RabbitMQ/Redis/MinIO, DI/S3, down/up; очистка тестовых томов
 ```
 
 MinIO собирается из официального исходника с закреплённым SHA, поскольку
@@ -165,12 +180,25 @@ MinIO собирается из официального исходника с �
 сети и отдельно проверяется перед рабочим запуском. Веса Whisper готовятся
 отдельно; его Python-зависимости добавляются после проверки совместимости.
 
-`make deps` явно устанавливает зависимости. `make check`, `make test`,
-`make build`, `make e2e` — интерфейс будущего полного QA. Пока поведенческих
-тестов и изолированного E2E-окружения нет, тестовый gate не считается готовым:
-pytest не принимает пустой набор, E2E явно отказывает. `make setup`/`make demo`
-требуют реализации bootstrap и миграций. Профили `workers` и `bootstrap`
-содержат точки входа, а не работающие бизнес-обработчики.
+`make deps` явно устанавливает зависимости из lockfiles. `make check` и
+`make test` проверяют текущий backend/frontend и служебные скрипты; пустой набор
+pytest/Vitest не считается успешным. `make build` собирает образы.
+`make smoke` поднимает реальные ресурсы в уникальном Compose-проекте, проверяет
+DI, независимые DB-сессии с rollback, RabbitMQ/Redis, приватный S3 roundtrip и
+сохранность данных после down/up. Тестовые credentials и тома отделены от `.secrets`
+и локального стенда; удаляются только ресурсы этого тестового проекта.
+
+`make e2e` запускает тот же изолированный smoke и Playwright для существующей
+страницы на обычном и узком экране. Chromium готовится явно:
+`npm --prefix frontend exec -- playwright install chromium` (в Ubuntu CI добавляется
+`--with-deps`). Это проверки инфраструктуры и оболочки, не доказательство готовности
+создания задач, auth, Telegram или STT. `make setup`/`make demo` по-прежнему
+отказывают до реализации bootstrap и бизнес-миграций. Профили `workers` и
+`bootstrap` содержат точки входа, а не работающие бизнес-обработчики.
+
+GitHub Actions выполняет установку по lockfiles, `make check`, `make test`,
+`make build` и изолированный smoke с браузерной проверкой через `make e2e`.
+Подробности lifecycle, изоляции и диагностики: [локальная инфраструктура](docs/local-infrastructure.md).
 
 Архитектурные детали и принятые компромиссы: [docs/architecture.md](docs/architecture.md),
 [ADR](docs/adr/).

@@ -1,0 +1,22 @@
+# Used only by scripts/integration-smoke.py with a fresh project and secret directory.
+services:
+  frontend:
+    ports: !reset []
+  smoke:
+    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:?isolated image tag required}"
+    profiles: ["smoke"]
+    environment:
+      BOTFLOW_SMOKE_ID: "${BOTFLOW_SMOKE_ID:?isolated smoke ID required}"
+      BOTFLOW_SMOKE_PHASE: "${BOTFLOW_SMOKE_PHASE:-before}"
+    command: ["python", "/workspace/backend/tests/integration/smoke.py"]
+    volumes:
+      - "./backend/tests/integration:/workspace/backend/tests/integration:ro"
+    secrets:
+      - identity_db_password
+      - tasks_db_password
+      - automation_db_password
+      - rabbitmq_password
+      - redis_tasks_password
+      - redis_automation_password
+      - minio_password
+    networks: ["backend"]

@@ -1,1 +1,0 @@
-"""Background process adapters."""

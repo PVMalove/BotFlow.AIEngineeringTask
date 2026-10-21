@@ -21,12 +21,21 @@ services:
       timeout: "3s"
       retries: 10
   identity-api:
-    image: "botflow-identity:local"
+    image: "botflow-identity:${BOTFLOW_IMAGE_TAG:-local}"
     build:
       context: "./backend"
+      network: "${BOTFLOW_BUILD_NETWORK:-default}"
       dockerfile: "services/identity-service/Dockerfile"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    secrets:
+      - "identity_db_password"
+      - "rabbitmq_password"
+    depends_on:
+      identity-db:
+        condition: "service_healthy"
+      rabbitmq:
+        condition: "service_healthy"
     networks:
       - "backend"
     healthcheck:
@@ -39,23 +48,21 @@ services:
       timeout: "3s"
       retries: 5
   identity-bootstrap:
-    image: "botflow-identity:local"
+    image: "botflow-identity:${BOTFLOW_IMAGE_TAG:-local}"
     profiles:
       - "bootstrap"
     command:
       - "python"
-      - "-m"
-      - "botflow_identity.bootstrap"
+      - "scripts/bootstrap.py"
     networks:
       - "backend"
   identity-worker:
-    image: "botflow-identity:local"
+    image: "botflow-identity:${BOTFLOW_IMAGE_TAG:-local}"
     profiles:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_identity.worker.main"
+      - "scripts/worker.py"
     networks:
       - "backend"
   tasks-db:
@@ -79,12 +86,24 @@ services:
       timeout: "3s"
       retries: 10
   tasks-api:
-    image: "botflow-tasks:local"
+    image: "botflow-tasks:${BOTFLOW_IMAGE_TAG:-local}"
     build:
       context: "./backend"
+      network: "${BOTFLOW_BUILD_NETWORK:-default}"
       dockerfile: "services/tasks-service/Dockerfile"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    secrets:
+      - "tasks_db_password"
+      - "rabbitmq_password"
+      - "redis_tasks_password"
+    depends_on:
+      tasks-db:
+        condition: "service_healthy"
+      rabbitmq:
+        condition: "service_healthy"
+      redis:
+        condition: "service_healthy"
     networks:
       - "backend"
     healthcheck:
@@ -97,23 +116,21 @@ services:
       timeout: "3s"
       retries: 5
   tasks-bootstrap:
-    image: "botflow-tasks:local"
+    image: "botflow-tasks:${BOTFLOW_IMAGE_TAG:-local}"
     profiles:
       - "bootstrap"
     command:
       - "python"
-      - "-m"
-      - "botflow_tasks.bootstrap"
+      - "scripts/bootstrap.py"
     networks:
       - "backend"
   tasks-worker:
-    image: "botflow-tasks:local"
+    image: "botflow-tasks:${BOTFLOW_IMAGE_TAG:-local}"
     profiles:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_tasks.worker.main"
+      - "scripts/worker.py"
     networks:
       - "backend"
   automation-db:
@@ -137,12 +154,27 @@ services:
       timeout: "3s"
       retries: 10
   automation-api:
-    image: "botflow-automation:local"
+    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
     build:
       context: "./backend"
+      network: "${BOTFLOW_BUILD_NETWORK:-default}"
       dockerfile: "services/automation-service/Dockerfile"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    secrets:
+      - "automation_db_password"
+      - "rabbitmq_password"
+      - "redis_automation_password"
+      - "minio_password"
+    depends_on:
+      automation-db:
+        condition: "service_healthy"
+      rabbitmq:
+        condition: "service_healthy"
+      redis:
+        condition: "service_healthy"
+      minio:
+        condition: "service_healthy"
     networks:
       - "backend"
     healthcheck:
@@ -155,23 +187,21 @@ services:
       timeout: "3s"
       retries: 5
   automation-bootstrap:
-    image: "botflow-automation:local"
+    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
     profiles:
       - "bootstrap"
     command:
       - "python"
-      - "-m"
-      - "botflow_automation.bootstrap"
+      - "scripts/bootstrap.py"
     networks:
       - "backend"
   automation-worker:
-    image: "botflow-automation:local"
+    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
     profiles:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_automation.worker.main"
+      - "scripts/worker.py"
     networks:
       - "backend"
   redis:
@@ -196,6 +226,7 @@ services:
       timeout: "3s"
       retries: 10
   rabbitmq:
+    hostname: "rabbitmq"
     image: "rabbitmq:4-management-alpine@sha256:d5c8b200a061242868833c8bbdd0703534a4a06ffe654a853e33acd46c7ce258"
     entrypoint:
       - "sh"
@@ -220,9 +251,10 @@ services:
       timeout: "5s"
       retries: 10
   minio:
-    image: "botflow-minio:local"
+    image: "botflow-minio:${BOTFLOW_IMAGE_TAG:-local}"
     build:
       context: "./infra/minio"
+      network: "${BOTFLOW_BUILD_NETWORK:-default}"
     environment:
       MINIO_ROOT_USER: "botflow"
       MINIO_ROOT_PASSWORD_FILE: "/run/secrets/minio_password"
@@ -243,9 +275,10 @@ services:
       timeout: "3s"
       retries: 10
   frontend:
-    image: "botflow-frontend:local"
+    image: "botflow-frontend:${BOTFLOW_IMAGE_TAG:-local}"
     build:
       context: "./frontend"
+      network: "${BOTFLOW_BUILD_NETWORK:-default}"
     ports:
       - "127.0.0.1:${BOTFLOW_HTTP_PORT:-8080}:8080"
     networks:
@@ -256,26 +289,24 @@ services:
       tasks-api:
         condition: "service_healthy"
   telegram-bot:
-    image: "botflow-automation:local"
+    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
     profiles:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_automation.bot.main"
+      - "scripts/bot.py"
     secrets:
       - "telegram_bot_token"
       - "automation_service_key"
     networks:
       - "backend"
   whisper-worker:
-    image: "botflow-automation:local"
+    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
     profiles:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_automation.worker.main"
+      - "scripts/worker.py"
       - "transcription"
     secrets:
       - "telegram_bot_token"
@@ -285,13 +316,12 @@ services:
     volumes:
       - "whisper_models:/models"
   notification-worker:
-    image: "botflow-automation:local"
+    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
     profiles:
       - "workers"
     command:
       - "python"
-      - "-m"
-      - "botflow_automation.worker.main"
+      - "scripts/worker.py"
       - "notifications"
     secrets:
       - "telegram_bot_token"

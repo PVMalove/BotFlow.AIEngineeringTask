@@ -26,8 +26,16 @@
 - `domain`: сущности, значения и инварианты, без ORM/HTTP/DI импортов.
 - `application`: команды/запросы и порты; зависимости передаются конструкторами.
 - `infrastructure`: репозитории, UoW, outbox/inbox, брокеры, S3 и Telegram/STT адаптеры.
-- `api`, `bot`, `worker`, `bootstrap`: точки входа и управление процессами.
-- `containers.py`: отдельный composition root сервиса, lifecycle ресурсов.
+- `api`: HTTP-маршруты и схемы; `scripts/`: точки входа bot, worker и bootstrap.
+- `api/containers.py`: composition root сервиса, lifecycle ресурсов.
+- `contracts`: независимые от фреймворка View на frozen dataclasses для BFF.
+- `core`: кросс-срезная политика сервиса; `common`: локальные утилиты.
+
+Слои лежат прямо в `backend/services/<service>/src/`, без промежуточного
+пакета с именем сервиса. Каждый сервис запускается с собственным `src` в пути
+импортов; исходники других сервисов в этот процесс не подключаются. CLI-точки
+входа находятся в `scripts/`, тесты разделены на `unit/`, `integration/`, `e2e/`,
+`performance/`. Рядом с `src/` предусмотрены `k8s/`, `docs/` и `ci/`.
 
 CQRS локальный, без отдельной read DB/универсального dispatcher. UoW коммитит
 бизнес-изменение и outbox/inbox вместе; репозитории не коммитят. Сессии БД
