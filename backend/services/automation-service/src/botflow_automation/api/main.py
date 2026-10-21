@@ -1,3 +1,5 @@
 from botflow_platform.http import create_app
 
-app = create_app("automation")
+from botflow_automation.containers import Container
+
+app = create_app("automation", Container())
