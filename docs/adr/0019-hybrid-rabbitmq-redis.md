@@ -1,5 +1,8 @@
 # RabbitMQ и Redis с разными обязанностями
 
+> Границы первой версии уточнены в [ADR-0021](0021-proportionate-reliability.md):
+> расширенные процедуры восстановления и очистки не входят в обязательную поставку.
+
 RabbitMQ переносит межсервисные команды/результаты; Redis Streams — локальные задания транскрипции и Telegram-уведомлений внутри Automation; Redis Pub/Sub — сигналы доски. Такое разделение отделяет межсервисную маршрутизацию от локального workflow. Цена — два транспорта, дополнительные настройки и тесты частичных отказов.
 
 RabbitMQ-клиент — aio-pika: явные ACK/confirm и единый lifecycle через dependency-injector. FastStream рассмотрен, но отдельный framework обработчиков не требуется. Обязательны durable queues/exchanges, persistent messages, confirms, mandatory/returns и ACK после локального commit. Один узел не является HA-кластером.
