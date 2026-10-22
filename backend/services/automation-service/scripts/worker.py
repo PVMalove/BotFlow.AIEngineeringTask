@@ -3,21 +3,26 @@
 Jobs -> CreateTask outbox -> RabbitMQ; TaskCreated -> job result and intent
 (PostgreSQL); RabbitMQ consumer -> intents -> Redis Stream -> Telegram; voice jobs
 -> TranscribeVoice outbox -> Redis Stream (read by the STT worker).
-`replay <job_id>` re-sends the CreateTask of a failed job. Other worker commands
-(transcription) are not implemented yet.
+`replay <job_id>` re-sends the CreateTask of a failed job or runs a failed voice
+job again. `transcription` is the separate STT worker: it reads one voice record at
+a time from the Redis Stream and needs the Whisper weights, not RabbitMQ.
 """
 
 import asyncio
 import inspect
 import logging
 import os
+import signal
 import socket
 import sys
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 from uuid import UUID
 
 import httpx
 from aiogram import Bot
+from botflow_platform.resources import open_redis, open_s3
+from botflow_platform.streams import RedisStream
 
 from api.containers import (
     Container,
@@ -25,10 +30,17 @@ from api.containers import (
     build_task_flow,
     build_voice_flow,
 )
+from application.commands.transcribe_voice import TranscribeVoice
 from infrastructure.db.results import replay_job
-from infrastructure.db.voice import replay_voice_job
+from infrastructure.db.voice import SqlVoiceStore, replay_voice_job
 from infrastructure.identity_gateway import HttpIdentityGateway
+from infrastructure.s3_audio import S3AudioStore
+from infrastructure.streams import VOICE_GROUP, VOICE_STREAM, RedisVoiceQueue
+from infrastructure.stt.runner import ReadinessMarker, SttConfig, run_worker
+from infrastructure.stt.whisper_transcriber import WhisperTranscriber
+from infrastructure.stt.whisper_validation import load_whisper_model, verify_weights
 from infrastructure.telegram import TelegramMessenger
+from infrastructure.telegram_files import TelegramFileSource
 
 IDLE_SECONDS = 1.0
 FAILURE_SECONDS = 5.0
@@ -99,6 +111,52 @@ async def _forever(run: Callable[[], Awaitable[None]]) -> None:
             await asyncio.sleep(FAILURE_SECONDS)
 
 
+async def transcription() -> None:
+    """The only process that loads Whisper; ingress, AMQP and text never wait on it."""
+    container = Container()
+    settings = container.settings()
+    config = SttConfig.from_environ(os.environ)
+    # aiogram/HTTP error tracebacks may contain Telegram URLs with the bot token.
+    logging.disable(logging.CRITICAL)
+    stop = asyncio.Event()
+    asyncio.get_running_loop().add_signal_handler(signal.SIGTERM, stop.set)
+    try:
+        bot = Bot(settings.secret("telegram_bot_token").get_secret_value())
+        async with AsyncExitStack() as stack:
+            await stack.enter_async_context(bot)
+            database = await container.database.async_()
+            redis = await stack.enter_async_context(open_redis(settings))
+            s3 = await stack.enter_async_context(open_s3(settings))
+            queue = RedisVoiceQueue(
+                RedisStream(redis, VOICE_STREAM, VOICE_GROUP, socket.gethostname())
+            )
+
+            async def load() -> TranscribeVoice:
+                path = await asyncio.to_thread(
+                    verify_weights, config.models_dir, config.model
+                )
+                model = await asyncio.to_thread(load_whisper_model, path)
+                return TranscribeVoice(
+                    SqlVoiceStore(database.sessions),
+                    TelegramFileSource(bot),
+                    S3AudioStore(s3, settings.s3_bucket),
+                    WhisperTranscriber(model, timeout_seconds=config.timeout_seconds),
+                )
+
+            await run_worker(
+                marker=ReadinessMarker(config.ready_file),
+                load=load,
+                queue=queue,
+                stop=stop,
+                # A timed-out decode thread cannot be stopped: replace the process.
+                exit_process=lambda: os._exit(70),
+            )
+    finally:
+        shutdown = container.shutdown_resources()
+        if inspect.isawaitable(shutdown):
+            await shutdown
+
+
 async def replay(job_id: UUID) -> None:
     container = Container()
     try:
@@ -129,6 +187,16 @@ def _replay_job_id() -> UUID:
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "replay":
         asyncio.run(replay(_replay_job_id()))
+    elif sys.argv[1:] == ["transcription"]:
+        try:
+            asyncio.run(transcription())
+        except KeyboardInterrupt:
+            pass
+        except Exception:
+            raise SystemExit(
+                "STT worker unavailable; verify the Whisper weights, secrets and "
+                "services."
+            ) from None
     elif len(sys.argv) > 1:
         raise SystemExit("Automation worker handlers are not implemented.")
     else:
