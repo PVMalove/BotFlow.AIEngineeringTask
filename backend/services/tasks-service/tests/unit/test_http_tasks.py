@@ -32,12 +32,13 @@ class Identity:
     def __init__(self) -> None:
         self.tokens: list[str] = []
         self.failure: Exception | None = None
+        self.actor = Actor(AUTHOR, Role.USER)
 
     async def require_approved(self, token: str) -> Actor:
         self.tokens.append(token)
         if self.failure:
             raise self.failure
-        return Actor(AUTHOR, Role.USER)
+        return self.actor
 
 
 class Board:
@@ -345,3 +346,144 @@ async def test_the_author_moves_a_task_and_gets_the_new_version(
     assert response.headers["cache-control"] == "no-store"
     data = response.json()["data"]
     assert (data["status"], data["version"]) == ("in_progress", 2)
+
+
+async def patch(
+    client: httpx.AsyncClient,
+    task: Task,
+    status: str,
+    version: int = 1,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    return await client.patch(
+        f"/api/v1/tasks/{task.id}",
+        json={"status": status, "expected_version": version},
+        headers=headers,
+    )
+
+
+async def test_a_plain_user_gets_a_safe_403_for_a_foreign_task(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, author_id=uuid4())
+
+    response = await patch(client, task, "completed", headers={"X-Request-ID": "req-1"})
+
+    assert response.status_code == 403
+    assert response.headers["x-request-id"] == "req-1"
+    body = response.json()
+    assert body["detail"] == "forbidden" and body["request_id"] == "req-1"
+    assert body["message"] and set(body) == {"detail", "message", "request_id"}
+    assert env.board.tasks[task.id].status is TaskStatus.PENDING
+
+
+async def test_a_stale_version_is_409_with_the_error_contract(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, version=3)
+
+    response = await patch(client, task, "completed", version=2)
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["detail"] == "version_conflict" and body["message"]
+    assert body["request_id"] == response.headers["x-request-id"]
+    assert env.board.tasks[task.id].version == 3
+
+
+async def test_a_stale_version_with_the_current_status_as_target_is_still_409(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, version=3, status=TaskStatus.COMPLETED)
+
+    response = await patch(client, task, "completed", version=2)
+
+    assert response.status_code == 409
+
+
+async def test_a_no_op_with_the_current_version_is_200_and_unchanged(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, version=3, status=TaskStatus.COMPLETED)
+
+    response = await patch(client, task, "completed", version=3)
+
+    assert response.status_code == 200
+    assert response.json()["data"]["version"] == 3
+    assert env.board.tasks[task.id] == task
+
+
+async def test_an_admin_may_change_a_foreign_task(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    env.identity.actor = Actor(uuid4(), Role.ADMIN)
+    task = env.board.add(1, author_id=uuid4())
+
+    response = await patch(client, task, "in_progress")
+
+    assert response.status_code == 200
+
+
+async def test_an_unknown_task_is_404_with_the_plain_contract(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.patch(
+        f"/api/v1/tasks/{uuid4()}", json={"status": "completed", "expected_version": 1}
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "task_not_found"}
+
+
+async def test_a_malformed_request_id_is_replaced_not_echoed(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, version=2)
+
+    bad = "bad id<x>"
+
+    response = await patch(client, task, "completed", headers={"X-Request-ID": bad})
+
+    assert response.status_code == 409
+    assert response.headers["x-request-id"] != bad
+    assert response.headers["x-request-id"] == response.json()["request_id"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "archived", "expected_version": 1},
+        {"status": "completed", "expected_version": 0},
+        {"status": "completed"},
+        {"expected_version": 1},
+    ],
+)
+async def test_an_invalid_patch_body_is_rejected(
+    env: Env, client: httpx.AsyncClient, payload: dict[str, object]
+) -> None:
+    task = env.board.add(1)
+
+    response = await client.patch(f"/api/v1/tasks/{task.id}", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "failure, status, detail",
+    [
+        (Unauthenticated(), 401, "unauthenticated"),
+        (NotApproved(), 403, "not_approved"),
+        (IdentityUnavailable(), 503, "identity_unavailable"),
+    ],
+)
+async def test_identitys_verdict_blocks_a_status_change(
+    env: Env, client: httpx.AsyncClient, failure: Exception, status: int, detail: str
+) -> None:
+    task = env.board.add(1)
+    env.identity.failure = failure
+
+    response = await patch(client, task, "completed")
+
+    assert response.status_code == status
+    assert response.json() == {"detail": detail}
+    assert env.board.tasks[task.id].status is TaskStatus.PENDING
