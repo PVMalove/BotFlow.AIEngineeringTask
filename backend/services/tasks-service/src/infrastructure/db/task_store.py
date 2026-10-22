@@ -1,8 +1,9 @@
 """Inbox, task and result outbox are written in one transaction."""
 
 from datetime import UTC, datetime
+from uuid import UUID
 
-from botflow_platform.outbox import enqueue
+from botflow_platform.outbox import enqueue, replay
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -59,3 +60,15 @@ class SqlTaskCommandStore:
             )
             await session.commit()  # the broker message is acknowledged only after this
         return True
+
+
+async def replay_task_created(
+    sessions: async_sessionmaker[AsyncSession], job_id: UUID
+) -> bool:
+    """Make the unpublished TaskCreated of a job due again; False if none."""
+    now = datetime.now(UTC)
+    async with sessions() as session:
+        replayed = await replay(session, outbox, correlation_id=job_id, now=now)
+        if replayed:
+            await session.commit()
+        return replayed

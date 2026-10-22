@@ -35,7 +35,7 @@ async def repeat(step: Callable[[], Awaitable[int]]) -> None:
                 await asyncio.sleep(IDLE_SECONDS)
         except Exception:
             # Driver errors can carry credentials; report nothing but a fixed text.
-            print("Notification step failed; retrying.", flush=True)
+            print("Worker step failed; retrying.", flush=True)
             await asyncio.sleep(FAILURE_SECONDS)
 
 
@@ -86,7 +86,7 @@ async def _forever(run: Callable[[], Awaitable[None]]) -> None:
         try:
             await run()
         except Exception:
-            print("Notification consumer failed; retrying.", flush=True)
+            print("Worker consumer failed; retrying.", flush=True)
             await asyncio.sleep(FAILURE_SECONDS)
 
 

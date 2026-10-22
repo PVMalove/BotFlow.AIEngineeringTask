@@ -392,7 +392,9 @@ outbox TaskCreated. Идентификаторы задачи и результ�
 свободен. Оператор повторяет исходное задание командой
 `python scripts/worker.py replay <job_id>`: у той же строки outbox (прежний id) сбрасываются
 попытки, задание снова `accepted`. Поздний TaskCreated для `failed` задания допустим
-(`failed` → `completed`). Consumer (`QueueConsumer`) подтверждает сообщение только после
+(`failed` → `completed`). При исчерпании попыток outbox публикации `TaskCreated` на стороне
+Tasks оператор повторяет отправку результата аналогичной командой Tasks worker:
+`python scripts/worker.py replay <job_id>`. Consumer (`QueueConsumer`) подтверждает сообщение только после
 commit; при временной ошибке пауза с jitter и `nack(requeue=True)` без busy loop;
 невалидное сообщение — `reject(requeue=False)` без DLX (ADR-0021).
 

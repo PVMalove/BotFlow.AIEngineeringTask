@@ -1,10 +1,16 @@
-"""Tasks worker: consumes CreateTask commands and relays TaskCreated results."""
+"""Tasks worker: consumes CreateTask commands and relays TaskCreated results.
+
+`replay <job_id>` re-sends the TaskCreated of a job whose outbox retry exhausted.
+"""
 
 import asyncio
 import inspect
+import sys
 from collections.abc import Awaitable, Callable
+from uuid import UUID
 
 from api.containers import Container, build_worker
+from infrastructure.db.task_store import replay_task_created
 
 IDLE_SECONDS = 1.0
 FAILURE_SECONDS = 5.0
@@ -47,12 +53,38 @@ async def main() -> None:
             await shutdown
 
 
-if __name__ == "__main__":
+async def replay(job_id: UUID) -> None:
+    container = Container()
     try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
-    except Exception:
-        raise SystemExit(
-            "Tasks worker unavailable; verify its secrets and services."
-        ) from None
+        resources = await container.resources.async_()
+        replayed = await replay_task_created(resources.sessions, job_id)
+    finally:
+        shutdown = container.shutdown_resources()
+        if inspect.isawaitable(shutdown):
+            await shutdown
+    if not replayed:
+        raise SystemExit("Nothing to replay: no unpublished TaskCreated for this job.")
+    print("TaskCreated of the job is due again.")
+
+
+def _replay_job_id() -> UUID:
+    try:
+        return UUID(sys.argv[2])
+    except ValueError:
+        raise SystemExit("Usage: worker.py replay <job_id (UUID)>") from None
+
+
+if __name__ == "__main__":
+    if len(sys.argv) == 3 and sys.argv[1] == "replay":
+        asyncio.run(replay(_replay_job_id()))
+    elif len(sys.argv) > 1:
+        raise SystemExit("Tasks worker handlers are not implemented.")
+    else:
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            pass
+        except Exception:
+            raise SystemExit(
+                "Tasks worker unavailable; verify its secrets and services."
+            ) from None
