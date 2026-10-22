@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from kernel_domain.result import Result
+from kernel_platform.consumer import InvalidMessage
 
 from application.commands.deliver_notification import (
     MAX_ATTEMPTS,
@@ -13,11 +14,11 @@ from application.commands.deliver_notification import (
     Delivery,
     RunNotifier,
 )
-from application.commands.process_identity_event import (
-    InvalidEvent,
-    ProcessIdentityEvent,
-)
 from application.commands.relay_intents import RelayIntents
+from application.commands.store_member_decision import (
+    StoreMemberDecisionCommand,
+    StoreMemberDecisionCommandHandler,
+)
 from application.ports import IdentityUnavailable, QueuedIntent, TelegramMember
 from domain.notifications import (
     IntentStatus,
@@ -27,6 +28,7 @@ from domain.notifications import (
     delivery_verdict,
 )
 from domain.value_objects.join_outcome import JoinOutcome
+from infrastructure.messaging.identity_event_consumer import IdentityEventConsumer
 
 USER = 7_000_000_001
 MEMBER_ID = uuid4()
@@ -117,14 +119,26 @@ def event(**overrides: object) -> bytes:
 # ---- consumer --------------------------------------------------------------
 
 
+def consumer(store: "Store") -> IdentityEventConsumer:
+    return IdentityEventConsumer(StoreMemberDecisionCommandHandler(store))
+
+
+async def test_a_redelivered_event_reports_nothing_new() -> None:
+    store = Store()
+    handler = StoreMemberDecisionCommandHandler(store)
+    command = StoreMemberDecisionCommand(EVENT_ID, MEMBER_ID, USER, "approved", 2)
+
+    first = await handler.execute(command)
+    again = await handler.execute(command)
+
+    assert first.value is True and again.value is False
+
+
 async def test_an_event_becomes_one_intent_for_the_applicants_private_chat() -> None:
     store = Store()
 
-    stored = await ProcessIdentityEvent(store).execute(
-        str(EVENT_ID), "member.access-decided", event()
-    )
+    await consumer(store).handle(str(EVENT_ID), "member.access-decided", event())
 
-    assert stored
     assert store.intents == {
         EVENT_ID: NotificationIntent(
             id=EVENT_ID,
@@ -138,13 +152,12 @@ async def test_an_event_becomes_one_intent_for_the_applicants_private_chat() -> 
 
 async def test_a_redelivered_event_stores_nothing_new() -> None:
     store = Store()
-    sut = ProcessIdentityEvent(store)
-    await sut.execute(str(EVENT_ID), "member.access-decided", event())
+    sut = consumer(store)
+    await sut.handle(str(EVENT_ID), "member.access-decided", event())
     store.intents[EVENT_ID] = replace(store.intents[EVENT_ID], status=IntentStatus.SENT)
 
-    again = await sut.execute(str(EVENT_ID), "member.access-decided", event())
+    await sut.handle(str(EVENT_ID), "member.access-decided", event())
 
-    assert not again
     assert len(store.intents) == 1
     assert store.intents[EVENT_ID].status is IntentStatus.SENT
 
@@ -168,8 +181,8 @@ async def test_an_event_that_can_never_be_valid_is_refused(
 ) -> None:
     store = Store()
 
-    with pytest.raises(InvalidEvent):
-        await ProcessIdentityEvent(store).execute(message_id, kind, body)
+    with pytest.raises(InvalidMessage):
+        await consumer(store).handle(message_id, kind, body)
 
     assert store.intents == {} and store.messages == set()
 

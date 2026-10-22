@@ -43,11 +43,11 @@ async def main(command: str) -> None:
             await closing
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["migrate", "admin"])
     asyncio.run(main(parser.parse_args().command))
-
-
-def _utcnow() -> datetime:
-    return datetime.now(UTC)

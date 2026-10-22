@@ -41,6 +41,10 @@ async def main() -> None:
             await shutdown
 
 
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
 if __name__ == "__main__":
     try:
         asyncio.run(main())
@@ -50,7 +54,3 @@ if __name__ == "__main__":
         raise SystemExit(
             "Identity worker unavailable; verify its secrets and services."
         ) from None
-
-
-def _utcnow() -> datetime:
-    return datetime.now(UTC)

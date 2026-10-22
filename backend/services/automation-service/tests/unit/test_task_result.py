@@ -9,13 +9,17 @@ import pytest
 from kernel_platform.consumer import InvalidMessage
 
 from application.commands.deliver_notification import DeliverNotification, Delivery
-from application.commands.process_task_result import ProcessTaskResult
+from application.commands.record_task_result import (
+    RecordTaskResultCommand,
+    RecordTaskResultCommandHandler,
+)
 from application.ports import (
     JobSummary,
     ResultOutcome,
     TelegramMember,
 )
 from domain.notifications import IntentStatus, NotificationIntent
+from infrastructure.messaging.task_result_consumer import TaskResultConsumer
 
 JOB = uuid4()
 TASK = uuid4()
@@ -44,6 +48,10 @@ class Results:
         return self.outcome
 
 
+def consumer(results: Results) -> TaskResultConsumer:
+    return TaskResultConsumer(RecordTaskResultCommandHandler(results))
+
+
 def created(**overrides: Any) -> bytes:
     payload: dict[str, Any] = {
         "job_id": str(JOB),
@@ -68,9 +76,8 @@ async def test_a_result_completes_the_job_and_stores_one_intent_for_its_author()
 ):
     results = Results()
 
-    stored = await ProcessTaskResult(results).execute(MESSAGE, "TaskCreated", created())
+    await consumer(results).handle(MESSAGE, "TaskCreated", created())
 
-    assert stored is True
     ((message_id, job_id, task_id, intent),) = results.recorded
     assert (message_id, job_id, task_id) == (MESSAGE, JOB, TASK)
     assert (intent.chat_id, intent.member_id, intent.kind) == (
@@ -86,7 +93,7 @@ async def test_a_long_text_is_cut_in_the_notification() -> None:
     results = Results()
     results.job = JobSummary(JOB, CHAT, AUTHOR, "я" * 300)
 
-    await ProcessTaskResult(results).execute(MESSAGE, "TaskCreated", created())
+    await consumer(results).handle(MESSAGE, "TaskCreated", created())
 
     body = results.recorded[0][3].body
     assert body is not None and len(body) <= len("Задача создана: ") + 101
@@ -97,7 +104,7 @@ async def test_a_nullable_job_text_produces_a_fallback_notification() -> None:
     results = Results()
     results.job = JobSummary(JOB, CHAT, AUTHOR, None)
 
-    await ProcessTaskResult(results).execute(MESSAGE, "TaskCreated", created())
+    await consumer(results).handle(MESSAGE, "TaskCreated", created())
 
     body = results.recorded[0][3].body
     assert body == "Задача создана"
@@ -106,8 +113,8 @@ async def test_a_nullable_job_text_produces_a_fallback_notification() -> None:
 async def test_the_intent_id_depends_only_on_the_job() -> None:
     first, second = Results(), Results()
 
-    await ProcessTaskResult(first).execute(MESSAGE, "TaskCreated", created())
-    await ProcessTaskResult(second).execute(str(uuid4()), "TaskCreated", created())
+    await consumer(first).handle(MESSAGE, "TaskCreated", created())
+    await consumer(second).handle(str(uuid4()), "TaskCreated", created())
 
     assert first.recorded[0][3].id == second.recorded[0][3].id
 
@@ -116,10 +123,11 @@ async def test_a_redelivered_result_reports_nothing_new() -> None:
     results = Results()
     results.outcome = ResultOutcome.DUPLICATE
 
-    assert (
-        await ProcessTaskResult(results).execute(MESSAGE, "TaskCreated", created())
-        is False
+    result = await RecordTaskResultCommandHandler(results).execute(
+        RecordTaskResultCommand(MESSAGE, JOB, TASK)
     )
+
+    assert result.is_ok and result.value is False
 
 
 async def test_a_result_for_an_unknown_job_can_never_work() -> None:
@@ -127,7 +135,7 @@ async def test_a_result_for_an_unknown_job_can_never_work() -> None:
     results.outcome = ResultOutcome.UNKNOWN_JOB
 
     with pytest.raises(InvalidMessage):
-        await ProcessTaskResult(results).execute(MESSAGE, "TaskCreated", created())
+        await consumer(results).handle(MESSAGE, "TaskCreated", created())
 
 
 @pytest.mark.parametrize(
@@ -146,7 +154,7 @@ async def test_a_malformed_message_is_invalid(
     results = Results()
 
     with pytest.raises(InvalidMessage):
-        await ProcessTaskResult(results).execute(message_id, type_, body)
+        await consumer(results).handle(message_id, type_, body)
 
     assert results.recorded == []
 
@@ -156,7 +164,7 @@ async def test_a_storage_failure_propagates_so_the_message_is_requeued() -> None
     results.failure = OSError("pg down")
 
     with pytest.raises(OSError):
-        await ProcessTaskResult(results).execute(MESSAGE, "TaskCreated", created())
+        await consumer(results).handle(MESSAGE, "TaskCreated", created())
 
 
 # ---- the notification carries the stored text -------------------------------

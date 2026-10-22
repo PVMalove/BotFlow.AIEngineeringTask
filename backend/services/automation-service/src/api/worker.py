@@ -175,6 +175,16 @@ def _replay_job_id() -> UUID:
         raise SystemExit("Usage: worker.py replay <job_id (UUID)>") from None
 
 
+async def _forever(run: Callable[[], Awaitable[None]]) -> None:
+    """Restart the consumer after a broker failure."""
+    while True:
+        try:
+            await run()
+        except Exception:
+            print("Worker consumer failed; retrying.", flush=True)
+            await asyncio.sleep(FAILURE_SECONDS)
+
+
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "replay":
         asyncio.run(replay(_replay_job_id()))
@@ -199,13 +209,3 @@ if __name__ == "__main__":
             raise SystemExit(
                 "Automation worker unavailable; verify its secrets and services."
             ) from None
-
-
-async def _forever(run: Callable[[], Awaitable[None]]) -> None:
-    """Restart the consumer after a broker failure."""
-    while True:
-        try:
-            await run()
-        except Exception:
-            print("Worker consumer failed; retrying.", flush=True)
-            await asyncio.sleep(FAILURE_SECONDS)

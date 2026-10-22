@@ -26,16 +26,24 @@ from application.commands.accept_text import AcceptTextMessage
 from application.commands.accept_voice import AcceptVoiceMessage
 from application.commands.deliver_notification import DeliverNotification, RunNotifier
 from application.commands.handle_bot_command import HandleBotCommand
-from application.commands.process_identity_event import ProcessIdentityEvent
-from application.commands.process_task_result import ProcessTaskResult
+from application.commands.record_task_result import RecordTaskResultCommandHandler
 from application.commands.relay_intents import RelayIntents
+from application.commands.store_member_decision import (
+    StoreMemberDecisionCommandHandler,
+)
 from application.ports import IdentityGateway, Messenger
 from infrastructure.db.inbox import SqlUpdateInbox
 from infrastructure.db.jobs import SqlJobStore, outbox
 from infrastructure.db.notifications import SqlIntentStore
 from infrastructure.db.results import SqlTaskResultStore, fail_job
 from infrastructure.db.voice import fail_voice_job
-from infrastructure.messaging import IdentityEventConsumer
+from infrastructure.messaging.identity_event_consumer import (
+    IdentityEventConsumer,
+)
+from infrastructure.messaging.identity_event_consumer import (
+    declare_queue as declare_identity_queue,
+)
+from infrastructure.messaging.task_result_consumer import TaskResultConsumer
 from infrastructure.streams import (
     NOTIFICATION_GROUP,
     NOTIFICATION_STREAM,
@@ -70,7 +78,7 @@ def build_accept_voice(
 class NotificationPipeline:
     """RabbitMQ -> PostgreSQL intent -> Redis Stream -> Telegram, as separate steps."""
 
-    consumer: IdentityEventConsumer
+    consumer: QueueConsumer
     relay: RelayIntents
     notifier: RunNotifier
     queue: RedisNotificationQueue
@@ -94,7 +102,11 @@ def build_notifications(
         stuck_after_ms,
     )
     return NotificationPipeline(
-        consumer=IdentityEventConsumer(resources.rabbitmq, ProcessIdentityEvent(store)),
+        consumer=QueueConsumer(
+            resources.rabbitmq,
+            declare_identity_queue,
+            IdentityEventConsumer(StoreMemberDecisionCommandHandler(store)).handle,
+        ),
         relay=RelayIntents(store, queue),
         notifier=RunNotifier(queue, DeliverNotification(store, identity, messenger)),
         queue=queue,
@@ -114,7 +126,9 @@ def build_task_flow(resources: Resources) -> TaskFlow:
         *_, results = await declare_task_topology(channel)
         return results
 
-    process = ProcessTaskResult(SqlTaskResultStore(resources.sessions))
+    process = TaskResultConsumer(
+        RecordTaskResultCommandHandler(SqlTaskResultStore(resources.sessions))
+    )
     return TaskFlow(
         results=QueueConsumer(resources.rabbitmq, results_queue, process.handle),
         relay=RelayOutbox(

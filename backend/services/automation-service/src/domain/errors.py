@@ -13,3 +13,11 @@ class AutomationErrors:
         return Error.rate_limited(
             "rate_limited", "Слишком много запросов. Повторите позже."
         )
+
+    @staticmethod
+    def unknown_job() -> Error:
+        return Error.not_found("unknown_job", "Задание не найдено.")
+
+    @staticmethod
+    def invalid_decision() -> Error:
+        return Error.validation("invalid_decision", "Решение о доступе недопустимо.")

@@ -87,11 +87,13 @@ class AuthFlow(unittest.IsolatedAsyncioTestCase):
 
     async def test_bot_code_exchange_current_member_and_revocation(self) -> None:
         await self.bot.execute(
-            update_id=100,
-            telegram_id=ADMIN,
-            chat_id=ADMIN,
-            text="/start",
-            private=True,
+            HandleBotCommandDto(
+                update_id=100,
+                telegram_id=ADMIN,
+                chat_id=ADMIN,
+                text="/start",
+                private=True,
+            )
         )
         self.assertEqual(
             self.telegram.messages,
@@ -99,11 +101,13 @@ class AuthFlow(unittest.IsolatedAsyncioTestCase):
         )
         code = await self.code()
         await self.bot.execute(
-            update_id=1,
-            telegram_id=ADMIN,
-            chat_id=ADMIN,
-            text="/login",
-            private=True,
+            HandleBotCommandDto(
+                update_id=1,
+                telegram_id=ADMIN,
+                chat_id=ADMIN,
+                text="/login",
+                private=True,
+            )
         )
         self.assertEqual(len(self.telegram.messages), 2)
         digest = hashlib.sha256(code.encode()).hexdigest()

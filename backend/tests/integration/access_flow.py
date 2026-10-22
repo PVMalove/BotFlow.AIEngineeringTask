@@ -404,7 +404,8 @@ class AccessFlow(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([first.status_code, second.status_code], [200, 200])
         self.assertEqual(
-            sorted([first.json()["data"]["changed"], second.json()["data"]["changed"]]), [False, True]
+            sorted([first.json()["data"]["changed"], second.json()["data"]["changed"]]),
+            [False, True],
         )
         self.assertEqual((await self.member(user))[2:], ("approved", 2))
         self.assertEqual(
