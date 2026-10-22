@@ -1,0 +1,56 @@
+# Standalone local Whisper validation (#4). Driven by scripts/whisper-validation.py.
+# Needs no .env, secrets, database, broker or the main Compose project.
+name: "botflow-whisper"
+x-offline: &offline
+  image: "botflow-whisper-validation:${BOTFLOW_IMAGE_TAG:-local}"
+  pull_policy: "never"
+  network_mode: "none"
+  environment:
+    WHISPER_MODEL: "${WHISPER_MODEL:-turbo}"
+x-models-readonly: &models-readonly
+  type: "volume"
+  source: "whisper_models"
+  target: "/models"
+  read_only: true
+x-corpus-readonly: &corpus-readonly
+  type: "bind"
+  source: "${WHISPER_CORPUS_DIR:-./.local/whisper/corpus}"
+  target: "/corpus"
+  read_only: true
+  bind:
+    create_host_path: false
+services:
+  # The only service with network access: downloads weights into the volume.
+  whisper-prepare:
+    image: "botflow-whisper-validation:${BOTFLOW_IMAGE_TAG:-local}"
+    build:
+      context: "./backend"
+      network: "${BOTFLOW_BUILD_NETWORK:-default}"
+      dockerfile: "services/automation-service/Dockerfile"
+      target: "stt-runtime"
+    command: ["python", "scripts/whisper_validate.py", "prepare"]
+    environment:
+      WHISPER_MODEL: "${WHISPER_MODEL:-turbo}"
+    volumes:
+      - "whisper_models:/models"
+  whisper-verify:
+    <<: *offline
+    command: ["python", "scripts/whisper_validate.py", "verify-weights"]
+    volumes:
+      - *models-readonly
+  whisper-corpus-check:
+    <<: *offline
+    command: ["python", "scripts/whisper_validate.py", "check-corpus"]
+    volumes:
+      - *corpus-readonly
+  whisper-bench:
+    <<: *offline
+    command: ["python", "scripts/whisper_validate.py", "bench"]
+    volumes:
+      - *models-readonly
+      - *corpus-readonly
+volumes:
+  whisper_models:
+    # Same persistent volume as the main Compose project `botflow`; for another
+    # COMPOSE_PROJECT_NAME pass WHISPER_MODELS_VOLUME explicitly.
+    name: "${WHISPER_MODELS_VOLUME:-botflow_whisper_models}"

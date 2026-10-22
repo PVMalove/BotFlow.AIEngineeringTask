@@ -179,8 +179,17 @@ make smoke           # собственные PG/RabbitMQ/Redis/MinIO, DI/S3, do
 
 MinIO собирается из официального исходника с закреплённым SHA, поскольку
 старый тег контейнера из архитектурного референса недоступен. Сборка требует
-сети и отдельно проверяется перед рабочим запуском. Веса Whisper готовятся
-отдельно; его Python-зависимости добавляются после проверки совместимости.
+сети и отдельно проверяется перед рабочим запуском.
+
+Whisper проверяется отдельно от приложения (#4): `make whisper-build` (образ
+Python 3.12 + openai-whisper + torch CPU + ffmpeg), `make whisper-prepare`
+(единственный шаг с сетью, веса в том `botflow_whisper_models`, SHA-256; `turbo` ≈1.5 GiB),
+`make whisper-verify`, `make whisper-corpus-check`, `make whisper-bench` (без сети;
+корпус из `.local/whisper/`, результат `.local/whisper/results.json`). Корпус и результаты
+не коммитятся. Установка и загрузка выполняются только явно. По замерам на шести записях выбрана
+`turbo` (CPU, fp32); качество на hy низкое, а STT на длинной hy-записи около 58 с — подтверждения
+владельца нет. Подробности и ограничения:
+`backend/services/automation-service/docs/whisper-validation.md`.
 
 `make deps` явно устанавливает зависимости из lockfiles. `make check` и
 `make test` проверяют текущий backend/frontend и служебные скрипты; пустой набор

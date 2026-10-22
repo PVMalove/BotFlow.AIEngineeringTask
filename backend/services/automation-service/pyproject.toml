@@ -17,8 +17,17 @@ dependencies = [
     "aioboto3==15.5.0",
 ]
 
+[project.optional-dependencies]
+# Local official Whisper (ADR-0006); installed explicitly, never by `make deps`.
+stt = [
+    "openai-whisper==20250625",
+    "torch==2.14.1",
+    "psutil==7.2.2",
+]
+
 [tool.uv.sources]
 botflow-platform = { workspace = true }
+torch = { index = "pytorch-cpu", extra = "stt", marker = "sys_platform != 'darwin'" }
 
 [tool.uv]
 package = false

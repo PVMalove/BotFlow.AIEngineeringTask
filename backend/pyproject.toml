@@ -8,6 +8,12 @@ dependencies = []
 [tool.uv.workspace]
 members = ["libs/*", "services/*"]
 
+# CPU-only PyTorch wheels for the optional automation-service `stt` extra.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [dependency-groups]
 dev = [
     "ruff==0.17.1",
