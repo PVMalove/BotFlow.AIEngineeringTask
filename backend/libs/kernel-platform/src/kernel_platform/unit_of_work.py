@@ -1,16 +1,23 @@
-# ruff: noqa: E501
-"""Unit of Work: транзакционная граница вокруг command handler'ов (ADR 0006).
+"""Unit of Work: the transaction around a command handler, and its domain events.
 
-Живёт рядом с outbox/drain.py — инфраструктурная забота про сессию/
-транзакцию, не про домен (тот же прецедент, что ADR 0006 уже применило к
-repository-портам). `UnitOfWork` не знает ни об одном конкретном
-репозитории; каждый сервис расширяет его собственным Protocol с
-атрибутами-репозиториями этого сервиса."""
+Repositories register every aggregate they load or save with `track`. On `commit`
+the events of the tracked aggregates are staged into the outbox inside the
+transaction and, once it is committed, handed to the in-process event handlers.
+"""
 
+import logging
+from collections.abc import Awaitable, Callable, Sequence
 from types import TracebackType
-from typing import Protocol, Self
+from typing import Any, Protocol, Self
 
-from sqlalchemy.ext.asyncio import AsyncSession
+from kernel_domain.domain_event import DomainEvent
+from kernel_domain.entity import Entity
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+logger = logging.getLogger(__name__)
+
+OutboxStager = Callable[[AsyncSession, DomainEvent], Awaitable[None]]
+EventHandler = Callable[[DomainEvent], Awaitable[None]]
 
 
 class UnitOfWork(Protocol):
@@ -18,9 +25,9 @@ class UnitOfWork(Protocol):
 
     async def __aexit__(
         self,
-        _exc_type: type[BaseException] | None,
-        _exc: BaseException | None,
-        _tb: TracebackType | None,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
     ) -> None: ...
 
     async def commit(self) -> None: ...
@@ -29,34 +36,83 @@ class UnitOfWork(Protocol):
 
 
 class SqlAlchemyUnitOfWork:
-    """Общая бухгалтерия, переиспользуемая per-service реализациями:
-    переиспользует уже существующую request-scoped `AsyncSession` (не
-    создаёт свою через `session_factory()`), никогда её не закрывает —
-    жизненный цикл сессии остаётся за существующим teardown (`get_db_session`)
-    — и откатывает транзакцию по умолчанию, если `commit()` не был вызван
-    явно ни через штатный возврат, ни через исключение."""
+    """Opens a session per `async with`, rolls back unless `commit()` was called.
 
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+    A subclass builds its repositories in `_attach`, passing them `track`.
+    """
+
+    def __init__(
+        self,
+        sessions: async_sessionmaker[AsyncSession],
+        *,
+        stage_outbox: OutboxStager | None = None,
+        event_handlers: Sequence[EventHandler] = (),
+    ) -> None:
+        self._sessions = sessions
+        self._stage_outbox = stage_outbox
+        self._event_handlers = tuple(event_handlers)
+        self._session: AsyncSession | None = None
+        self._tracked: list[Entity[Any]] = []
         self._committed = False
 
     async def __aenter__(self) -> Self:
+        self._session = self._sessions()
+        self._tracked = []
         self._committed = False
+        self._attach(self._session)
         return self
 
     async def __aexit__(
         self,
-        _exc_type: type[BaseException] | None,
-        _exc: BaseException | None,
-        _tb: TracebackType | None,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
     ) -> None:
-        if not self._committed:
-            await self._session.rollback()
+        session = self._session
+        if session is None:
+            return
+        try:
+            if not self._committed:
+                await session.rollback()
+        finally:
+            await session.close()
+            self._session = None
+
+    def track(self, entity: Entity[Any]) -> None:
+        if entity not in self._tracked:
+            self._tracked.append(entity)
 
     async def commit(self) -> None:
-        await self._session.commit()
+        session = self._open_session()
+        events = [event for entity in self._tracked for event in entity.pull_events()]
+        if self._stage_outbox is not None:
+            for event in events:
+                await self._stage_outbox(session, event)
+        await session.commit()
         self._committed = True
+        await self._dispatch(events)
 
     async def rollback(self) -> None:
-        await self._session.rollback()
+        await self._open_session().rollback()
         self._committed = False
+
+    def _attach(self, session: AsyncSession) -> None:
+        """Build the repositories of the session; overridden by a service."""
+
+    def _open_session(self) -> AsyncSession:
+        if self._session is None:
+            raise RuntimeError("The unit of work is not entered.")
+        return self._session
+
+    async def _dispatch(self, events: Sequence[DomainEvent]) -> None:
+        """After the commit the change is stored: a failing handler is only logged."""
+        for event in events:
+            for handler in self._event_handlers:
+                try:
+                    await handler(event)
+                except Exception:
+                    logger.warning(
+                        "Handler of %s failed after commit",
+                        type(event).__name__,
+                        exc_info=False,
+                    )

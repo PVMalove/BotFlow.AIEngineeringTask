@@ -1,48 +1,21 @@
 # ruff: noqa: E501
-from typing import cast
-
 from kernel_domain.domain_event import DomainEvent
-
-PRIVATE_MARKER = object()
-MISSING_MARKER = object()
 
 
 class Entity[TId]:
-    """Базовый строительный блок агрегата: равенство по `id` в
-    рамках одного конкретного типа (не по значению полей), плюс накопление
-    доменных событий, атомарно отдаваемых вызывающему через `pull_events()`
-    — сама публикация (Outbox) остаётся за пределами этого класса.
+    """Базовый строительный блок агрегата: равенство по `id` в рамках одного
+    конкретного типа (не по значению полей), плюс накопление доменных событий,
+    атомарно отдаваемых вызывающему через `pull_events()` — сама публикация
+    (Outbox) остаётся за пределами этого класса.
 
-    Конструктор вызывается только фабрикой `create()` для новой сущности или
-    `reconstitute()` для гидратации из хранилища. Обе передают
-    `PRIVATE_MARKER`; `reconstitute()` не повторяет бизнес-валидацию и не
-    вызывает `add_domain_event(...)`.
-    """
+    Новая сущность создаётся фабрикой `create()` (с валидацией и событием),
+    гидратация из хранилища — `reconstitute()` (без валидации и событий)."""
 
-    def __init__(
-        self,
-        marker: object = MISSING_MARKER,
-        id: TId = cast("TId", MISSING_MARKER),
-    ) -> None:
-        """Инициализирует базовый инстанс энтити.
-
-        `marker` — закрытый токен `PRIVATE_MARKER`: он не даёт вызвать
-        конструктор в обход доменной фабрики.
-
-        Сразу проставляет переданный айдишник и подготавливает пустой массив под
-        будущие доменные ивенты. Мутации состояния агрегата должны будут аппендить
-        события именно в этот внутренний список.
+    def __init__(self, id: TId) -> None:
+        """Проставляет идентификатор и готовит пустую очередь доменных событий.
 
         Args:
-            marker: Закрытый токен конструктора.
             id (TId): Уникальный идентификатор сущности (обычно UUID или инт)."""
-        if marker is not PRIVATE_MARKER:
-            raise RuntimeError(
-                "Entity instances must be created through create() or reconstitute()"
-            )
-        if id is MISSING_MARKER:
-            raise TypeError("Entity id is required")
-
         self.id = id
         self._domain_events: list[DomainEvent] = []
 
