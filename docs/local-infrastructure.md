@@ -196,3 +196,31 @@ docker compose --profile workers exec automation-worker python scripts/worker.py
 подменяется на портах publisher и Messenger поверх настоящих строк PostgreSQL.
 Живую задержку ACK и работу с токеном владельца смотрите по
 `jobs.received_at`/`acked_at` (запрос в `docs/architecture.md`).
+
+## Голос и STT-воркер (#14)
+
+`automation-bootstrap` теперь применяет миграцию `0004` и идемпотентно создаёт
+приватный bucket `botflow-audio` (нужны `minio_password` и работающий `minio`; `make setup`
+поднимает его раньше). `automation-worker` дополнительно переносит голосовые задания из
+outbox в Redis Stream `botflow:automation:voice`. Распознаёт их отдельный `whisper-worker`
+(образ `botflow-whisper-worker`, цель `stt-runtime`, профиль `workers`): `make build` его не
+собирает, веса — постоянный том `whisper_models`, смонтированный только на чтение.
+
+```bash
+make whisper-build                       # образ stt-runtime (нужна сеть)
+make whisper-prepare WHISPER_MODEL=turbo # веса в том (единственный шаг с сетью)
+docker compose build whisper-worker
+docker compose --profile workers up -d automation-worker whisper-worker
+docker compose --profile workers exec automation-worker python scripts/worker.py replay <job_id>
+make voice-latency ARGS="--last 20"      # задержка update -> задача по данным Automation
+```
+
+Готовность `whisper-worker` — файл `/tmp/whisper-ready`, он создаётся после проверки
+SHA-256 весов и загрузки модели; до этого healthcheck не проходит (`start_period` 2 мин).
+Без подготовленных весов процесс завершается с понятной ошибкой и перезапускается.
+Переменные: `WHISPER_MODEL` (модель, по умолчанию `turbo`), `BOTFLOW_STT_TIMEOUT_SECONDS`
+(по умолчанию 120). После таймаута распознавания воркер сам завершается и перезапускается
+(`restart: unless-stopped`) — так задумано. `make smoke` проверяет весь путь на настоящих
+PostgreSQL/Redis/RabbitMQ/MinIO без Whisper и без Telegram (`VoiceTaskFlow`); качество
+RU/hy и живой Telegram проверяются отдельно (#17).
+

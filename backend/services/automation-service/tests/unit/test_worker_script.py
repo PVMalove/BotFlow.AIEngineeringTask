@@ -14,6 +14,6 @@ def test_the_worker_script_loads_and_has_the_transcription_command() -> None:
     assert inspect.iscoroutinefunction(namespace["replay"])
 
 
-def test_the_bot_and_bootstrap_scripts_load() -> None:
-    for name in ("bot.py", "bootstrap.py"):
+def test_the_bot_bootstrap_and_latency_scripts_load() -> None:
+    for name in ("bot.py", "bootstrap.py", "voice_latency.py"):
         runpy.run_path(str(SCRIPTS / name), run_name="script_under_test")
