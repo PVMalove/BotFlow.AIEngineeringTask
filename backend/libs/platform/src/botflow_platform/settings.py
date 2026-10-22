@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy import URL
 
 
 class Settings(BaseSettings):
@@ -20,6 +21,17 @@ class Settings(BaseSettings):
     redis_host: str = "redis"
     s3_endpoint: str = "http://minio:9000"
     s3_bucket: str = "botflow-audio"
+
+    def database_url(self) -> URL:
+        """Own-database URL; the password is read from the secret file here."""
+        return URL.create(
+            "postgresql+asyncpg",
+            username=self.service,
+            password=self.secret(f"{self.service}_db_password").get_secret_value(),
+            host=self.db_host or f"{self.service}-db",
+            port=self.db_port,
+            database=self.service,
+        )
 
     def secret(self, name: str) -> SecretStr:
         """Read credentials only when opening a resource, never in model repr."""

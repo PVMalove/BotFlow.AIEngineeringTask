@@ -3,6 +3,7 @@
 import hashlib
 import os
 import secrets
+import subprocess
 from pathlib import Path
 
 
@@ -48,6 +49,25 @@ def main() -> None:
             output.write("\n".join(lines) + "\n")
     for name in (*names, "redis_acl"):
         (directory / name).chmod(0o644)
+    jwt_key = directory / "identity_jwt_private_key"
+    if not jwt_key.exists():
+        # Output is captured and written straight to the file: the key is never shown.
+        pem = subprocess.run(
+            [
+                "openssl",
+                "genpkey",
+                "-algorithm",
+                "RSA",
+                "-pkeyopt",
+                "rsa_keygen_bits:3072",
+            ],
+            capture_output=True,
+            check=True,
+        ).stdout
+        descriptor = os.open(jwt_key, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(pem)
+    jwt_key.chmod(0o644)
     token = directory / "telegram_bot_token"
     if not token.exists():
         descriptor = os.open(token, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)

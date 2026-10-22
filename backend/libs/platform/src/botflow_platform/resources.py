@@ -10,7 +10,7 @@ from aio_pika import connect_robust
 from aio_pika.abc import AbstractRobustConnection
 from botocore.config import Config  # type: ignore[import-untyped]
 from redis.asyncio import Redis
-from sqlalchemy import URL, text
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -31,26 +31,46 @@ class Resources:
     closed: bool = False
 
 
+@dataclass
+class Database:
+    engine: AsyncEngine
+    sessions: async_sessionmaker[AsyncSession]
+
+
+def _create_engine(settings: Settings) -> AsyncEngine:
+    return create_async_engine(
+        settings.database_url(),
+        pool_pre_ping=True,
+        connect_args={"timeout": 10},
+        hide_parameters=True,
+    )
+
+
+@asynccontextmanager
+async def open_database(settings: Settings) -> AsyncIterator[Database]:
+    """Own database only, for CLI processes that need no broker or cache."""
+    engine = _create_engine(settings)
+    try:
+        async with engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
+    except Exception:
+        await engine.dispose()
+        # Driver exceptions can contain credential-bearing connection arguments.
+        raise RuntimeError(
+            f"Database initialization failed for {settings.service}"
+        ) from None
+    try:
+        yield Database(engine, async_sessionmaker(engine, expire_on_commit=False))
+    finally:
+        await engine.dispose()
+
+
 @asynccontextmanager
 async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
     """Unwind every acquired resource even if a later connection fails."""
     async with AsyncExitStack() as stack:
         try:
-            engine = create_async_engine(
-                URL.create(
-                    "postgresql+asyncpg",
-                    username=settings.service,
-                    password=settings.secret(
-                        f"{settings.service}_db_password"
-                    ).get_secret_value(),
-                    host=settings.db_host or f"{settings.service}-db",
-                    port=settings.db_port,
-                    database=settings.service,
-                ),
-                pool_pre_ping=True,
-                connect_args={"timeout": 10},
-                hide_parameters=True,
-            )
+            engine = _create_engine(settings)
             stack.push_async_callback(engine.dispose)
             async with engine.connect() as connection:
                 await connection.execute(text("SELECT 1"))

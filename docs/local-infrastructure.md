@@ -11,8 +11,9 @@ Commit должен быть явным; закрытие сессии отка�
 Общих бизнес-моделей или чтения чужой БД библиотека не вводит.
 
 `/health/live` сообщает только о процессе. `/health/ready` остаётся 503:
-работающие подключения не означают готовность бизнес-обработчиков. Bootstrap,
-миграции бизнес-данных, Telegram и STT не заменены успешными заглушками.
+работающие подключения не означают готовность всего приложения. Миграции Identity
+и Automation, первый admin и Telegram-вход реализованы; обработчики задач и
+фоновые задания ещё отсутствуют.
 
 ## Структура сервисов и импорты
 
@@ -25,8 +26,8 @@ Commit должен быть явным; закрытие сессии отка�
 
 В корне каждого сервиса находятся `tests/{unit,integration,e2e,performance}/`,
 `k8s/`, `docs/`, `ci/`, `scripts/`. CLI-точки входа bootstrap, worker и Telegram
-bot находятся в `scripts/`; они пока явно завершаются сообщением об отсутствии
-реализации. Каталоги для будущих артефактов не означают готовность Kubernetes,
+bot находятся в `scripts/`; bootstrap Identity/Automation и login-бот работают,
+остальные точки входа явно сообщают об отсутствии реализации. Каталоги для будущих артефактов не означают готовность Kubernetes,
 нагрузочных тестов или бизнес-функций.
 
 Сервисы — virtual projects uv (`package = false`): workspace устанавливает их
@@ -114,6 +115,43 @@ runtime-сеть и внешние порты приложения не меня
 сеть. MinIO собирается из закреплённого официального commit, Go-модули проверяются
 по upstream `go.sum`.
 
-GitHub Actions запускает проверки и сборку существующего каркаса. Успешный
-инфраструктурный smoke не означает готовность пользовательского сценария;
-бизнес-тесты добавляются в последующих задачах.
+GitHub Actions запускает проверки и сборку существующего приложения. Smoke
+подтверждает инфраструктуру и сценарий входа; управление задачами и фоновые
+задания добавляются в следующих задачах.
+
+
+## Первый admin и Telegram-вход (#5)
+
+После `make init` укажите свой числовой Telegram ID в `.env` как
+`INITIAL_ADMIN_TELEGRAM_ID`. Токен BotFather запишите непосредственно в локальный
+secret-файл `.secrets/telegram_bot_token`, не в `.env`, историю shell или Git.
+`make init` создаёт RSA-ключ `identity_jwt_private_key` через openssl без вывода
+и не перезаписывает уже существующие секреты. Не меняйте ключ после появления
+сессий без запланированной ротации: старые JWT перестанут проверяться.
+
+```bash
+docker compose up -d --wait identity-db automation-db rabbitmq
+docker compose run --rm --no-deps identity-bootstrap
+docker compose run --rm --no-deps automation-bootstrap
+make bootstrap-admin
+docker compose up -d --wait identity-api
+docker compose --profile bot up -d automation-bot
+```
+
+Обычный `make setup` пока включает неготовый Tasks bootstrap, поэтому для входа
+используйте команды выше. Повтор миграций и `make bootstrap-admin` безопасен:
+существующий участник сохраняет свой статус, в том числе блокировку.
+Для браузерного API нужен ingress (`docker compose up -d --wait frontend`).
+Отправьте боту `/start`, затем `/login` в личном чате. Полученный код можно один
+раз передать JSON-телом `{"code":"..."}` в `POST /api/v1/auth/exchange` через
+тот же ingress с его Origin. UI ввода кода будет добавлен отдельной frontend-задачей.
+`GET /api/v1/users/me` проверяет cookie, `POST /api/v1/auth/logout` отзывает вход.
+
+`make smoke` и `make e2e` создают собственные секреты и первого admin, применяют
+миграции, проверяют полный login-путь и повторяют bootstrap после рестарта.
+Telegram подменяется только на порту отправки: реальны бот-сценарий, внутренний
+HTTP-клиент, Identity, nginx, SQL и транзакции PostgreSQL. Проверяются hash/TTL,
+отмена старого кода, повтор/гонка обмена и выдачи, лимиты, Origin, cookie и logout.
+Приватный RSA-ключ отсутствует в Automation/smoke; ключ Automation не открывает
+внутренние маршруты через ingress. Тесты не требуют настоящего Telegram token.
+Живой long polling с токеном владельца остаётся отдельной ручной приёмкой.
