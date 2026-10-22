@@ -115,6 +115,7 @@ services:
       dockerfile: "services/tasks-service/Dockerfile"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+      BOTFLOW_IDENTITY_URL: "http://identity-api:8000"
     secrets:
       - "tasks_db_password"
       - "rabbitmq_password"
@@ -125,6 +126,8 @@ services:
       rabbitmq:
         condition: "service_healthy"
       redis:
+        condition: "service_healthy"
+      identity-api:
         condition: "service_healthy"
     networks:
       - "backend"

@@ -1,5 +1,7 @@
 """The task of the shared board and the identity of its source."""
 
+from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 from uuid import UUID, uuid5
 
@@ -13,6 +15,18 @@ class TaskStatus(StrEnum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+
+
+@dataclass(frozen=True, slots=True)
+class Task:
+    id: UUID
+    text: str
+    status: TaskStatus
+    version: int
+    author_id: UUID
+    author_name: str  # snapshot taken when the task was created
+    created_at: datetime
+    updated_at: datetime
 
 
 def source_key(bot_id: int, chat_id: int, message_id: int) -> str:

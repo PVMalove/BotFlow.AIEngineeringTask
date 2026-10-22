@@ -5,6 +5,8 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
+from domain.tasks import Task, TaskStatus
+
 
 @dataclass(frozen=True, slots=True)
 class NewTask:
@@ -39,3 +41,47 @@ class TaskCommandStore(Protocol):
         for the same source a no-op as well.
         """
         ...
+
+
+class Unauthenticated(Exception):
+    """No valid session."""
+
+
+class NotApproved(Exception):
+    """The session's member is not an approved participant."""
+
+
+class IdentityUnavailable(Exception):
+    """Identity cannot confirm the session; access is never assumed."""
+
+
+class InvalidCursor(Exception):
+    """The page cursor is not one this service issued."""
+
+
+class TaskNotFound(Exception):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class PageCursor:
+    """Position after the last row of a page: ordering is (created_at, id) DESC."""
+
+    created_at: datetime
+    id: UUID
+
+
+class MemberAuthenticator(Protocol):
+    async def require_approved(self, token: str) -> None:
+        """Raise Unauthenticated, NotApproved or IdentityUnavailable."""
+        ...
+
+
+class TaskReader(Protocol):
+    async def list_page(
+        self, status: TaskStatus | None, after: PageCursor | None, limit: int
+    ) -> list[Task]:
+        """Newest first, strictly after `after`."""
+        ...
+
+    async def get(self, task_id: UUID) -> Task | None: ...
