@@ -1,5 +1,6 @@
 """The Redis adapter publishes the board signal and never lets a failure out."""
 
+import asyncio
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -22,3 +23,14 @@ async def test_a_redis_failure_is_swallowed() -> None:
     redis.publish.side_effect = OSError("redis down")
 
     await RedisBoardSignal(redis).changed(uuid4())  # must not raise
+
+
+async def test_a_hung_redis_does_not_hold_the_caller() -> None:
+    redis = AsyncMock()
+
+    async def hang(*args: object) -> None:
+        await asyncio.sleep(30)
+
+    redis.publish.side_effect = hang
+
+    await asyncio.wait_for(RedisBoardSignal(redis, timeout=0.05).changed(uuid4()), 2)
