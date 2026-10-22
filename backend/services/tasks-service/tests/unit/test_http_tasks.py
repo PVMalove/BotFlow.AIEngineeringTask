@@ -1,6 +1,7 @@
 """Tasks REST contract: board visibility, keyset cursor, status filter, auth."""
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -10,11 +11,14 @@ import pytest
 from api.containers import Services
 from api.dependencies import get_services
 from api.main import create_tasks_app
+from application.commands.change_task_status import ChangeTaskStatus
 from application.ports import (
     IdentityUnavailable,
     NotApproved,
     PageCursor,
+    TaskNotFound,
     Unauthenticated,
+    VersionConflict,
 )
 from application.queries.tasks import GetTask, ListTasks
 from domain.tasks import Actor, Role, Task, TaskStatus
@@ -76,6 +80,32 @@ class Board:
         return self.tasks.get(task_id)
 
 
+class StatusStore:
+    """The store's contract over the in-memory board: same rules as the SQL UPDATE."""
+
+    def __init__(self, board: Board) -> None:
+        self.board = board
+
+    async def change(
+        self, task_id: UUID, target: TaskStatus, expected_version: int
+    ) -> Task:
+        task = self.board.tasks.get(task_id)
+        if task is None:
+            raise TaskNotFound
+        if task.version != expected_version:
+            raise VersionConflict
+        if task.status is target:
+            return task
+        changed = replace(
+            task,
+            status=target,
+            version=task.version + 1,
+            updated_at=task.updated_at + timedelta(minutes=1),
+        )
+        self.board.tasks[task_id] = changed
+        return changed
+
+
 class Env:
     def __init__(self) -> None:
         self.identity = Identity()
@@ -83,6 +113,9 @@ class Env:
         self.services = Services(
             list_tasks=ListTasks(self.identity, self.board),
             get_task=GetTask(self.identity, self.board),
+            change_task_status=ChangeTaskStatus(
+                self.identity, self.board, StatusStore(self.board)
+            ),
         )
 
 
@@ -296,3 +329,19 @@ async def test_a_storage_failure_is_service_unavailable(
 
     assert response.status_code == 503
     assert response.json() == {"detail": "tasks_unavailable"}
+
+
+async def test_the_author_moves_a_task_and_gets_the_new_version(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1)
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task.id}",
+        json={"status": "in_progress", "expected_version": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    data = response.json()["data"]
+    assert (data["status"], data["version"]) == ("in_progress", 2)

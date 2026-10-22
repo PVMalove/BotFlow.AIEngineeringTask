@@ -13,11 +13,13 @@ from botflow_platform.resources import Resources, open_resources
 from botflow_platform.settings import Settings
 from dependency_injector import containers, providers
 
+from application.commands.change_task_status import ChangeTaskStatus
 from application.commands.create_task import CreateTaskFromCommand
 from application.queries.tasks import GetTask, ListTasks
+from infrastructure.board_signal import RedisBoardSignal
 from infrastructure.db.tables import outbox
 from infrastructure.db.task_reader import SqlTaskReader
-from infrastructure.db.task_store import SqlTaskCommandStore
+from infrastructure.db.task_store import SqlTaskCommandStore, SqlTaskStatusStore
 from infrastructure.identity_gateway import HttpIdentityGateway
 
 
@@ -51,6 +53,7 @@ class Services:
 
     list_tasks: ListTasks
     get_task: GetTask
+    change_task_status: ChangeTaskStatus
 
 
 async def open_services(resources: Resources) -> AsyncIterator[Services]:
@@ -61,8 +64,14 @@ async def open_services(resources: Resources) -> AsyncIterator[Services]:
     ) as client:
         identity = HttpIdentityGateway(client)
         reader = SqlTaskReader(resources.sessions)
+        assert resources.redis is not None  # Tasks always opens Redis
+        store = SqlTaskStatusStore(
+            resources.sessions, RedisBoardSignal(resources.redis)
+        )
         yield Services(
-            list_tasks=ListTasks(identity, reader), get_task=GetTask(identity, reader)
+            list_tasks=ListTasks(identity, reader),
+            get_task=GetTask(identity, reader),
+            change_task_status=ChangeTaskStatus(identity, reader, store),
         )
 
 

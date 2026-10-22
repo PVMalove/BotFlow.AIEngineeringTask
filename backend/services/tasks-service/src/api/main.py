@@ -8,11 +8,13 @@ from sqlalchemy.exc import DBAPIError, TimeoutError
 from api.containers import Container
 from api.endpoints.tasks import router as tasks_router
 from application.ports import (
+    Forbidden,
     IdentityUnavailable,
     InvalidCursor,
     NotApproved,
     TaskNotFound,
     Unauthenticated,
+    VersionConflict,
 )
 
 # Deliberately coarse: a caller learns why only as far as it can act on it.
@@ -21,6 +23,8 @@ _REJECTIONS: dict[type[Exception], tuple[int, str]] = {
     NotApproved: (403, "not_approved"),
     InvalidCursor: (400, "invalid_cursor"),
     TaskNotFound: (404, "task_not_found"),
+    Forbidden: (403, "forbidden"),
+    VersionConflict: (409, "version_conflict"),
 }
 
 

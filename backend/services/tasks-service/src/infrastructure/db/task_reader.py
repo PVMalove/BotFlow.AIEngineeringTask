@@ -11,7 +11,7 @@ from domain.tasks import Task, TaskStatus
 from infrastructure.db.tables import tasks
 
 
-def _task(row: Row[tuple[object, ...]]) -> Task:
+def to_task(row: Row[tuple[object, ...]]) -> Task:
     return Task(
         id=row.id,
         text=row.text,
@@ -40,11 +40,11 @@ class SqlTaskReader:
             )
         async with self._sessions() as session:
             rows = await session.execute(query.limit(limit))
-            return [_task(row) for row in rows]
+            return [to_task(row) for row in rows]
 
     async def get(self, task_id: UUID) -> Task | None:
         async with self._sessions() as session:
             row = (
                 await session.execute(select(tasks).where(tasks.c.id == task_id))
             ).one_or_none()
-        return _task(row) if row else None
+        return to_task(row) if row else None

@@ -105,3 +105,9 @@ class TaskStatusStore(Protocol):
         when `expected_version` is not the current one.
         """
         ...
+
+
+class BoardSignal(Protocol):
+    async def changed(self, task_id: UUID) -> None:
+        """Tell subscribers to re-read the board; best effort, never raises."""
+        ...
