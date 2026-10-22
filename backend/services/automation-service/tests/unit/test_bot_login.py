@@ -135,7 +135,13 @@ async def test_http_gateway_uses_the_automation_key_for_member_lookup() -> None:
         assert request.url.path == f"/internal/v1/members/by-telegram/{ADMIN}"
         assert request.headers["X-Service-Key"] == "test-automation-key"
         return httpx.Response(
-            200, json={"telegram_id": ADMIN, "role": "admin", "status": "approved"}
+            200,
+            json={
+                "telegram_id": ADMIN,
+                "role": "admin",
+                "status": "approved",
+                "access_version": 4,
+            },
         )
 
     async with httpx.AsyncClient(
@@ -145,7 +151,7 @@ async def test_http_gateway_uses_the_automation_key_for_member_lookup() -> None:
 
         member = await sut.find_member(ADMIN)
 
-    assert member == TelegramMember(ADMIN, "admin", "approved")
+    assert member == TelegramMember(ADMIN, "admin", "approved", 4)
 
 
 @pytest.mark.parametrize("status", [401, 500, 503])

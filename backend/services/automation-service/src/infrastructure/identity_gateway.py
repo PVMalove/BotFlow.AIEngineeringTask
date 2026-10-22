@@ -47,7 +47,10 @@ class HttpIdentityGateway:
                 telegram_id=body["telegram_id"],
                 role=body["role"],
                 status=body["status"],
+                access_version=body["access_version"],
             )
+            if not isinstance(member.access_version, int):
+                raise ValueError
             if member.telegram_id != telegram_id:
                 raise ValueError
             return member

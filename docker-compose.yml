@@ -232,6 +232,28 @@ services:
     command:
       - "python"
       - "scripts/worker.py"
+    restart: "unless-stopped"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+      BOTFLOW_IDENTITY_URL: "http://identity-api:8000"
+    secrets:
+      - "automation_db_password"
+      - "rabbitmq_password"
+      - "redis_automation_password"
+      - "minio_password"
+      - "automation_service_key"
+      - "telegram_bot_token"
+    depends_on:
+      automation-db:
+        condition: "service_healthy"
+      rabbitmq:
+        condition: "service_healthy"
+      redis:
+        condition: "service_healthy"
+      minio:
+        condition: "service_healthy"
+      identity-api:
+        condition: "service_healthy"
     networks:
       - "backend"
   automation-bot:
