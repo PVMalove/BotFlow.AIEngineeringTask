@@ -10,6 +10,23 @@ async function login(page: Page, code: string) {
   await expect(page).toHaveURL(/\/$/);
 }
 
+async function checkRequestList(response: import('@playwright/test').Response) {
+  expect(
+    response.status(),
+    `Join request list returned HTTP ${response.status()}`,
+  ).toBe(200);
+  expect(
+    await response.json(),
+    'The real join request must retain the applicant name',
+  ).toContainEqual(
+    expect.objectContaining({
+      telegram_id: 4200000008,
+      display_name: 'Анна / Աննա',
+      status: 'pending',
+    }),
+  );
+}
+
 test.beforeEach(() => {
   fixture('reset');
 });
@@ -22,7 +39,11 @@ test('manages real join decisions and revokes and restores a regular user access
   test.setTimeout(120_000);
   fixture('join');
   await login(page, loginCode());
+  const listResponse = page.waitForResponse((response) =>
+    response.url().includes('/api/v1/admin/join-requests?'),
+  );
   await page.getByRole('link', { name: 'Управление доступом' }).click();
+  await checkRequestList(await listResponse);
   const applicant = page
     .getByRole('listitem')
     .filter({ hasText: 'Анна / Աննա' });
@@ -115,7 +136,11 @@ test('rereads a real concurrent decision without overwriting it', async ({
   test.setTimeout(60_000);
   fixture('join');
   await login(page, loginCode());
+  const listResponse = page.waitForResponse((response) =>
+    response.url().includes('/api/v1/admin/join-requests?'),
+  );
   await page.goto('/admin');
+  await checkRequestList(await listResponse);
   const applicant = page
     .getByRole('listitem')
     .filter({ hasText: 'Анна / Աննա' });

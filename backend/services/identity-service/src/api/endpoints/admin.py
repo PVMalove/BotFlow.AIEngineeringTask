@@ -1,6 +1,6 @@
 """Admin API: join requests, members and access decisions (browser contract)."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 Limit = Annotated[int, Query(ge=1, le=100)]
 Offset = Annotated[int, Query(ge=0)]
 RequestStatus = Annotated[
-    MemberStatus, Query(pattern="^(pending|rejected)$", description="pending|rejected")
+    Literal["pending", "rejected"], Query(description="pending|rejected")
 ]
 
 
@@ -33,13 +33,15 @@ async def join_requests(
     admin: AdminDI,
     handler: ListMembersDI,
     response: Response,
-    status: RequestStatus = MemberStatus.PENDING,
+    status: RequestStatus = "pending",
     limit: Limit = 50,
     offset: Offset = 0,
 ) -> list[AdminMemberView]:
     """Список заявок для администратора."""
     response.headers["Cache-Control"] = "no-store"
-    return await handler.execute(ListMembersQuery((status,), limit, offset))
+    return await handler.execute(
+        ListMembersQuery((MemberStatus(status),), limit, offset)
+    )
 
 
 @router.get(
