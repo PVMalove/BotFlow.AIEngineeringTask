@@ -12,12 +12,13 @@ import {
 } from '@mui/material';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { Navigate, Route, Routes } from 'react-router';
+import { Link, Navigate, Route, Routes } from 'react-router';
 
 import { ApiError, exchangeCode, getCurrentMember, logout } from './api';
 import { Board } from './Board';
+import { AdminAccess } from './AdminAccess';
 import { errorMessage } from './errors';
-import type { Messages } from './locale';
+import type { Locale, Messages } from './locale';
 
 function clearNonSessionQueries(
   client: ReturnType<typeof useQueryClient>,
@@ -157,7 +158,13 @@ function Login({ messages }: { messages: Messages }) {
   );
 }
 
-export function SessionRoutes({ messages }: { messages: Messages }) {
+export function SessionRoutes({
+  messages,
+  locale,
+}: {
+  messages: Messages;
+  locale: Locale;
+}) {
   const client = useQueryClient();
   const session = useQuery({
     queryKey: ['session'],
@@ -237,6 +244,7 @@ export function SessionRoutes({ messages }: { messages: Messages }) {
                 >
                   <Typography>{session.data.telegram_id}</Typography>
                   <Button
+                    color="secondary"
                     onClick={() => signOut.mutate()}
                     disabled={signOut.isPending}
                   >
@@ -249,7 +257,44 @@ export function SessionRoutes({ messages }: { messages: Messages }) {
                   </Alert>
                 )}
               </Container>
-              <Board messages={messages} />
+              <Container
+                component="nav"
+                aria-label={messages.workspace}
+                maxWidth="lg"
+                sx={{ pt: 2 }}
+              >
+                <Stack
+                  direction="row"
+                  useFlexGap
+                  sx={{ flexWrap: 'wrap', gap: 1 }}
+                >
+                  <Button component={Link} to="/" color="secondary">
+                    {messages.board}
+                  </Button>
+                  {session.data.role === 'admin' && (
+                    <Button component={Link} to="/admin" color="secondary">
+                      {messages.adminTitle}
+                    </Button>
+                  )}
+                </Stack>
+              </Container>
+              <Routes>
+                <Route
+                  path="/admin"
+                  element={
+                    session.data.role === 'admin' ? (
+                      <AdminAccess
+                        member={session.data}
+                        messages={messages}
+                        locale={locale}
+                      />
+                    ) : (
+                      <Navigate to="/" replace />
+                    )
+                  }
+                />
+                <Route path="*" element={<Board messages={messages} />} />
+              </Routes>
             </>
           ) : (
             <Navigate to="/login" replace />

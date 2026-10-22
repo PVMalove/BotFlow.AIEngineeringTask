@@ -6,7 +6,7 @@ if (!process.env.BOTFLOW_E2E_BASE_URL) {
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['infrastructure.spec.ts', 'auth.spec.ts'],
+  testMatch: ['infrastructure.spec.ts', 'auth.spec.ts', 'admin.spec.ts'],
   workers: 1,
   outputDir: process.env.BOTFLOW_E2E_OUTPUT_DIR,
   use: { baseURL: process.env.BOTFLOW_E2E_BASE_URL },
