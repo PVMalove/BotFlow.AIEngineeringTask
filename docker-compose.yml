@@ -444,19 +444,6 @@ services:
       timeout: "3s"
       retries: 3
       start_period: "120s"
-  notification-worker:
-    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
-    profiles:
-      - "workers"
-    command:
-      - "python"
-      - "scripts/worker.py"
-      - "notifications"
-    secrets:
-      - "telegram_bot_token"
-      - "redis_automation_password"
-    networks:
-      - "backend"
 networks:
   backend: {}
 volumes:
