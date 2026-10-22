@@ -36,6 +36,13 @@ def hash_login_code(code: str) -> str:
     return hashlib.sha256(code.encode()).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class EnsureInitialAdminCommand:
+    """Параметры создания первого администратора."""
+
+    telegram_id: int
+
+
 class EnsureInitialAdmin:
     """Create the first admin once; an existing member is never changed."""
 
@@ -43,7 +50,12 @@ class EnsureInitialAdmin:
         self._uow_factory = uow_factory
         self._clock = clock
 
-    async def __call__(self, telegram_id: int) -> bool:
+    async def execute(self, command: EnsureInitialAdminCommand | int) -> bool:
+        telegram_id = (
+            command.telegram_id
+            if isinstance(command, EnsureInitialAdminCommand)
+            else command
+        )
         member = Member(
             id=uuid4(),
             telegram_id=telegram_id,
@@ -55,6 +67,13 @@ class EnsureInitialAdmin:
             created = await uow.members.add_if_absent(member)
             await uow.commit()
         return created
+
+
+@dataclass(frozen=True, slots=True)
+class IssueLoginCodeCommand:
+    """Параметры выпуска одноразового кода авторизации."""
+
+    telegram_id: int
 
 
 class IssueLoginCode:
@@ -74,7 +93,12 @@ class IssueLoginCode:
         self._generate_code = generate_code
         self._attempts = attempts_per_minute
 
-    async def __call__(self, telegram_id: int) -> LoginCodeView:
+    async def execute(self, command: IssueLoginCodeCommand | int) -> LoginCodeView:
+        telegram_id = (
+            command.telegram_id
+            if isinstance(command, IssueLoginCodeCommand)
+            else command
+        )
         if not await self._limiter.allow(f"issue:{telegram_id}", self._attempts, 60):
             raise RateLimited
         async with self._uow_factory() as uow:
@@ -104,6 +128,14 @@ class SessionGrant:
     token: str
 
 
+@dataclass(frozen=True, slots=True)
+class ExchangeLoginCodeCommand:
+    """Параметры обмена кода на сессию."""
+
+    code: str
+    client: str
+
+
 class ExchangeLoginCode:
     """Trade a live code for a session; the code works exactly once."""
 
@@ -121,8 +153,19 @@ class ExchangeLoginCode:
         self._tokens = tokens
         self._attempts = attempts_per_minute
 
-    async def __call__(self, code: str, *, client: str) -> SessionGrant:
-        if not await self._limiter.allow(f"exchange:{client}", self._attempts, 60):
+    async def execute(
+        self,
+        command: ExchangeLoginCodeCommand | str,
+        *,
+        client: str | None = None,
+    ) -> SessionGrant:
+        if isinstance(command, ExchangeLoginCodeCommand):
+            code = command.code
+            client_str = command.client
+        else:
+            code = command
+            client_str = client or "unknown"
+        if not await self._limiter.allow(f"exchange:{client_str}", self._attempts, 60):
             raise RateLimited
         if not _CODE_PATTERN.fullmatch(code):
             raise InvalidLoginCode
@@ -148,6 +191,13 @@ class ExchangeLoginCode:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class LogoutCommand:
+    """Параметры отзыва сессии."""
+
+    session_id: UUID
+
+
 class Logout:
     """Revoke one session; there is no refresh to cancel."""
 
@@ -155,7 +205,28 @@ class Logout:
         self._uow_factory = uow_factory
         self._clock = clock
 
-    async def __call__(self, session_id: UUID) -> None:
+    async def execute(self, command: LogoutCommand | UUID) -> None:
+        session_id = (
+            command.session_id if isinstance(command, LogoutCommand) else command
+        )
         async with self._uow_factory() as uow:
             await uow.sessions.revoke(session_id, self._clock())
             await uow.commit()
+
+
+__all__ = [
+    "EnsureInitialAdmin",
+    "EnsureInitialAdminCommand",
+    "ExchangeLoginCode",
+    "ExchangeLoginCodeCommand",
+    "IssueLoginCode",
+    "IssueLoginCodeCommand",
+    "LOGIN_CODE_TTL",
+    "LoginCodeView",
+    "Logout",
+    "LogoutCommand",
+    "SESSION_TTL",
+    "SessionGrant",
+    "hash_login_code",
+    "new_login_code",
+]

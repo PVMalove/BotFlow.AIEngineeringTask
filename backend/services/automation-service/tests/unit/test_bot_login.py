@@ -1,9 +1,14 @@
 """Telegram login behavior at the command and external HTTP seams."""
 
+from typing import Any
+
 import httpx
 import pytest
 
-from application.commands.handle_bot_command import HandleBotCommand
+from application.commands.handle_bot_command import (
+    HandleBotCommand,
+    HandleBotCommandDto,
+)
 from application.ports import IdentityUnavailable, TelegramMember
 
 ADMIN = 4_200_000_001
@@ -43,11 +48,11 @@ class Inbox:
 
 
 async def command(sut: HandleBotCommand, text: str, **overrides: object) -> None:
-    values = dict(
+    values: dict[str, Any] = dict(
         update_id=1, telegram_id=ADMIN, chat_id=ADMIN, text=text, private=True
     )
     values.update(overrides)
-    await sut(**values)  # type: ignore[arg-type]
+    await sut.execute(HandleBotCommandDto(**values))
 
 
 async def test_login_sends_the_one_time_code_to_the_admin() -> None:
@@ -164,8 +169,7 @@ async def test_aiogram_update_reaches_the_login_command(
 
     sent: list[tuple[int, str]] = []
 
-    async def send(bot: Bot, *, chat_id: int, text: str, protect_content: bool) -> None:
-        assert protect_content
+    async def send(bot: Bot, *, chat_id: int, text: str, **kwargs: Any) -> None:
         sent.append((chat_id, text))
 
     monkeypatch.setattr(Bot, "send_message", send)

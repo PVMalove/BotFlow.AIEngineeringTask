@@ -14,13 +14,15 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy.exc import OperationalError, TimeoutError
 
 from api.containers import Services
+from api.dependencies import get_services
 from api.main import create_identity_app
-from api.routes import get_services
 from api.security import CookiePolicy, Operation, ServiceKeys
 from application.commands.auth import (
     EnsureInitialAdmin,
+    EnsureInitialAdminCommand,
     ExchangeLoginCode,
     IssueLoginCode,
+    IssueLoginCodeCommand,
     Logout,
 )
 from application.queries.members import AuthenticateSession, FindMemberByTelegram
@@ -69,8 +71,9 @@ class Env:
         )
 
     async def login_code(self) -> str:
-        await EnsureInitialAdmin(lambda: FakeUnitOfWork(self.store), self.clock)(ADMIN)
-        return (await self.issue(ADMIN)).code
+        admin_uow = EnsureInitialAdmin(lambda: FakeUnitOfWork(self.store), self.clock)
+        await admin_uow.execute(EnsureInitialAdminCommand(ADMIN))
+        return (await self.issue.execute(IssueLoginCodeCommand(ADMIN))).code
 
 
 @pytest.fixture
@@ -281,12 +284,13 @@ async def test_logout_from_a_foreign_origin_keeps_the_session(
 async def test_unavailable_storage_gives_503_not_access(
     env: Env, failure: Exception
 ) -> None:
-    async def unavailable(token: str) -> Any:
-        raise failure
+    class UnavailableAuth:
+        async def execute(self, token: str) -> Any:
+            raise failure
 
     env.services = replace(
         env.services,
-        authenticate=unavailable,  # type: ignore[arg-type]
+        authenticate=UnavailableAuth(),  # type: ignore[arg-type]
     )
     app = create_identity_app()
     app.dependency_overrides[get_services] = lambda: env.services
@@ -417,10 +421,14 @@ async def test_internal_issue_rejects_a_malformed_body(
 
 
 async def test_internal_routes_report_unavailable_storage_as_503(env: Env) -> None:
-    async def unavailable(telegram_id: int) -> Any:
-        raise OperationalError("SELECT 1", {}, OSError("down"))
+    class UnavailableMember:
+        async def execute(self, *args: Any, **kwargs: Any) -> Any:
+            raise OperationalError("SELECT 1", {}, OSError("down"))
 
-    env.services = replace(env.services, find_member=unavailable)  # type: ignore[arg-type]
+    env.services = replace(
+        env.services,
+        find_member=UnavailableMember(),  # type: ignore[arg-type]
+    )
     async for client in client_for(env):
         response = await client.get(
             f"/internal/v1/members/by-telegram/{ADMIN}", headers=SERVICE_KEY

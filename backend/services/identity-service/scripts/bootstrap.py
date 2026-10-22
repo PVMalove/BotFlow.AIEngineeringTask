@@ -10,7 +10,7 @@ from botflow_platform.migrations import run_migrations
 
 import infrastructure.db as db_package
 from api.containers import Container
-from application.commands.auth import EnsureInitialAdmin
+from application.commands.auth import EnsureInitialAdmin, EnsureInitialAdminCommand
 from infrastructure.db.unit_of_work import SqlUnitOfWork
 
 ALEMBIC_INI = Path(db_package.__file__).parent / "alembic.ini"
@@ -31,7 +31,7 @@ async def admin(container: Container) -> None:
         raise SystemExit("INITIAL_ADMIN_TELEGRAM_ID must be a positive Telegram ID.")
     database = await container.database.async_()
     ensure_admin = EnsureInitialAdmin(lambda: SqlUnitOfWork(database.sessions), _utcnow)
-    if await ensure_admin(int(raw)):
+    if await ensure_admin.execute(EnsureInitialAdminCommand(telegram_id=int(raw))):
         print("Initial admin created.")
     else:
         print("Initial admin already exists; access decisions are unchanged.")

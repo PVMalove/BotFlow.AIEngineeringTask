@@ -11,6 +11,7 @@ from pathlib import Path
 
 import httpx
 from api.containers import build_bot_command
+from application.commands.handle_bot_command import HandleBotCommandDto
 from application.ports import IdentityUnavailable
 from botflow_platform.resources import open_database
 from botflow_platform.settings import Settings
@@ -63,12 +64,14 @@ class AuthFlow(unittest.IsolatedAsyncioTestCase):
 
     async def code(self) -> str:
         self.update_id += 1
-        await self.bot(
-            update_id=self.update_id,
-            telegram_id=ADMIN,
-            chat_id=ADMIN,
-            text="/login",
-            private=True,
+        await self.bot.execute(
+            HandleBotCommandDto(
+                update_id=self.update_id,
+                telegram_id=ADMIN,
+                chat_id=ADMIN,
+                text="/login",
+                private=True,
+            )
         )
         chat, message = self.telegram.messages[-1]
         self.assertEqual(chat, ADMIN)
@@ -83,7 +86,7 @@ class AuthFlow(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_bot_code_exchange_current_member_and_revocation(self) -> None:
-        await self.bot(
+        await self.bot.execute(
             update_id=100,
             telegram_id=ADMIN,
             chat_id=ADMIN,
@@ -95,7 +98,7 @@ class AuthFlow(unittest.IsolatedAsyncioTestCase):
             [(ADMIN, "Для входа в веб-панель отправьте /login.")],
         )
         code = await self.code()
-        await self.bot(
+        await self.bot.execute(
             update_id=1,
             telegram_id=ADMIN,
             chat_id=ADMIN,

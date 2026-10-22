@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,37 @@ BOOTSTRAP = (
         "admin",
     ],
 )
+
+
+def report_browser_result(output: bytes) -> None:
+    """Print only test identities, counts and a redacted first diagnostic line."""
+    report = json.loads(output)
+    stats = report["stats"]
+    print(
+        f"Browser checks: {stats['expected']} passed, "
+        f"{stats['unexpected']} failed, {stats['skipped']} skipped",
+        flush=True,
+    )
+
+    def visit(suites: list[dict]) -> None:
+        for suite in suites:
+            for spec in suite.get("specs", []):
+                for test in spec.get("tests", []):
+                    for result in test.get("results", []):
+                        if result["status"] in {"passed", "skipped"}:
+                            continue
+                        name = Path(spec["file"]).name
+                        if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+                            name = "browser-test"
+                        print(f"FAIL: {name}:{spec['line']}", flush=True)
+                        for error in result.get("errors", []):
+                            line = error.get("message", "").splitlines()[0]
+                            line = re.sub(r"\x1b\[[0-9;]*m", "", line)
+                            line = re.sub(r"[A-Za-z0-9_-]{32,}", "[redacted]", line)
+                            print(line[:200], flush=True)
+            visit(suite.get("suites", []))
+
+    visit(report.get("suites", []))
 
 
 def main() -> int:
@@ -140,7 +172,10 @@ def main() -> int:
                         check=True,
                         capture_output=True,
                     )
-                if stage == "resource and isolation checks" and options.browser:
+                # Resource checks deliberately block the admin to verify that a
+                # repeated bootstrap after restart does not restore access.
+                # Browser login must run before that persistent state change.
+                if stage == "migrations and initial admin" and options.browser:
                     stage = "isolated browser checks"
                     address = subprocess.run(
                         [*compose, "port", "frontend", "8080"],
@@ -149,14 +184,40 @@ def main() -> int:
                         capture_output=True,
                         text=True,
                     ).stdout.strip()
-                    subprocess.run(
+                    browser_result = subprocess.run(
                         [
                             os.environ.get("BOTFLOW_NODE", "node"),
                             str(root / "frontend/node_modules/@playwright/test/cli.js"),
                             "test",
+                            "--reporter=json",
                         ],
                         cwd=root / "frontend",
-                        env={**env, "BOTFLOW_E2E_BASE_URL": f"http://{address}"},
+                        env={
+                            **env,
+                            "BOTFLOW_E2E_BASE_URL": f"http://{address}",
+                            "BOTFLOW_E2E_COMPOSE": json.dumps(compose),
+                            "BOTFLOW_E2E_OUTPUT_DIR": str(
+                                directory / "browser-results"
+                            ),
+                        },
+                        check=False,
+                        capture_output=True,
+                    )
+                    report_browser_result(browser_result.stdout)
+                    browser_result.check_returncode()
+                    subprocess.run(
+                        [
+                            *compose,
+                            "run",
+                            "--rm",
+                            "--no-deps",
+                            "-T",
+                            "smoke",
+                            "python",
+                            "/workspace/backend/tests/integration/browser_fixture.py",
+                            "reset",
+                        ],
+                        env=env,
                         check=True,
                         capture_output=True,
                     )

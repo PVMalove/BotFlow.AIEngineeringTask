@@ -1,11 +1,17 @@
 import { expect, test } from '@playwright/test';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/users/me', (route) =>
+    route.fulfill({ status: 401, json: { detail: 'unauthenticated' } }),
+  );
+});
+
 test('switches Russian to Armenian, restores it on reload and returns to Russian', async ({
   page,
 }) => {
   await page.goto('/');
   await expect(page.locator('html')).toHaveAttribute('lang', 'ru');
-  await expect(page.getByText('Панель готовится к запуску.')).toBeVisible();
+  await expect(page.getByText('Вход в BotFlow')).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Русский', exact: true }),
   ).toHaveAttribute('aria-pressed', 'true');
@@ -13,17 +19,13 @@ test('switches Russian to Armenian, restores it on reload and returns to Russian
   await page.getByRole('button', { name: 'Հայերեն', exact: true }).click();
 
   await expect(page.locator('html')).toHaveAttribute('lang', 'hy');
-  await expect(
-    page.getByText('Վահանակը պատրաստվում է գործարկման։'),
-  ).toBeVisible();
-  await expect(page.getByText('Панель готовится к запуску.')).toHaveCount(0);
+  await expect(page.getByText('Մուտք BotFlow')).toBeVisible();
+  await expect(page.getByText('Вход в BotFlow')).toHaveCount(0);
 
   await page.reload();
 
   await expect(page.locator('html')).toHaveAttribute('lang', 'hy');
-  await expect(
-    page.getByText('Վահանակը պատրաստվում է գործարկման։'),
-  ).toBeVisible();
+  await expect(page.getByText('Մուտք BotFlow')).toBeVisible();
   await expect(
     page.getByRole('button', { name: 'Հայերեն', exact: true }),
   ).toHaveAttribute('aria-pressed', 'true');
@@ -32,7 +34,7 @@ test('switches Russian to Armenian, restores it on reload and returns to Russian
   await page.reload();
 
   await expect(page.locator('html')).toHaveAttribute('lang', 'ru');
-  await expect(page.getByText('Панель готовится к запуску.')).toBeVisible();
+  await expect(page.getByText('Вход в BotFlow')).toBeVisible();
 });
 
 for (const language of ['Русский', 'Հայերեն']) {

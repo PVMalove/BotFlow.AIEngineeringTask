@@ -334,6 +334,7 @@ services:
     secrets:
       - "telegram_bot_token"
       - "automation_service_key"
+      - "automation_db_password"
     networks:
       - "backend"
   whisper-worker:
