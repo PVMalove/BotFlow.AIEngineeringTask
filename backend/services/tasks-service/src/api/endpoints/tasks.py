@@ -4,11 +4,12 @@ from typing import Annotated
 from uuid import UUID
 
 from botflow_platform.http import ApiResponse
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from api.dependencies import ServicesDI
+from api.security import require_same_origin
 from application.queries.tasks import DEFAULT_LIMIT, MAX_LIMIT
-from contracts.views import TaskView, task_view
+from contracts.views import ChangeStatusRequest, TaskView, task_view
 from domain.tasks import TaskStatus
 from infrastructure.identity_gateway import SESSION_COOKIE
 
@@ -51,5 +52,34 @@ async def get_task(
     task_id: UUID, request: Request, response: Response, services: ServicesDI
 ) -> ApiResponse[TaskView]:
     task = await services.get_task.execute(request.cookies.get(SESSION_COOKIE), task_id)
+    response.headers["Cache-Control"] = "no-store"
+    return ApiResponse(data=task_view(task))
+
+
+@router.patch(
+    "/{task_id}",
+    response_model=ApiResponse[TaskView],
+    dependencies=[Depends(require_same_origin)],
+    summary="Сменить статус задачи",
+    description=(
+        "Автор или администратор переводит задачу в любой статус. "
+        "expected_version — версия карточки, которую видел клиент: устаревшая даёт "
+        "409, повтор с актуальной версией и тем же статусом — 200 без изменений. "
+        "При 409 перечитайте карточку."
+    ),
+)
+async def change_task_status(
+    task_id: UUID,
+    body: ChangeStatusRequest,
+    request: Request,
+    response: Response,
+    services: ServicesDI,
+) -> ApiResponse[TaskView]:
+    task = await services.change_task_status.execute(
+        request.cookies.get(SESSION_COOKIE),
+        task_id,
+        body.status,
+        body.expected_version,
+    )
     response.headers["Cache-Control"] = "no-store"
     return ApiResponse(data=task_view(task))

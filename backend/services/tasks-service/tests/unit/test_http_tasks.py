@@ -1,6 +1,7 @@
 """Tasks REST contract: board visibility, keyset cursor, status filter, auth."""
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
@@ -10,14 +11,17 @@ import pytest
 from api.containers import Services
 from api.dependencies import get_services
 from api.main import create_tasks_app
+from application.commands.change_task_status import ChangeTaskStatus
 from application.ports import (
     IdentityUnavailable,
     NotApproved,
     PageCursor,
+    TaskNotFound,
     Unauthenticated,
+    VersionConflict,
 )
 from application.queries.tasks import GetTask, ListTasks
-from domain.tasks import Task, TaskStatus
+from domain.tasks import Actor, Role, Task, TaskStatus
 
 BASE = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 COOKIES = {"botflow_session": "session-token"}
@@ -28,11 +32,13 @@ class Identity:
     def __init__(self) -> None:
         self.tokens: list[str] = []
         self.failure: Exception | None = None
+        self.actor = Actor(AUTHOR, Role.USER)
 
-    async def require_approved(self, token: str) -> None:
+    async def require_approved(self, token: str) -> Actor:
         self.tokens.append(token)
         if self.failure:
             raise self.failure
+        return self.actor
 
 
 class Board:
@@ -75,6 +81,32 @@ class Board:
         return self.tasks.get(task_id)
 
 
+class StatusStore:
+    """The store's contract over the in-memory board: same rules as the SQL UPDATE."""
+
+    def __init__(self, board: Board) -> None:
+        self.board = board
+
+    async def change(
+        self, task_id: UUID, target: TaskStatus, expected_version: int
+    ) -> Task:
+        task = self.board.tasks.get(task_id)
+        if task is None:
+            raise TaskNotFound
+        if task.version != expected_version:
+            raise VersionConflict
+        if task.status is target:
+            return task
+        changed = replace(
+            task,
+            status=target,
+            version=task.version + 1,
+            updated_at=task.updated_at + timedelta(minutes=1),
+        )
+        self.board.tasks[task_id] = changed
+        return changed
+
+
 class Env:
     def __init__(self) -> None:
         self.identity = Identity()
@@ -82,6 +114,9 @@ class Env:
         self.services = Services(
             list_tasks=ListTasks(self.identity, self.board),
             get_task=GetTask(self.identity, self.board),
+            change_task_status=ChangeTaskStatus(
+                self.identity, self.board, StatusStore(self.board)
+            ),
         )
 
 
@@ -102,6 +137,7 @@ async def client(env: Env) -> AsyncIterator[httpx.AsyncClient]:
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
         cookies=COOKIES,
+        headers={"Origin": "http://test"},
     ) as client:
         yield client
 
@@ -207,7 +243,7 @@ async def test_a_malformed_cursor_is_a_client_error(
     response = await client.get("/api/v1/tasks", params={"cursor": cursor})
 
     assert response.status_code == 400
-    assert response.json() == {"detail": "invalid_cursor"}
+    assert response.json()["detail"] == "invalid_cursor"
 
 
 async def test_the_card_returns_one_task(env: Env, client: httpx.AsyncClient) -> None:
@@ -224,7 +260,7 @@ async def test_an_unknown_card_is_not_found(client: httpx.AsyncClient) -> None:
     response = await client.get(f"/api/v1/tasks/{uuid4()}")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "task_not_found"}
+    assert response.json()["detail"] == "task_not_found"
 
 
 async def test_the_session_is_checked_with_identity_on_every_request(
@@ -246,7 +282,7 @@ async def test_a_request_without_a_session_cookie_is_unauthenticated(
     response = await client.get("/api/v1/tasks")
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "unauthenticated"}
+    assert response.json()["detail"] == "unauthenticated"
     assert env.identity.tokens == []
 
 
@@ -272,7 +308,7 @@ async def test_identitys_verdict_is_relayed_without_exposing_tasks(
     for path in ("/api/v1/tasks", f"/api/v1/tasks/{card.id}"):
         response = await client.get(path)
         assert response.status_code == status
-        assert response.json() == {"detail": detail}
+        assert response.json()["detail"] == detail
 
 
 async def test_the_health_endpoint_still_reports_not_ready(
@@ -294,4 +330,216 @@ async def test_a_storage_failure_is_service_unavailable(
     response = await client.get("/api/v1/tasks")
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "tasks_unavailable"}
+    body = response.json()
+    assert body["detail"] == "tasks_unavailable"
+    assert body["message"] and body["request_id"] == response.headers["x-request-id"]
+
+
+async def test_the_author_moves_a_task_and_gets_the_new_version(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1)
+
+    response = await client.patch(
+        f"/api/v1/tasks/{task.id}",
+        json={"status": "in_progress", "expected_version": 1},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    data = response.json()["data"]
+    assert (data["status"], data["version"]) == ("in_progress", 2)
+
+
+async def patch(
+    client: httpx.AsyncClient,
+    task: Task,
+    status: str,
+    version: int = 1,
+    headers: dict[str, str] | None = None,
+) -> httpx.Response:
+    return await client.patch(
+        f"/api/v1/tasks/{task.id}",
+        json={"status": status, "expected_version": version},
+        headers=headers,
+    )
+
+
+async def test_a_plain_user_gets_a_safe_403_for_a_foreign_task(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, author_id=uuid4())
+
+    response = await patch(client, task, "completed", headers={"X-Request-ID": "req-1"})
+
+    assert response.status_code == 403
+    assert response.headers["x-request-id"] == "req-1"
+    body = response.json()
+    assert body["detail"] == "forbidden" and body["request_id"] == "req-1"
+    assert body["message"] and set(body) == {"detail", "message", "request_id"}
+    assert env.board.tasks[task.id].status is TaskStatus.PENDING
+
+
+async def test_a_stale_version_is_409_with_the_error_contract(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, version=3)
+
+    response = await patch(client, task, "completed", version=2)
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["detail"] == "version_conflict" and body["message"]
+    assert body["request_id"] == response.headers["x-request-id"]
+    assert env.board.tasks[task.id].version == 3
+
+
+async def test_a_stale_version_with_the_current_status_as_target_is_still_409(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, version=3, status=TaskStatus.COMPLETED)
+
+    response = await patch(client, task, "completed", version=2)
+
+    assert response.status_code == 409
+
+
+async def test_a_no_op_with_the_current_version_is_200_and_unchanged(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, version=3, status=TaskStatus.COMPLETED)
+
+    response = await patch(client, task, "completed", version=3)
+
+    assert response.status_code == 200
+    assert response.json()["data"]["version"] == 3
+    assert env.board.tasks[task.id] == task
+
+
+async def test_an_admin_may_change_a_foreign_task(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    env.identity.actor = Actor(uuid4(), Role.ADMIN)
+    task = env.board.add(1, author_id=uuid4())
+
+    response = await patch(client, task, "in_progress")
+
+    assert response.status_code == 200
+
+
+async def test_an_unknown_task_is_404_with_the_plain_contract(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.patch(
+        f"/api/v1/tasks/{uuid4()}", json={"status": "completed", "expected_version": 1}
+    )
+
+    assert response.status_code == 404
+    assert response.json()["detail"] == "task_not_found"
+
+
+async def test_a_malformed_request_id_is_replaced_not_echoed(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, version=2)
+
+    bad = "bad id<x>"
+
+    response = await patch(client, task, "completed", headers={"X-Request-ID": bad})
+
+    assert response.status_code == 409
+    assert response.headers["x-request-id"] != bad
+    assert response.headers["x-request-id"] == response.json()["request_id"]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "archived", "expected_version": 1},
+        {"status": "completed", "expected_version": 0},
+        {"status": "completed", "expected_version": 2**31},
+        {"status": "completed"},
+        {"expected_version": 1},
+    ],
+)
+async def test_an_invalid_patch_body_is_rejected(
+    env: Env, client: httpx.AsyncClient, payload: dict[str, object]
+) -> None:
+    task = env.board.add(1)
+
+    response = await client.patch(f"/api/v1/tasks/{task.id}", json=payload)
+
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "failure, status, detail",
+    [
+        (Unauthenticated(), 401, "unauthenticated"),
+        (NotApproved(), 403, "not_approved"),
+        (IdentityUnavailable(), 503, "identity_unavailable"),
+    ],
+)
+async def test_identitys_verdict_blocks_a_status_change(
+    env: Env, client: httpx.AsyncClient, failure: Exception, status: int, detail: str
+) -> None:
+    task = env.board.add(1)
+    env.identity.failure = failure
+
+    response = await patch(client, task, "completed")
+
+    assert response.status_code == status
+    assert response.json()["detail"] == detail
+    assert env.board.tasks[task.id].status is TaskStatus.PENDING
+
+
+@pytest.mark.parametrize("origin", [None, "http://evil.example", "https://test"])
+async def test_a_status_change_from_a_foreign_origin_is_refused(
+    env: Env, client: httpx.AsyncClient, origin: str | None
+) -> None:
+    task = env.board.add(1)
+    del client.headers["Origin"]
+    headers = {} if origin is None else {"Origin": origin}
+
+    response = await patch(client, task, "completed", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "origin_not_allowed"}
+    assert env.identity.tokens == []
+    assert env.board.tasks[task.id].status is TaskStatus.PENDING
+
+
+async def test_the_largest_integer_version_is_accepted(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, version=2**31 - 1)
+
+    response = await patch(client, task, "completed", version=2**31 - 1)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "path, status, detail",
+    [
+        ("missing", 404, "task_not_found"),
+        ("bad-cursor", 400, "invalid_cursor"),
+    ],
+)
+async def test_every_rejection_carries_message_and_request_id(
+    client: httpx.AsyncClient, path: str, status: int, detail: str
+) -> None:
+    if path == "missing":
+        response = await client.get(
+            f"/api/v1/tasks/{uuid4()}", headers={"X-Request-ID": "req-7"}
+        )
+    else:
+        response = await client.get(
+            "/api/v1/tasks", params={"cursor": "!"}, headers={"X-Request-ID": "req-7"}
+        )
+
+    assert response.status_code == status
+    assert response.headers["x-request-id"] == "req-7"
+    body = response.json()
+    assert body["detail"] == detail and body["request_id"] == "req-7"
+    assert body["message"] and set(body) == {"detail", "message", "request_id"}

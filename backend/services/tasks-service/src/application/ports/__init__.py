@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-from domain.tasks import Task, TaskStatus
+from domain.tasks import Actor, Task, TaskStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +63,14 @@ class TaskNotFound(Exception):
     pass
 
 
+class Forbidden(Exception):
+    """The member may not change this task."""
+
+
+class VersionConflict(Exception):
+    """The task changed since the caller read it."""
+
+
 @dataclass(frozen=True, slots=True)
 class PageCursor:
     """Position after the last row of a page: ordering is (created_at, id) DESC."""
@@ -72,7 +80,7 @@ class PageCursor:
 
 
 class MemberAuthenticator(Protocol):
-    async def require_approved(self, token: str) -> None:
+    async def require_approved(self, token: str) -> Actor:
         """Raise Unauthenticated, NotApproved or IdentityUnavailable."""
         ...
 
@@ -85,3 +93,21 @@ class TaskReader(Protocol):
         ...
 
     async def get(self, task_id: UUID) -> Task | None: ...
+
+
+class TaskStatusStore(Protocol):
+    async def change(
+        self, task_id: UUID, target: TaskStatus, expected_version: int
+    ) -> Task:
+        """Compare the version and update in one atomic step.
+
+        Returns the task as stored afterwards. Raises TaskNotFound, or VersionConflict
+        when `expected_version` is not the current one.
+        """
+        ...
+
+
+class BoardSignal(Protocol):
+    async def changed(self, task_id: UUID) -> None:
+        """Tell subscribers to re-read the board; best effort, never raises."""
+        ...

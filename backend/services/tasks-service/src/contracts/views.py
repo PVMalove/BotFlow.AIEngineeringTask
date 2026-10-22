@@ -3,9 +3,9 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from domain.tasks import Task
+from domain.tasks import Task, TaskStatus
 
 
 class TaskView(BaseModel):
@@ -17,6 +17,13 @@ class TaskView(BaseModel):
     author_name: str
     created_at: datetime
     updated_at: datetime
+
+
+class ChangeStatusRequest(BaseModel):
+    status: TaskStatus
+    expected_version: int = Field(
+        ge=1, le=2**31 - 1
+    )  # the tasks.version column is a 32-bit integer
 
 
 def task_view(task: Task) -> TaskView:

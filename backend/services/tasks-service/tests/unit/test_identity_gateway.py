@@ -1,9 +1,12 @@
 """The Identity adapter forwards the session cookie and maps its verdicts."""
 
+from uuid import UUID
+
 import httpx
 import pytest
 
 from application.ports import IdentityUnavailable, NotApproved, Unauthenticated
+from domain.tasks import Actor, Role
 from infrastructure.identity_gateway import HttpIdentityGateway
 
 
@@ -20,7 +23,7 @@ def answer(status: int, body: object = None) -> httpx.MockTransport:
 APPROVED = {
     "id": "7f1c7a52-1111-4222-8333-444455556666",
     "telegram_id": 1,
-    "role": "member",
+    "role": "user",
     "status": "approved",
     "access_version": 1,
 }
@@ -39,8 +42,18 @@ async def test_the_session_cookie_is_forwarded_to_the_current_member_endpoint() 
     assert seen[0].headers["cookie"] == "botflow_session=tok"
 
 
-async def test_an_approved_member_passes() -> None:
-    await gateway(answer(200, APPROVED)).require_approved("tok")
+async def test_an_approved_member_passes_as_an_actor_with_id_and_role() -> None:
+    actor = await gateway(answer(200, APPROVED)).require_approved("tok")
+
+    assert actor == Actor(UUID(str(APPROVED["id"])), Role.USER)
+
+
+async def test_an_admin_is_reported_with_the_admin_role() -> None:
+    actor = await gateway(answer(200, {**APPROVED, "role": "admin"})).require_approved(
+        "tok"
+    )
+
+    assert actor.role is Role.ADMIN
 
 
 @pytest.mark.parametrize(
@@ -52,6 +65,8 @@ async def test_an_approved_member_passes() -> None:
         (500, None, IdentityUnavailable),
         (429, None, IdentityUnavailable),
         (200, {"unexpected": True}, IdentityUnavailable),
+        (200, {**APPROVED, "role": "owner"}, IdentityUnavailable),
+        (200, {**APPROVED, "id": "not-a-uuid"}, IdentityUnavailable),
     ],
 )
 async def test_identitys_answers_map_to_domain_errors(
