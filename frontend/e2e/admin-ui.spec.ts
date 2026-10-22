@@ -87,7 +87,20 @@ test('denies the admin route to a regular user without requesting admin data', a
   expect(adminRequests).toEqual([]);
 });
 
-for (const status of [409, 503]) {
+for (const { status, detail, expectedRu, expectedHy } of [
+  {
+    status: 409,
+    detail: 'version_conflict',
+    expectedRu: 'Данные изменились',
+    expectedHy: 'Տվյալները փոխվել են',
+  },
+  {
+    status: 503,
+    detail: 'private-server-details',
+    expectedRu: 'Результат действия не подтверждён',
+    expectedHy: 'Գործողության արդյունքը հաստատված չէ',
+  },
+]) {
   test(`rereads after ${status} without repeating a decision and localizes the error`, async ({
     page,
   }) => {
@@ -106,28 +119,17 @@ for (const status of [409, 503]) {
         decided = true;
         await route.fulfill({
           status,
-          json: {
-            detail:
-              status === 409 ? 'version_conflict' : 'private-server-details',
-          },
+          json: { detail },
         });
       },
     );
     await page.goto('/admin');
     await page.getByRole('button', { name: 'Одобрить', exact: true }).click();
 
-    await expect(page.getByRole('alert')).toContainText(
-      status === 409
-        ? 'Данные изменились'
-        : 'Результат действия не подтверждён',
-    );
+    await expect(page.getByRole('alert')).toContainText(expectedRu);
     await expect(page.getByText('Заявок нет.')).toBeVisible();
     await page.getByRole('button', { name: 'Հայերեն', exact: true }).click();
-    await expect(page.getByRole('alert')).toContainText(
-      status === 409
-        ? 'Տվյալները փոխվել են'
-        : 'Գործողության արդյունքը հաստատված չէ',
-    );
+    await expect(page.getByRole('alert')).toContainText(expectedHy);
     await expect(page.getByText('private-server-details')).toHaveCount(0);
     expect(posts).toBe(1);
   });
