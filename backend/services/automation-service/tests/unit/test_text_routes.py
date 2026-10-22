@@ -2,21 +2,17 @@
 
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from aiogram import Bot
 from aiogram.types import Update
+from conftest import FakeAutomationUnitOfWork
 from kernel_domain.result import Result
 
-from application.commands.accept_text import AcceptTextDto, AcceptTextMessage
+from application.commands.accept_text import AcceptTextCommand, AcceptTextCommandHandler
 from application.commands.handle_bot_command import HandleBotCommand
-from application.ports import (
-    Accepted,
-    NewJob,
-    OutboxMessage,
-    TelegramMember,
-)
+from application.ports import TelegramMember
 from infrastructure.polling import TelegramPoller
 from infrastructure.telegram import create_dispatcher
 
@@ -26,9 +22,9 @@ TOKEN = "123456:dummy-token-for-local-tests"
 
 class Accept:
     def __init__(self) -> None:
-        self.commands: list[AcceptTextDto] = []
+        self.commands: list[AcceptTextCommand] = []
 
-    async def execute(self, command: AcceptTextDto) -> None:
+    async def execute(self, command: AcceptTextCommand) -> None:
         self.commands.append(command)
 
 
@@ -167,19 +163,15 @@ async def test_text_in_a_group_is_ignored() -> None:
     assert setup.accept.commands == [] and setup.messages.sent == []
 
 
-class FailingJobs:
-    async def accept(self, job: NewJob, message: OutboxMessage) -> Accepted:
-        raise OSError("pg down")
-
-    async def mark_acked(self, job_id: UUID, at: datetime) -> None:
-        raise AssertionError("no ACK without a stored job")
+def failing_unit_of_work() -> FakeAutomationUnitOfWork:
+    raise OSError("pg down")
 
 
 async def test_a_storage_failure_leaves_the_offset_on_the_unsaved_update(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     messages = Messages()
-    accept = AcceptTextMessage(Identity(), FailingJobs(), messages)
+    accept = AcceptTextCommandHandler(Identity(), failing_unit_of_work, messages)
     dispatcher = create_dispatcher(
         HandleBotCommand(Identity(), messages, Inbox()),
         accept,

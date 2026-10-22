@@ -1,15 +1,12 @@
 """Boundaries used by the Telegram login and join commands."""
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from enum import StrEnum
-from typing import Any, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from kernel_domain.result import Result
 
-from domain.notifications import IntentStatus, NotificationIntent
 from domain.value_objects.join_outcome import JoinOutcome
 
 
@@ -48,24 +45,6 @@ class Messenger(Protocol):
 
 class UpdateInbox(Protocol):
     async def claim(self, update_id: int) -> bool: ...
-
-
-class IntentStore(Protocol):
-    async def store_event(self, message_id: str, intent: NotificationIntent) -> bool:
-        """Inbox record and intent in ONE transaction; False for a redelivery."""
-        ...
-
-    async def pending(self, limit: int) -> list[UUID]: ...
-
-    async def mark_enqueued(self, intent_id: UUID) -> None: ...
-
-    async def get(self, intent_id: UUID) -> NotificationIntent | None: ...
-
-    async def settle(self, intent_id: UUID, status: IntentStatus) -> None: ...
-
-    async def record_failure(self, intent_id: UUID, max_attempts: int) -> IntentStatus:
-        """Count a failed delivery; FAILED once `max_attempts` is reached."""
-        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,46 +146,6 @@ class VoiceWork:
     attempts: int  # including this one
 
 
-class VoiceStore(Protocol):
-    """Every method is one short transaction; none is open during slow work."""
-
-    async def begin(
-        self, job_id: UUID, now: datetime, cold_start: bool
-    ) -> VoiceWork | None:
-        """Count this attempt; None for an unknown job or one already finished."""
-        ...
-
-    async def checkpoint(
-        self, job_id: UUID, key: str, audio_bytes: int, sha256: str, now: datetime
-    ) -> None:
-        """The audio is in the store: a restart resumes from it, not from Telegram."""
-        ...
-
-    async def complete(
-        self,
-        work: VoiceWork,
-        transcript: Transcript,
-        create_task: "OutboxMessage",
-        stt_started_at: datetime,
-        stt_finished_at: datetime,
-        now: datetime,
-    ) -> bool:
-        """Text, stage and the CreateTask outbox row in ONE transaction."""
-        ...
-
-    async def fail(
-        self,
-        work: VoiceWork,
-        error_code: str,
-        body: str,
-        now: datetime,
-        stt_started_at: datetime | None = None,
-        stt_finished_at: datetime | None = None,
-    ) -> bool:
-        """Job, voice record and author notice in ONE transaction; the slot is freed."""
-        ...
-
-
 @dataclass(frozen=True, slots=True)
 class QueuedVoice:
     entry_id: str
@@ -223,107 +162,3 @@ class VoiceQueue(Protocol):
     async def read(self, count: int, block_ms: int) -> list[QueuedVoice]: ...
 
     async def ack(self, entry_id: str) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class NewJob:
-    id: UUID
-    bot_id: int
-    chat_id: int
-    message_id: int
-    author_id: UUID
-    author_telegram_id: int
-    author_name: str  # snapshot from Telegram, at most 64 characters
-    text: str
-    message_date: datetime  # when Telegram says the author sent it
-    received_at: datetime  # when this process received the update
-
-
-@dataclass(frozen=True, slots=True)
-class NewVoiceJob:
-    """A voice message: only Telegram's file identity is kept, never a file URL."""
-
-    id: UUID
-    bot_id: int
-    chat_id: int
-    message_id: int
-    author_id: UUID
-    author_telegram_id: int
-    author_name: str  # snapshot from Telegram, at most 64 characters
-    file_id: str
-    file_unique_id: str
-    duration_seconds: int
-    file_size_bytes: int | None  # Telegram may omit it
-    mime_type: str | None
-    message_date: datetime  # when Telegram says the author sent it
-    received_at: datetime  # when this process received the update
-
-
-@dataclass(frozen=True, slots=True)
-class OutboxMessage:
-    """A message written in the business transaction and relayed to RabbitMQ."""
-
-    id: UUID
-    correlation_id: UUID
-    type: str
-    routing_key: str
-    payload: dict[str, Any]  # the complete envelope
-
-
-class AcceptOutcome(StrEnum):
-    ACCEPTED = "accepted"
-    DUPLICATE = "duplicate"  # the same bot/chat/message was already accepted
-    LIMIT = "limit"  # too many unfinished jobs; nothing was stored
-    VOICE_LIMIT = "voice_limit"  # too many unfinished voice jobs; nothing was stored
-
-
-@dataclass(frozen=True, slots=True)
-class Accepted:
-    outcome: AcceptOutcome
-    job_id: UUID
-    acknowledged: bool  # a positive ACK was already recorded for this job
-
-
-class JobStore(Protocol):
-    async def accept(self, job: NewJob, message: OutboxMessage) -> Accepted:
-        """Duplicate check, limits, job and outbox row in ONE transaction."""
-        ...
-
-    async def mark_acked(self, job_id: UUID, at: datetime) -> None: ...
-
-
-class VoiceJobStore(Protocol):
-    async def accept_voice(self, job: NewVoiceJob, message: OutboxMessage) -> Accepted:
-        """The same path as `accept`: job, voice record and outbox row at once."""
-        ...
-
-    async def mark_acked(self, job_id: UUID, at: datetime) -> None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class JobSummary:
-    id: UUID
-    chat_id: int
-    author_id: UUID
-    text: str | None
-
-
-class ResultOutcome(StrEnum):
-    RECORDED = "recorded"
-    DUPLICATE = "duplicate"  # this result was already recorded
-    UNKNOWN_JOB = "unknown_job"  # no such job: the message can never work
-
-
-class TaskResultStore(Protocol):
-    async def record(
-        self,
-        message_id: str,
-        job_id: UUID,
-        task_id: UUID,
-        intent_for: Callable[[JobSummary], NotificationIntent],
-    ) -> ResultOutcome:
-        """Inbox, job completion and intent in ONE transaction.
-
-        A job that failed after its retries completes as well: a late result wins.
-        """
-        ...

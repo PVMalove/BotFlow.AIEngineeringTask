@@ -23,7 +23,8 @@ BOOTSTRAP = (
         "--no-deps",
         "identity-bootstrap",
         "python",
-        "-m", "api.bootstrap",
+        "-m",
+        "api.bootstrap",
         "admin",
     ],
 )

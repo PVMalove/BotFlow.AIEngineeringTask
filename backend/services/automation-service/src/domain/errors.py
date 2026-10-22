@@ -21,3 +21,22 @@ class AutomationErrors:
     @staticmethod
     def invalid_decision() -> Error:
         return Error.validation("invalid_decision", "Решение о доступе недопустимо.")
+
+    @staticmethod
+    def job_limit() -> Error:
+        return Error.rate_limited(
+            "job_limit", "Слишком много задач в обработке. Повторите позже."
+        )
+
+    @staticmethod
+    def voice_limit() -> Error:
+        return Error.rate_limited(
+            "voice_limit", "Слишком много голосовых сообщений в обработке."
+        )
+
+    @staticmethod
+    def unknown_notification_kind() -> Error:
+        """No delivery rule exists for this kind; it is never sent by default."""
+        return Error.problem(
+            "unknown_notification_kind", "Для этого уведомления нет правила доставки."
+        )

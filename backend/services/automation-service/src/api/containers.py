@@ -22,9 +22,12 @@ from kernel_platform.streams import RedisStream
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from application.commands.accept_text import AcceptTextMessage
-from application.commands.accept_voice import AcceptVoiceMessage
-from application.commands.deliver_notification import DeliverNotification, RunNotifier
+from application.commands.accept_text import AcceptTextCommandHandler
+from application.commands.accept_voice import AcceptVoiceCommandHandler
+from application.commands.deliver_notification import (
+    DeliverNotificationCommandHandler,
+    RunNotifier,
+)
 from application.commands.handle_bot_command import HandleBotCommand
 from application.commands.record_task_result import RecordTaskResultCommandHandler
 from application.commands.relay_intents import RelayIntents
@@ -33,10 +36,9 @@ from application.commands.store_member_decision import (
 )
 from application.ports import IdentityGateway, Messenger
 from infrastructure.db.inbox import SqlUpdateInbox
-from infrastructure.db.jobs import SqlJobStore, outbox
-from infrastructure.db.notifications import SqlIntentStore
-from infrastructure.db.results import SqlTaskResultStore, fail_job
-from infrastructure.db.voice import fail_voice_job
+from infrastructure.db.relay_hooks import fail_job, fail_voice_job
+from infrastructure.db.tables import outbox
+from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
 from infrastructure.messaging.identity_event_consumer import (
     IdentityEventConsumer,
 )
@@ -64,14 +66,18 @@ def build_bot_command(
 
 def build_accept_text(
     database: Database, identity: IdentityGateway, messenger: Messenger
-) -> AcceptTextMessage:
-    return AcceptTextMessage(identity, SqlJobStore(database.sessions), messenger)
+) -> AcceptTextCommandHandler:
+    return AcceptTextCommandHandler(
+        identity, lambda: SqlAutomationUnitOfWork(database.sessions), messenger
+    )
 
 
 def build_accept_voice(
     database: Database, identity: IdentityGateway, messenger: Messenger
-) -> AcceptVoiceMessage:
-    return AcceptVoiceMessage(identity, SqlJobStore(database.sessions), messenger)
+) -> AcceptVoiceCommandHandler:
+    return AcceptVoiceCommandHandler(
+        identity, lambda: SqlAutomationUnitOfWork(database.sessions), messenger
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,7 +100,11 @@ def build_notifications(
 ) -> NotificationPipeline:
     if resources.redis is None:
         raise RuntimeError("Notifications need the Redis connection.")
-    store = SqlIntentStore(resources.sessions)
+    sessions = resources.sessions
+
+    def uow() -> SqlAutomationUnitOfWork:
+        return SqlAutomationUnitOfWork(sessions)
+
     queue = RedisNotificationQueue(
         RedisStream(
             resources.redis, NOTIFICATION_STREAM, NOTIFICATION_GROUP, consumer_name
@@ -105,10 +115,12 @@ def build_notifications(
         consumer=QueueConsumer(
             resources.rabbitmq,
             declare_identity_queue,
-            IdentityEventConsumer(StoreMemberDecisionCommandHandler(store)).handle,
+            IdentityEventConsumer(StoreMemberDecisionCommandHandler(uow)).handle,
         ),
-        relay=RelayIntents(store, queue),
-        notifier=RunNotifier(queue, DeliverNotification(store, identity, messenger)),
+        relay=RelayIntents(uow, queue),
+        notifier=RunNotifier(
+            queue, DeliverNotificationCommandHandler(uow, identity, messenger)
+        ),
         queue=queue,
     )
 
@@ -127,7 +139,9 @@ def build_task_flow(resources: Resources) -> TaskFlow:
         return results
 
     process = TaskResultConsumer(
-        RecordTaskResultCommandHandler(SqlTaskResultStore(resources.sessions))
+        RecordTaskResultCommandHandler(
+            lambda: SqlAutomationUnitOfWork(resources.sessions)
+        )
     )
     return TaskFlow(
         results=QueueConsumer(resources.rabbitmq, results_queue, process.handle),

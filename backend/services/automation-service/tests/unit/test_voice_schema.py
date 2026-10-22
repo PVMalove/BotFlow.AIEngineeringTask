@@ -4,15 +4,15 @@ import importlib.util
 import io
 from pathlib import Path
 from types import ModuleType
-from uuid import uuid4
 
 from alembic.operations import Operations
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import CheckConstraint
 
-from application.ports import Accepted, AcceptOutcome, NewVoiceJob
-from domain.jobs import JobKind, JobLimits, VoiceStage
-from infrastructure.db.jobs import jobs, voice_jobs
+from domain.entities.voice_message import VoiceMessage
+from domain.job_limits import JobLimits
+from domain.value_objects.job_status import JobKind, VoiceStage
+from infrastructure.db.tables import jobs, voice_jobs
 
 VERSIONS = Path(__file__).parents[2] / "src/infrastructure/db/alembic/versions"
 
@@ -63,18 +63,8 @@ def test_a_job_is_text_or_voice_and_a_voice_job_moves_through_four_stages() -> N
     ]
 
 
-def test_a_rejected_voice_job_has_an_outcome_of_its_own() -> None:
-    assert {outcome.value for outcome in AcceptOutcome} == {
-        "accepted",
-        "duplicate",
-        "limit",
-        "voice_limit",
-    }
-    assert Accepted(AcceptOutcome.VOICE_LIMIT, uuid4(), False).acknowledged is False
-
-
-def test_a_new_voice_job_carries_only_the_telegram_file_identity() -> None:
-    names = set(NewVoiceJob.__dataclass_fields__)
+def test_a_voice_message_carries_only_the_telegram_file_identity() -> None:
+    names = set(VoiceMessage.__dataclass_fields__)
 
     assert {"file_id", "file_unique_id", "duration_seconds"} <= names
     assert "text" not in names

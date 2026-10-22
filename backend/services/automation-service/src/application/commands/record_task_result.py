@@ -1,17 +1,15 @@
-"""TaskCreated result: complete the job and store the author's notification."""
+"""TaskCreated result: complete the job; its event stores the author's notification."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from kernel_domain.result import Result
 
-from application.ports import JobSummary, ResultOutcome, TaskResultStore
 from domain.errors import AutomationErrors
-from domain.jobs import result_intent_id_for
-from domain.notifications import NotificationIntent
-
-KIND = "task.result"
-_PREVIEW = 100
+from domain.unit_of_work import AutomationUnitOfWork
+from domain.value_objects.job_id import JobId
 
 
 @dataclass(frozen=True)
@@ -22,31 +20,24 @@ class RecordTaskResultCommand:
 
 
 class RecordTaskResultCommandHandler:
-    def __init__(self, store: TaskResultStore) -> None:
-        self._store = store
+    def __init__(
+        self,
+        uow_factory: Callable[[], AutomationUnitOfWork],
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    ) -> None:
+        self._uow_factory = uow_factory
+        self._clock = clock
 
     async def execute(self, command: RecordTaskResultCommand) -> Result[bool]:
-        """True when a new result was recorded; a storage failure propagates."""
-        outcome = await self._store.record(
-            command.message_id, command.job_id, command.task_id, _intent_for
-        )
-        if outcome is ResultOutcome.UNKNOWN_JOB:
-            return Result[bool].fail(AutomationErrors.unknown_job())
-        return Result[bool].ok(outcome is ResultOutcome.RECORDED)
-
-
-def _result_text(text: str | None) -> str:
-    content = text or ""
-    preview = content if len(content) <= _PREVIEW else f"{content[:_PREVIEW]}…"
-    return f"Задача создана: {preview}" if preview else "Задача создана"
-
-
-def _intent_for(job: JobSummary) -> NotificationIntent:
-    return NotificationIntent(
-        id=result_intent_id_for(job.id),
-        chat_id=job.chat_id,  # a private chat id equals the Telegram user id
-        member_id=job.author_id,
-        kind=KIND,
-        access_version=0,  # a result is not tied to an access decision
-        body=_result_text(job.text),
-    )
+        """True when the message was new; a storage failure propagates."""
+        async with self._uow_factory() as uow:
+            job = await uow.jobs.get(JobId(command.job_id), lock=True)
+            if job is None:
+                return Result[bool].fail(AutomationErrors.unknown_job())
+            if not await uow.inbox.claim(command.message_id):
+                return Result[bool].ok(False)  # redelivery: already recorded
+            # A job that failed after its retries completes as well: a late result wins.
+            if job.record_result(command.task_id, self._clock()):
+                await uow.jobs.update(job)
+            await uow.commit()  # the broker message is acknowledged only after this
+        return Result[bool].ok(True)

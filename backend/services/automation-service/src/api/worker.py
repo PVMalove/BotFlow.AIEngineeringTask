@@ -30,9 +30,9 @@ from api.containers import (
     build_task_flow,
     build_voice_flow,
 )
-from application.commands.transcribe_voice import TranscribeVoice
-from infrastructure.db.results import replay_job
-from infrastructure.db.voice import SqlVoiceStore, replay_voice_job
+from application.commands.transcribe_voice import TranscribeVoiceCommandHandler
+from infrastructure.db.replay import replay_job, replay_voice_job
+from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
 from infrastructure.identity_gateway import HttpIdentityGateway
 from infrastructure.s3_audio import S3AudioStore
 from infrastructure.stt.runner import ReadinessMarker, SttConfig, run_worker
@@ -122,13 +122,13 @@ async def transcription() -> None:
             )
             queue = voice.queue
 
-            async def load() -> TranscribeVoice:
+            async def load() -> TranscribeVoiceCommandHandler:
                 path = await asyncio.to_thread(
                     verify_weights, config.models_dir, config.model
                 )
                 model = await asyncio.to_thread(load_whisper_model, path)
-                return TranscribeVoice(
-                    SqlVoiceStore(database.sessions),
+                return TranscribeVoiceCommandHandler(
+                    lambda: SqlAutomationUnitOfWork(database.sessions),
                     TelegramFileSource(bot),
                     S3AudioStore(s3, settings.s3_bucket),
                     WhisperTranscriber(model, timeout_seconds=config.timeout_seconds),
