@@ -6,6 +6,8 @@ services:
     image: "botflow-automation:${BOTFLOW_IMAGE_TAG:?isolated image tag required}"
     profiles: ["smoke"]
     environment:
+      BOTFLOW_ENVIRONMENT: "test"
+      COMPOSE_PROJECT_NAME: "${COMPOSE_PROJECT_NAME:?isolated project required}"
       BOTFLOW_SMOKE_ID: "${BOTFLOW_SMOKE_ID:?isolated smoke ID required}"
       BOTFLOW_SMOKE_PHASE: "${BOTFLOW_SMOKE_PHASE:-before}"
       INITIAL_ADMIN_TELEGRAM_ID: "${INITIAL_ADMIN_TELEGRAM_ID:?isolated admin ID required}"

@@ -1,5 +1,7 @@
 """Login commands have no task-creation side effects."""
 
+from dataclasses import dataclass
+
 from application.ports import (
     IdentityGateway,
     IdentityUnavailable,
@@ -10,6 +12,17 @@ from application.ports import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class HandleBotCommandDto:
+    """Параметры входящего события от Telegram-бота."""
+
+    update_id: int
+    telegram_id: int
+    chat_id: int
+    text: str
+    private: bool
+
+
 class HandleBotCommand:
     def __init__(
         self, identity: IdentityGateway, messenger: Messenger, inbox: UpdateInbox
@@ -18,17 +31,25 @@ class HandleBotCommand:
         self._messenger = messenger
         self._inbox = inbox
 
-    async def __call__(
+    async def execute(
         self,
+        command: HandleBotCommandDto | None = None,
         *,
-        update_id: int,
-        telegram_id: int,
-        chat_id: int,
-        text: str,
-        private: bool,
+        update_id: int = 0,
+        telegram_id: int = 0,
+        chat_id: int = 0,
+        text: str = "",
+        private: bool = False,
     ) -> None:
-        command = text.split(maxsplit=1)[0].split("@", 1)[0] if text else ""
-        if not private or command not in {"/start", "/login"}:
+        if command is not None:
+            update_id = command.update_id
+            telegram_id = command.telegram_id
+            chat_id = command.chat_id
+            text = command.text
+            private = command.private
+
+        command_name = text.split(maxsplit=1)[0].split("@", 1)[0] if text else ""
+        if not private or command_name not in {"/start", "/login"}:
             return
         if not await self._inbox.claim(update_id):
             return
@@ -36,7 +57,7 @@ class HandleBotCommand:
             member = await self._identity.find_member(telegram_id)
             if member is None or member.status != "approved":
                 raise LoginDenied
-            if command == "/start":
+            if command_name == "/start":
                 reply = "Для входа в веб-панель отправьте /login."
             else:
                 code = await self._identity.issue_login_code(telegram_id)
@@ -48,3 +69,6 @@ class HandleBotCommand:
         except IdentityUnavailable:
             reply = "Вход временно недоступен. Повторите /login позже."
         await self._messenger.send(chat_id, reply)
+
+
+__all__ = ["HandleBotCommand", "HandleBotCommandDto"]

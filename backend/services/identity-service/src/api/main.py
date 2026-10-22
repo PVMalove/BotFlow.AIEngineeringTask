@@ -6,7 +6,9 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError, TimeoutError
 
 from api.containers import Container
-from api.routes import router
+from api.endpoints.auth import router as auth_router
+from api.endpoints.members import router as members_router
+from api.endpoints.users import router as users_router
 from domain.entities.auth import (
     InvalidLoginCode,
     InvalidSession,
@@ -41,7 +43,9 @@ async def unavailable(request: Request, error: Exception) -> JSONResponse:
 def create_identity_app(container: Any = None) -> FastAPI:
     app = create_app("identity", container)
     app.state.container = container
-    app.include_router(router)
+    app.include_router(auth_router)
+    app.include_router(users_router)
+    app.include_router(members_router)
     for error in _REJECTIONS:
         app.add_exception_handler(error, reject)
     app.add_exception_handler(DBAPIError, unavailable)

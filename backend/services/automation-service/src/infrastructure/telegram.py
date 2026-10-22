@@ -4,7 +4,10 @@ from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message, Update
 
-from application.commands.handle_bot_command import HandleBotCommand
+from application.commands.handle_bot_command import (
+    HandleBotCommand,
+    HandleBotCommandDto,
+)
 
 
 class TelegramMessenger:
@@ -12,7 +15,7 @@ class TelegramMessenger:
         self._bot = bot
 
     async def send(self, chat_id: int, text: str) -> None:
-        await self._bot.send_message(chat_id=chat_id, text=text, protect_content=True)
+        await self._bot.send_message(chat_id=chat_id, text=text)
 
 
 def create_dispatcher(command: HandleBotCommand) -> Dispatcher:
@@ -22,12 +25,14 @@ def create_dispatcher(command: HandleBotCommand) -> Dispatcher:
     async def login(message: Message, event_update: Update) -> None:
         if message.from_user is None:
             return
-        await command(
-            update_id=event_update.update_id,
-            telegram_id=message.from_user.id,
-            chat_id=message.chat.id,
-            text=message.text or "",
-            private=message.chat.type == "private",
+        await command.execute(
+            HandleBotCommandDto(
+                update_id=event_update.update_id,
+                telegram_id=message.from_user.id,
+                chat_id=message.chat.id,
+                text=message.text or "",
+                private=message.chat.type == "private",
+            )
         )
 
     return dispatcher

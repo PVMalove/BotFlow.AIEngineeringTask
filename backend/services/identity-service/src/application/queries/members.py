@@ -23,6 +23,13 @@ class CurrentSession:
     member: Member
 
 
+@dataclass(frozen=True, slots=True)
+class AuthenticateSessionQuery:
+    """Параметры проверки и получения активной сессии."""
+
+    token: str
+
+
 class AuthenticateSession:
     """A valid signature is not enough: the stored session and access are rechecked."""
 
@@ -33,7 +40,8 @@ class AuthenticateSession:
         self._tokens = tokens
         self._clock = clock
 
-    async def __call__(self, token: str) -> CurrentSession:
+    async def execute(self, query: AuthenticateSessionQuery | str) -> CurrentSession:
+        token = query.token if isinstance(query, AuthenticateSessionQuery) else query
         claims = self._tokens.verify(token)
         async with self._uow_factory() as uow:
             session = await uow.sessions.get(claims.session_id)
@@ -50,11 +58,33 @@ class AuthenticateSession:
         return CurrentSession(session_id=session.id, member=member)
 
 
+@dataclass(frozen=True, slots=True)
+class FindMemberByTelegramQuery:
+    """Параметры поиска участника по идентификатору Telegram."""
+
+    telegram_id: int
+
+
 class FindMemberByTelegram:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
 
-    async def __call__(self, telegram_id: int) -> MemberView | None:
+    async def execute(
+        self, query: FindMemberByTelegramQuery | int
+    ) -> MemberView | None:
+        telegram_id = (
+            query.telegram_id if isinstance(query, FindMemberByTelegramQuery) else query
+        )
         async with self._uow_factory() as uow:
             member = await uow.members.get_by_telegram_id(telegram_id)
         return member_view(member) if member else None
+
+
+__all__ = [
+    "AuthenticateSession",
+    "AuthenticateSessionQuery",
+    "CurrentSession",
+    "FindMemberByTelegram",
+    "FindMemberByTelegramQuery",
+    "member_view",
+]

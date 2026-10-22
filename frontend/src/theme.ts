@@ -38,8 +38,12 @@ export const theme = createTheme({
     MuiCssBaseline: {
       styleOverrides: {
         body: { minWidth: 0 },
+        'html[lang="hy"]': {
+          fontSize: '14.5px',
+        },
         ':lang(hy)': {
           fontFamily: '"Noto Sans Armenian", Montserrat, sans-serif',
+          letterSpacing: '-0.01em',
         },
         'h1, h2, h3, p': { overflowWrap: 'anywhere' },
         ':focus-visible': {

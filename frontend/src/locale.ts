@@ -1,9 +1,31 @@
 import { useEffect, useState } from 'react';
 
-type Locale = 'ru' | 'hy';
+export type Locale = 'ru' | 'hy';
+export type Messages = (typeof messages)['ru'];
 
 const messages = {
   ru: {
+    sessionLoading: 'Проверяем сессию…',
+    retry: 'Повторить',
+    loginTitle: 'Вход в BotFlow',
+    loginCode: 'Код из Telegram',
+    codeFormat: 'Введите код из 32 символов: латинские буквы, цифры, _ или -.',
+    loginInstructions:
+      'Отправьте /login боту в личном чате и вставьте одноразовый код. Он действует 5 минут.',
+    signIn: 'Войти',
+    signingIn: 'Входим…',
+    signOut: 'Выйти',
+    showPassword: 'Показать пароль',
+    hidePassword: 'Скрыть пароль',
+    requestFailed: 'Не удалось выполнить запрос. Попробуйте ещё раз.',
+    invalidCode:
+      'Код недействителен или истёк. Получите новый через /login в Telegram.',
+    rateLimited: 'Слишком много попыток. Подождите минуту и попробуйте снова.',
+    serviceUnavailable: 'Сервис входа временно недоступен. Попробуйте позже.',
+    networkError:
+      'Нет связи с сервером. Проверьте подключение и попробуйте снова.',
+    accessDenied:
+      'Запрос отклонён. Обновите страницу; если ошибка повторится, обратитесь к администратору.',
     tagline: 'Задачи команды через Telegram и веб-панель',
     preparing: 'Панель готовится к запуску.',
     language: 'Язык интерфейса',
@@ -22,6 +44,27 @@ const messages = {
     teamDescription: 'Общая картина работы для всей команды.',
   },
   hy: {
+    sessionLoading: 'Ստուգում ենք մուտքը…',
+    retry: 'Կրկին փորձել',
+    loginTitle: 'Մուտք BotFlow',
+    loginCode: 'Telegram-ի կոդը',
+    codeFormat: 'Մուտքագրեք 32 նիշից կազմված կոդը՝ լատինատառ, թվեր, _ կամ -։',
+    loginInstructions:
+      'Բոտին անձնական զրույցում ուղարկեք /login և տեղադրեք մեկանգամյա կոդը։ Այն գործում է 5 րոպե։',
+    signIn: 'Մուտք գործել',
+    signingIn: 'Մուտք ենք գործում…',
+    signOut: 'Դուրս գալ',
+    showPassword: 'Ցուցադրել գաղտնաբառը',
+    hidePassword: 'Թաքցնել գաղտնաբառը',
+    requestFailed: 'Հարցումը չհաջողվեց։ Փորձեք կրկին։',
+    invalidCode:
+      'Կոդն անվավեր է կամ ժամկետանց։ Telegram-ում /login հրամանով ստացեք նորը։',
+    rateLimited: 'Չափազանց շատ փորձեր։ Սպասեք մեկ րոպե և փորձեք կրկին։',
+    serviceUnavailable:
+      'Մուտքի ծառայությունը ժամանակավորապես անհասանելի է։ Փորձեք ավելի ուշ։',
+    networkError: 'Սերվերի հետ կապ չկա։ Ստուգեք կապը և փորձեք կրկին։',
+    accessDenied:
+      'Հարցումը մերժվել է։ Թարմացրեք էջը։ Եթե սխալը կրկնվի, դիմեք ադմինիստրատորին։',
     tagline: 'Թիմի առաջադրանքները՝ Telegram-ի և վեբ վահանակի միջոցով',
     preparing: 'Վահանակը պատրաստվում է գործարկման։',
     language: 'Միջերեսի լեզուն',
