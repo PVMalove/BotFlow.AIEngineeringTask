@@ -66,7 +66,17 @@ class JoinRequestBody(BaseModel):
         )
 
 
+class DecisionBody(BaseModel):
+    """Версия доступа участника, которую администратор видел перед решением."""
+
+    expected_version: int = Field(
+        ge=1,
+        description="access_version участника в момент просмотра",
+    )
+
+
 __all__ = [
+    "DecisionBody",
     "ExchangeRequest",
     "FindMemberRequest",
     "IssueCodeRequest",

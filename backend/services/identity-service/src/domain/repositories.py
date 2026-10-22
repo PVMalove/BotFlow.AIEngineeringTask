@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from domain.entities.auth import AuthSession, LoginCode, Member
+from domain.entities.auth import AuthSession, LoginCode, Member, MemberStatus
 
 
 class MemberRepository(Protocol):
@@ -18,6 +18,24 @@ class MemberRepository(Protocol):
         self, telegram_id: int, *, lock: bool = False
     ) -> Member | None:
         """`lock` serializes concurrent changes to the same member."""
+        ...
+
+    async def get_by_login_code(
+        self, code_hash: str, *, lock: bool = False
+    ) -> Member | None:
+        """The code's member, locked before the code row is touched."""
+        ...
+
+    async def lock_decisions(self) -> None:
+        """Serialize access decisions until the transaction ends."""
+        ...
+
+    async def count_approved_admins(self) -> int: ...
+
+    async def list_by_status(
+        self, statuses: tuple[MemberStatus, ...], *, limit: int, offset: int
+    ) -> list[Member]:
+        """Ordered by created_at, then id, so pages are stable."""
         ...
 
     async def update_access(self, member: Member, *, expected_version: int) -> bool:
@@ -41,3 +59,5 @@ class SessionRepository(Protocol):
     async def get(self, session_id: UUID) -> AuthSession | None: ...
 
     async def revoke(self, session_id: UUID, now: datetime) -> None: ...
+
+    async def revoke_all(self, member_id: UUID, now: datetime) -> None: ...

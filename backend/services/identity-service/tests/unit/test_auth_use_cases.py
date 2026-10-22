@@ -2,8 +2,8 @@
 
 import hashlib
 import re
-from datetime import timedelta
-from uuid import uuid4
+from datetime import datetime, timedelta
+from uuid import UUID, uuid4
 
 import pytest
 from conftest import Clock, FakeRateLimiter, FakeTokens, FakeUnitOfWork, Store
@@ -18,6 +18,7 @@ from application.queries.members import AuthenticateSession
 from domain.entities.auth import (
     InvalidLoginCode,
     InvalidSession,
+    Member,
     MemberNotApproved,
     MemberStatus,
     RateLimited,
@@ -284,3 +285,44 @@ async def test_unknown_token_is_rejected(authenticate: AuthenticateSession) -> N
 
 async def test_logout_of_unknown_session_is_harmless(logout: Logout) -> None:
     await logout.execute(uuid4())
+
+
+async def test_exchange_locks_the_member_before_it_touches_the_code(
+    store: Store,
+    clock: Clock,
+    limiter: FakeRateLimiter,
+    tokens: FakeTokens,
+    ensure_admin: EnsureInitialAdmin,
+    issue: IssueLoginCode,
+) -> None:
+    """A block must not interleave between spending a code and the session."""
+    await ensure_admin.execute(ADMIN_TELEGRAM_ID)
+    code = (await issue.execute(ADMIN_TELEGRAM_ID)).code
+    calls: list[str] = []
+
+    class Recording(FakeUnitOfWork):
+        async def __aenter__(self) -> "Recording":
+            await super().__aenter__()
+            members, codes = self.members, self.login_codes
+
+            class Members:
+                async def get_by_login_code(
+                    self, code_hash: str, *, lock: bool = False
+                ) -> Member | None:
+                    calls.append(f"member lock={lock}")
+                    return await members.get_by_login_code(code_hash, lock=lock)
+
+            class Codes:
+                async def consume(self, code_hash: str, now: datetime) -> UUID | None:
+                    calls.append("consume")
+                    return await codes.consume(code_hash, now)
+
+            self.members = Members()  # type: ignore[assignment]
+            self.login_codes = Codes()  # type: ignore[assignment]
+            return self
+
+    sut = ExchangeLoginCode(lambda: Recording(store), limiter, clock, tokens)
+
+    await sut.execute(code, client="ip")
+
+    assert calls == ["member lock=True", "consume"]

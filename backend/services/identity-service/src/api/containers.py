@@ -8,9 +8,14 @@ from botflow_platform.settings import Settings
 from dependency_injector import containers, providers
 
 from api.security import CookiePolicy, Operation, ServiceKeys
+from application.commands.access import DecideMember
 from application.commands.auth import ExchangeLoginCode, IssueLoginCode, Logout
 from application.commands.join import SubmitJoinRequest
-from application.queries.members import AuthenticateSession, FindMemberByTelegram
+from application.queries.members import (
+    AuthenticateSession,
+    FindMemberByTelegram,
+    ListMembers,
+)
 from infrastructure.db.unit_of_work import SqlRateLimiter, SqlUnitOfWork
 from infrastructure.security.jwt import Rs256Tokens
 
@@ -29,6 +34,8 @@ class Services:
     issue_code: IssueLoginCode
     find_member: FindMemberByTelegram
     submit_join: SubmitJoinRequest
+    decide: DecideMember
+    list_members: ListMembers
     service_keys: ServiceKeys
 
 
@@ -54,6 +61,8 @@ async def build_services(settings: Settings, resources: Resources) -> Services:
         issue_code=IssueLoginCode(uow, limiter, _utcnow),
         find_member=FindMemberByTelegram(uow),
         submit_join=SubmitJoinRequest(uow, limiter, _utcnow),
+        decide=DecideMember(uow, _utcnow),
+        list_members=ListMembers(uow),
         service_keys=ServiceKeys(
             {
                 settings.secret("automation_service_key").get_secret_value(): (

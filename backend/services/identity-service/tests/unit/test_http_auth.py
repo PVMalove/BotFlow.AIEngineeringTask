@@ -17,6 +17,7 @@ from api.containers import Services
 from api.dependencies import get_services
 from api.main import create_identity_app
 from api.security import CookiePolicy, Operation, ServiceKeys
+from application.commands.access import DecideMember
 from application.commands.auth import (
     EnsureInitialAdmin,
     EnsureInitialAdminCommand,
@@ -26,7 +27,11 @@ from application.commands.auth import (
     Logout,
 )
 from application.commands.join import SubmitJoinRequest
-from application.queries.members import AuthenticateSession, FindMemberByTelegram
+from application.queries.members import (
+    AuthenticateSession,
+    FindMemberByTelegram,
+    ListMembers,
+)
 from domain.entities.auth import MemberStatus
 from infrastructure.security.jwt import Rs256Tokens
 
@@ -61,6 +66,8 @@ class Env:
             issue_code=self.issue,
             find_member=FindMemberByTelegram(uow),
             submit_join=SubmitJoinRequest(uow, limiter, self.clock),
+            decide=DecideMember(uow, self.clock),
+            list_members=ListMembers(uow),
             service_keys=ServiceKeys(
                 {
                     "automation-key-for-tests": (

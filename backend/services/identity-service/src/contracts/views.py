@@ -21,6 +21,24 @@ class MemberView:
 
 
 @dataclass(frozen=True, slots=True)
+class AdminMemberView:
+    id: UUID
+    telegram_id: int
+    display_name: str | None
+    role: str
+    status: str
+    access_version: int
+    created_at: datetime
+    status_changed_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionView:
+    member: AdminMemberView
+    changed: bool
+
+
+@dataclass(frozen=True, slots=True)
 class JoinRequestView:
     outcome: str
     member: MemberView

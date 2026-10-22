@@ -9,7 +9,14 @@ from typing import Self
 from uuid import UUID
 
 from application.ports import TokenClaims
-from domain.entities.auth import AuthSession, InvalidSession, LoginCode, Member
+from domain.entities.auth import (
+    AuthSession,
+    InvalidSession,
+    LoginCode,
+    Member,
+    MemberStatus,
+    Role,
+)
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
@@ -51,6 +58,33 @@ class FakeMembers:
             (m for m in self._data.members.values() if m.telegram_id == telegram_id),
             None,
         )
+
+    async def get_by_login_code(
+        self, code_hash: str, *, lock: bool = False
+    ) -> Member | None:
+        row = next(
+            (r for r in self._data.codes.values() if r.code.code_hash == code_hash),
+            None,
+        )
+        return self._data.members.get(row.code.member_id) if row else None
+
+    async def lock_decisions(self) -> None:
+        return None
+
+    async def count_approved_admins(self) -> int:
+        return sum(
+            m.role is Role.ADMIN and m.status is MemberStatus.APPROVED
+            for m in self._data.members.values()
+        )
+
+    async def list_by_status(
+        self, statuses: tuple[MemberStatus, ...], *, limit: int, offset: int
+    ) -> list[Member]:
+        rows = sorted(
+            (m for m in self._data.members.values() if m.status in statuses),
+            key=lambda m: (m.created_at, m.id),
+        )
+        return rows[offset : offset + limit]
 
     async def update_access(self, member: Member, *, expected_version: int) -> bool:
         stored = self._data.members.get(member.id)
@@ -103,6 +137,11 @@ class FakeSessions:
         session = self._data.sessions.get(session_id)
         if session is not None and session.revoked_at is None:
             self._data.sessions[session_id] = replace(session, revoked_at=now)
+
+    async def revoke_all(self, member_id: UUID, now: datetime) -> None:
+        for session_id, session in list(self._data.sessions.items()):
+            if session.member_id == member_id and session.revoked_at is None:
+                self._data.sessions[session_id] = replace(session, revoked_at=now)
 
 
 class FakeUnitOfWork:

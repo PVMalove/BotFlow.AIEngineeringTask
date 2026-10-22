@@ -171,11 +171,15 @@ class ExchangeLoginCode:
             raise InvalidLoginCode
         async with self._uow_factory() as uow:
             now = self._clock()
-            member_id = await uow.login_codes.consume(hash_login_code(code), now)
-            if member_id is None:
+            code_hash = hash_login_code(code)
+            # Member row first, like block and issuance: a session can then not
+            # be created concurrently with a block that would have revoked it.
+            member = await uow.members.get_by_login_code(code_hash, lock=True)
+            if member is None:
                 raise InvalidLoginCode
-            member = await uow.members.get(member_id)
-            if member is None or member.status is not MemberStatus.APPROVED:
+            if await uow.login_codes.consume(code_hash, now) is None:
+                raise InvalidLoginCode
+            if member.status is not MemberStatus.APPROVED:
                 await uow.commit()  # the code is spent either way
                 raise InvalidLoginCode
             session = AuthSession(

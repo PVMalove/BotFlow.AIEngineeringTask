@@ -6,7 +6,7 @@ from types import TracebackType
 from typing import Any, Self
 from uuid import UUID
 
-from sqlalchemy import Row, delete, select, update
+from sqlalchemy import Row, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -17,6 +17,9 @@ from infrastructure.db.tables import (
     members,
     rate_limits,
 )
+
+# Serializes access decisions; migrations use their own key (7_204_121).
+_DECISION_LOCK_KEY = 7_204_122
 
 
 class SqlMembers:
@@ -57,6 +60,47 @@ class SqlMembers:
             query = query.with_for_update()
         row = (await self._session.execute(query)).one_or_none()
         return _member(row) if row else None
+
+    async def get_by_login_code(
+        self, code_hash: str, *, lock: bool = False
+    ) -> Member | None:
+        query = (
+            select(members)
+            .join(login_codes, login_codes.c.member_id == members.c.id)
+            .where(login_codes.c.code_hash == code_hash)
+        )
+        if lock:
+            query = query.with_for_update(of=members)
+        row = (await self._session.execute(query)).one_or_none()
+        return _member(row) if row else None
+
+    async def lock_decisions(self) -> None:
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": _DECISION_LOCK_KEY}
+        )
+
+    async def count_approved_admins(self) -> int:
+        count = await self._session.scalar(
+            select(func.count())
+            .select_from(members)
+            .where(
+                members.c.role == Role.ADMIN.value,
+                members.c.status == MemberStatus.APPROVED.value,
+            )
+        )
+        return int(count or 0)
+
+    async def list_by_status(
+        self, statuses: tuple[MemberStatus, ...], *, limit: int, offset: int
+    ) -> list[Member]:
+        rows = await self._session.execute(
+            select(members)
+            .where(members.c.status.in_([status.value for status in statuses]))
+            .order_by(members.c.created_at, members.c.id)
+            .limit(limit)
+            .offset(offset)
+        )
+        return [_member(row) for row in rows]
 
     async def update_access(self, member: Member, *, expected_version: int) -> bool:
         result = await self._session.execute(
@@ -169,6 +213,16 @@ class SqlSessions:
             update(auth_sessions)
             .where(
                 auth_sessions.c.id == session_id,
+                auth_sessions.c.revoked_at.is_(None),
+            )
+            .values(revoked_at=now)
+        )
+
+    async def revoke_all(self, member_id: UUID, now: datetime) -> None:
+        await self._session.execute(
+            update(auth_sessions)
+            .where(
+                auth_sessions.c.member_id == member_id,
                 auth_sessions.c.revoked_at.is_(None),
             )
             .values(revoked_at=now)
