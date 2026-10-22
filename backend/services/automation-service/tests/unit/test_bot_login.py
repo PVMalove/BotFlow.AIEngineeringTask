@@ -9,7 +9,7 @@ from application.commands.handle_bot_command import (
     HandleBotCommand,
     HandleBotCommandDto,
 )
-from application.ports import IdentityUnavailable, TelegramMember
+from application.ports import IdentityUnavailable, JoinOutcome, TelegramMember
 
 ADMIN = 4_200_000_001
 CODE = "A" * 32
@@ -26,6 +26,11 @@ class Identity:
 
     async def issue_login_code(self, telegram_id: int) -> str:
         return CODE
+
+    async def submit_join_request(
+        self, telegram_id: int, display_name: str | None
+    ) -> JoinOutcome:
+        return JoinOutcome.SUBMITTED
 
 
 class Messages:

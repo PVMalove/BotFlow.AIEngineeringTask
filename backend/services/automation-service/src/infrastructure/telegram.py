@@ -2,7 +2,7 @@
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message, Update
+from aiogram.types import Message, Update, User
 
 from application.commands.handle_bot_command import (
     HandleBotCommand,
@@ -18,10 +18,16 @@ class TelegramMessenger:
         await self._bot.send_message(chat_id=chat_id, text=text)
 
 
+def applicant_name(user: User) -> str:
+    """Name an admin can recognise; Identity accepts at most 64 characters."""
+    name = f"{user.full_name} (@{user.username})" if user.username else user.full_name
+    return name[:64]
+
+
 def create_dispatcher(command: HandleBotCommand) -> Dispatcher:
     dispatcher = Dispatcher()
 
-    @dispatcher.message(Command("start", "login"))
+    @dispatcher.message(Command("start", "login", "join"))
     async def login(message: Message, event_update: Update) -> None:
         if message.from_user is None:
             return
@@ -32,6 +38,7 @@ def create_dispatcher(command: HandleBotCommand) -> Dispatcher:
                 chat_id=message.chat.id,
                 text=message.text or "",
                 private=message.chat.type == "private",
+                display_name=applicant_name(message.from_user),
             )
         )
 

@@ -1,7 +1,17 @@
-"""Boundaries used by the Telegram login command."""
+"""Boundaries used by the Telegram login and join commands."""
 
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
+
+
+class JoinOutcome(StrEnum):
+    """Identity's answer to a join request; Automation never decides it."""
+
+    SUBMITTED = "submitted"
+    ALREADY_PENDING = "already_pending"
+    ALREADY_MEMBER = "already_member"
+    BLOCKED = "blocked"
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +37,10 @@ class IdentityGateway(Protocol):
     async def find_member(self, telegram_id: int) -> TelegramMember | None: ...
 
     async def issue_login_code(self, telegram_id: int) -> str: ...
+
+    async def submit_join_request(
+        self, telegram_id: int, display_name: str | None
+    ) -> JoinOutcome: ...
 
 
 class Messenger(Protocol):
