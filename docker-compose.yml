@@ -144,6 +144,14 @@ services:
     command:
       - "python"
       - "scripts/bootstrap.py"
+      - "migrate"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    secrets:
+      - "tasks_db_password"
+    depends_on:
+      tasks-db:
+        condition: "service_healthy"
     networks:
       - "backend"
   tasks-worker:
@@ -153,6 +161,20 @@ services:
     command:
       - "python"
       - "scripts/worker.py"
+    restart: "unless-stopped"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    secrets:
+      - "tasks_db_password"
+      - "rabbitmq_password"
+      - "redis_tasks_password"
+    depends_on:
+      tasks-db:
+        condition: "service_healthy"
+      rabbitmq:
+        condition: "service_healthy"
+      redis:
+        condition: "service_healthy"
     networks:
       - "backend"
   automation-db:
