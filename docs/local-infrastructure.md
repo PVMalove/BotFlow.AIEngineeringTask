@@ -136,7 +136,7 @@ docker compose run --rm --no-deps identity-bootstrap
 docker compose run --rm --no-deps automation-bootstrap
 make bootstrap-admin
 docker compose up -d --wait identity-api
-docker compose --profile bot up -d automation-bot
+docker compose --profile bot up -d telegram-bot
 ```
 
 `make setup` применяет миграции всех трёх сервисов (Tasks bootstrap теперь рабочий,

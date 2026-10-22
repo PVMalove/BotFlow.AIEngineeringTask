@@ -425,9 +425,9 @@ WHERE acked_at IS NOT NULL`; цель ≤ 2 с — цель, а не резул�
 
 **Принятые границы (ADR-0021).** Постоянно невалидный CreateTask на стороне Tasks
 (недостижим после валидации в Automation) отклоняется без ответа, задание остаётся
-`accepted` и занимает слот до ручного закрытия. В Compose два сервиса одного бота
-(`automation-bot`, `telegram-bot`): их одновременный запуск даёт два poller (409
-Telegram) — ограничение существовало ранее.
+`accepted` и занимает слот до ручного закрытия. Ранее в Compose было два сервиса одного бота
+(`automation-bot`, `telegram-bot`); сервис `automation-bot` удалён в пользу единого `telegram-bot`
+с профилями `workers` и `bot`, исключая 409 Telegram.
 
 **Проверки.** Юнит-тесты: retry-политика, `RelayOutbox`, `QueueConsumer`, топология,
 `CreateTaskFromCommand`, REST-контракт, адаптер Identity, `AcceptTextMessage`,
@@ -447,7 +447,7 @@ outbox → ACK после commit → RabbitMQ → Tasks → TaskCreated → inte
 без задачи (пустую карточку создать нельзя: CreateTask появляется только после
 непустого текста).
 
-**Процессы.** `automation-bot` принимает update (без torch); `automation-worker`
+**Процессы.** `telegram-bot` принимает update (без torch); `automation-worker`
 дополнительно переносит строки `TranscribeVoice` из outbox в Redis Stream
 `botflow:automation:voice`; `whisper-worker` (образ `stt-runtime`, профиль `workers`,
 `make build` его не собирает) — единственный процесс с Whisper, подключён к PostgreSQL,

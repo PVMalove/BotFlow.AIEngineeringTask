@@ -118,6 +118,7 @@ async def test_any_other_error_is_logged_with_a_fixed_text_and_skipped() -> None
     assert h.bot.offsets == [None, 12]  # no poison pill: 10 was skipped
     assert [u for u, _ in h.dispatcher.fed] == [11]
     assert h.logs and all("SECRET" not in line for line in h.logs)
+    assert "Update handler failed (RuntimeError); the update is skipped." in h.logs
 
 
 async def test_a_failed_fetch_pauses_without_moving_the_offset() -> None:
@@ -133,6 +134,22 @@ async def test_a_failed_fetch_pauses_without_moving_the_offset() -> None:
     assert h.bot.offsets == [None, 11, 11]
     assert h.sleeps == [5.0]
     assert all("SECRET" not in line for line in h.logs)
+    assert "Telegram fetch failed (ConnectionError); retrying." in h.logs
+
+
+async def test_fetch_conflict_is_logged_with_exception_class_without_token() -> None:
+    from aiogram.exceptions import TelegramConflictError
+    from aiogram.methods import GetUpdates
+
+    h = Harness([update(10)])
+    poller = h.poller
+    h.bot.failure = TelegramConflictError(
+        GetUpdates(), "Conflict: terminated by other getUpdates request"
+    )
+
+    await poller.poll_once()
+
+    assert "Telegram fetch failed (TelegramConflictError); retrying." in h.logs
 
 
 async def test_only_messages_and_edits_are_requested_with_a_long_poll() -> None:

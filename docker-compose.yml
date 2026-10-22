@@ -284,23 +284,6 @@ services:
         condition: "service_healthy"
     networks:
       - "backend"
-  automation-bot:
-    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
-    profiles: ["bot"]
-    command: ["python", "scripts/bot.py"]
-    environment:
-      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
-      BOTFLOW_IDENTITY_URL: "http://identity-api:8000"
-    secrets:
-      - "automation_db_password"
-      - "automation_service_key"
-      - "telegram_bot_token"
-    depends_on:
-      automation-db:
-        condition: "service_healthy"
-      identity-api:
-        condition: "service_healthy"
-    networks: ["backend"]
   redis:
     image: "redis:8-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0"
     command:
@@ -389,13 +372,22 @@ services:
     image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
     profiles:
       - "workers"
+      - "bot"
     command:
       - "python"
       - "scripts/bot.py"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+      BOTFLOW_IDENTITY_URL: "http://identity-api:8000"
     secrets:
       - "telegram_bot_token"
       - "automation_service_key"
       - "automation_db_password"
+    depends_on:
+      automation-db:
+        condition: "service_healthy"
+      identity-api:
+        condition: "service_healthy"
     networks:
       - "backend"
   whisper-worker:
