@@ -69,9 +69,24 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_table("voice_jobs")
     op.drop_constraint("jobs_text_present", "jobs", type_="check")
     op.drop_constraint("jobs_kind_check", "jobs", type_="check")
-    op.execute("UPDATE jobs SET text = '' WHERE text IS NULL")
+    op.execute(
+        """
+        UPDATE jobs
+        SET text = COALESCE(
+            NULLIF(jobs.text, ''),
+            '[Голосовое сообщение: '
+            || v.duration_seconds
+            || ' с, file_id: '
+            || v.file_id
+            || ']'
+        )
+        FROM voice_jobs v
+        WHERE jobs.id = v.job_id AND (jobs.text IS NULL OR jobs.text = '')
+        """
+    )
+    op.execute("UPDATE jobs SET text = '[Голосовое сообщение]' WHERE text IS NULL")
+    op.drop_table("voice_jobs")
     op.alter_column("jobs", "text", nullable=False)
     op.drop_column("jobs", "kind")

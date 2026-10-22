@@ -19,6 +19,8 @@ from botflow_platform.resources import (
 from botflow_platform.settings import Settings
 from botflow_platform.streams import RedisStream
 from dependency_injector import containers, providers
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from application.commands.accept_text import AcceptTextMessage
 from application.commands.accept_voice import AcceptVoiceMessage
@@ -126,6 +128,12 @@ def build_task_flow(resources: Resources) -> TaskFlow:
 
 
 @dataclass(frozen=True, slots=True)
+class VoiceResources:
+    sessions: async_sessionmaker[AsyncSession]
+    redis: Redis | None
+
+
+@dataclass(frozen=True, slots=True)
 class VoiceFlow:
     """Voice outbox rows -> Redis Stream, and the stream the STT worker reads."""
 
@@ -133,7 +141,9 @@ class VoiceFlow:
     queue: RedisVoiceQueue
 
 
-def build_voice_flow(resources: Resources, *, consumer_name: str) -> VoiceFlow:
+def build_voice_flow(
+    resources: Resources | VoiceResources, *, consumer_name: str
+) -> VoiceFlow:
     if resources.redis is None:
         raise RuntimeError("The voice flow needs the Redis connection.")
     stream = RedisStream(resources.redis, VOICE_STREAM, VOICE_GROUP, consumer_name)

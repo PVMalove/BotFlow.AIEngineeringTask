@@ -20,6 +20,7 @@ from application.ports import (
     CorruptedAudio,
     EmptyAudio,
     OutboxMessage,
+    StuckWorkerError,
     TelegramFileUnavailable,
     Transcript,
     TranscriptionTimeout,
@@ -68,6 +69,7 @@ class Store:
         self.checkpoints: list[tuple[UUID, str, int, str, datetime]] = []
         self.completed: list[dict[str, Any]] = []
         self.failed: list[dict[str, Any]] = []
+        self.fail_error: Exception | None = None
 
     async def begin(
         self, job_id: UUID, now: datetime, cold_start: bool
@@ -116,6 +118,8 @@ class Store:
         stt_finished_at: datetime | None = None,
     ) -> bool:
         self.log.events.append("fail")
+        if self.fail_error:
+            raise self.fail_error
         self.failed.append(
             dict(
                 work=work,
@@ -467,14 +471,42 @@ async def test_a_storage_failure_on_begin_propagates_so_the_entry_stays_pending(
     assert h.log.events == ["begin"]
 
 
-async def test_an_unexpected_recognition_error_propagates_without_a_verdict() -> None:
+async def test_an_unexpected_recognition_error_fails_immediately() -> None:
     h = Harness()
     h.stt.error = RuntimeError("model crashed")
 
-    with pytest.raises(RuntimeError):
+    result = await h.sut.execute(JOB_ID)
+
+    assert result.outcome is TranscribeOutcome.FAILED
+    assert result.error_code == "failed"
+    assert len(h.store.failed) == 1
+    assert h.store.failed[0]["code"] == "failed"
+
+
+async def test_store_failure_during_timeout_raises_stuck_worker_error() -> None:
+    h = Harness()
+    h.stt.error = TranscriptionTimeout()
+    h.store.fail_error = RuntimeError("db connection lost")
+
+    with pytest.raises(StuckWorkerError) as exc_info:
         await h.sut.execute(JOB_ID)
 
-    assert h.store.failed == [] and h.store.completed == []
+    assert exc_info.value.restart_required is True
+
+
+async def test_a_skipped_record_does_not_consume_cold_start() -> None:
+    h = Harness()
+    h.store.work = None
+    sut = h.sut
+
+    skipped = await sut.execute(JOB_ID)
+    assert skipped.outcome is TranscribeOutcome.SKIPPED
+
+    h.store.work = work()
+    done = await sut.execute(JOB_ID)
+    assert done.outcome is TranscribeOutcome.COMPLETED
+
+    assert [cold for _, _, cold in h.store.begins] == [True, True]
 
 
 async def test_only_the_first_record_of_a_process_is_marked_cold() -> None:

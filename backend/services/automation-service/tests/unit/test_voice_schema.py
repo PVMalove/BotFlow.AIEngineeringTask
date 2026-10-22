@@ -36,6 +36,16 @@ def upgrade_sql() -> str:
     return " ".join(buffer.getvalue().split())
 
 
+def downgrade_sql() -> str:
+    buffer = io.StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql", opts={"as_sql": True, "output_buffer": buffer}
+    )
+    with Operations.context(context):
+        migration().downgrade()
+    return " ".join(buffer.getvalue().split())
+
+
 def test_the_common_limits_stay_and_voice_has_its_own_ten_and_two() -> None:
     limits = JobLimits()
 
@@ -125,3 +135,15 @@ def test_migration_0004_creates_the_voice_schema() -> None:
     assert "CREATE TABLE voice_jobs" in sql
     assert "CREATE INDEX voice_jobs_unfinished ON voice_jobs" in sql
     assert "stage IN ('queued', 'stored', 'done', 'failed')" in sql
+
+
+def test_migration_0004_downgrade_preserves_voice_job_data() -> None:
+    sql = downgrade_sql()
+
+    assert "DROP TABLE voice_jobs" in sql
+    assert "ALTER TABLE jobs DROP CONSTRAINT jobs_text_present" in sql
+    assert "ALTER TABLE jobs DROP CONSTRAINT jobs_kind_check" in sql
+    assert "ALTER TABLE jobs ALTER COLUMN text SET NOT NULL" in sql
+    assert "ALTER TABLE jobs DROP COLUMN kind" in sql
+    assert "UPDATE jobs SET text = COALESCE(" in sql
+    assert "[Голосовое сообщение: '" in sql

@@ -220,3 +220,19 @@ async def test_a_later_failure_unwinds_what_was_opened_and_hides_the_cause(
     assert PASSWORD not in str(raised.value)
     assert FakeRedis.instances[0].closed
     assert infrastructure == ["rabbit closed", "engine disposed"]
+
+
+async def test_an_arbitrary_runtime_error_is_sanitised(
+    tmp_path: Path, infrastructure: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken_rabbit(**kwargs: Any) -> FakeRabbit:
+        raise RuntimeError(f"internal broker failure with {PASSWORD}")
+
+    monkeypatch.setattr(resources, "connect_robust", broken_rabbit)
+
+    with pytest.raises(RuntimeError) as raised:
+        async with open_resources(settings(tmp_path)):
+            raise AssertionError("must not open")
+
+    assert PASSWORD not in str(raised.value)
+    assert str(raised.value) == "Infrastructure initialization failed for automation"

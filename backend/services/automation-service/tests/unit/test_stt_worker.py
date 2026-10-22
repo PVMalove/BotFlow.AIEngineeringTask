@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from application.commands.transcribe_voice import TranscribeOutcome, TranscribeResult
-from application.ports import QueuedVoice
+from application.ports import QueuedVoice, StuckWorkerError
 from infrastructure.stt.runner import ReadinessMarker, SttConfig, run_worker
 
 COMPLETED = TranscribeResult(TranscribeOutcome.COMPLETED)
@@ -237,6 +237,21 @@ async def test_after_a_timeout_the_record_is_acknowledged_and_the_process_replac
     assert h.exits == 1
     assert h.handler.seen == [slow]  # the next record is left for the new process
     assert h.log.index("ack(1-0)") < h.log.index("exit")
+    assert not h.marker.is_set()
+
+
+async def test_when_timeout_handling_throws_an_error_the_process_is_still_replaced(
+    tmp_path: Path,
+) -> None:
+    h = Harness(tmp_path)
+    stuck, next_one = uuid4(), uuid4()
+    h.handler.results[stuck] = StuckWorkerError("failed to record timeout in db")
+    h.queue.fresh = [[QueuedVoice("1-0", stuck)], [QueuedVoice("2-0", next_one)]]
+
+    await h.run()
+
+    assert h.exits == 1
+    assert h.handler.seen == [stuck]  # does not process next_one
     assert not h.marker.is_set()
 
 

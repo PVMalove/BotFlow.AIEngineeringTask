@@ -146,8 +146,6 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
                 resources.redis = await stack.enter_async_context(open_redis(settings))
             if settings.service == "automation":
                 resources.s3 = await stack.enter_async_context(open_s3(settings))
-        except RuntimeError:
-            raise  # already sanitised by open_redis / open_s3
         except Exception:
             raise _failed(settings) from None
         try:

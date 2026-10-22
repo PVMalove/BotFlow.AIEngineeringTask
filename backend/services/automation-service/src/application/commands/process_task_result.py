@@ -15,9 +15,10 @@ KIND = "task.result"
 _PREVIEW = 100
 
 
-def _result_text(text: str) -> str:
-    preview = text if len(text) <= _PREVIEW else f"{text[:_PREVIEW]}…"
-    return f"Задача создана: {preview}"
+def _result_text(text: str | None) -> str:
+    content = text or ""
+    preview = content if len(content) <= _PREVIEW else f"{content[:_PREVIEW]}…"
+    return f"Задача создана: {preview}" if preview else "Задача создана"
 
 
 class ProcessTaskResult:

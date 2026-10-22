@@ -22,10 +22,10 @@ from uuid import UUID
 import httpx
 from aiogram import Bot
 from botflow_platform.resources import open_redis, open_s3
-from botflow_platform.streams import RedisStream
 
 from api.containers import (
     Container,
+    VoiceResources,
     build_notifications,
     build_task_flow,
     build_voice_flow,
@@ -35,7 +35,6 @@ from infrastructure.db.results import replay_job
 from infrastructure.db.voice import SqlVoiceStore, replay_voice_job
 from infrastructure.identity_gateway import HttpIdentityGateway
 from infrastructure.s3_audio import S3AudioStore
-from infrastructure.streams import VOICE_GROUP, VOICE_STREAM, RedisVoiceQueue
 from infrastructure.stt.runner import ReadinessMarker, SttConfig, run_worker
 from infrastructure.stt.whisper_transcriber import WhisperTranscriber
 from infrastructure.stt.whisper_validation import load_whisper_model, verify_weights
@@ -127,9 +126,11 @@ async def transcription() -> None:
             database = await container.database.async_()
             redis = await stack.enter_async_context(open_redis(settings))
             s3 = await stack.enter_async_context(open_s3(settings))
-            queue = RedisVoiceQueue(
-                RedisStream(redis, VOICE_STREAM, VOICE_GROUP, socket.gethostname())
+            voice = build_voice_flow(
+                VoiceResources(sessions=database.sessions, redis=redis),
+                consumer_name=socket.gethostname(),
             )
+            queue = voice.queue
 
             async def load() -> TranscribeVoice:
                 path = await asyncio.to_thread(

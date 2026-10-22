@@ -96,7 +96,12 @@ async def run_worker(
                         continue
                     result = await handler.execute(entry.job_id)
                     await queue.ack(entry.entry_id)
-                except Exception:
+                except Exception as error:
+                    if getattr(error, "restart_required", False):
+                        log("STT thread timed out; replacing process.")
+                        marker.clear()
+                        exit_process()
+                        return
                     log("Voice record failed; it stays pending.")
                     await sleep(FAILURE_SECONDS)
                     continue

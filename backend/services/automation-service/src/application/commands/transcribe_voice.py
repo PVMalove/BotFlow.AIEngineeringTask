@@ -26,6 +26,7 @@ from application.ports import (
     CorruptedAudio,
     EmptyAudio,
     SpeechToText,
+    StuckWorkerError,
     TelegramFiles,
     TelegramFileUnavailable,
     Transcript,
@@ -136,10 +137,11 @@ class TranscribeVoice:
 
     async def execute(self, job_id: UUID) -> TranscribeResult:
         """Store failures and unexpected errors propagate: the entry stays pending."""
-        cold_start, self._served = not self._served, True
+        cold_start = not self._served
         work = await self._store.begin(job_id, self._clock(), cold_start)
         if work is None:
             return TranscribeResult(TranscribeOutcome.SKIPPED)
+        self._served = True
         if work.attempts > MAX_ATTEMPTS:
             return await self._fail(work, "failed")
         try:
@@ -158,9 +160,15 @@ class TranscribeVoice:
             CorruptedAudio,
             AudioTooLong,
             AudioTooLarge,
-            TranscriptionTimeout,
         ) as error:
             return await self._fail(work, _code_of(error), started)
+        except TranscriptionTimeout as error:
+            try:
+                return await self._fail(work, _code_of(error), started)
+            except Exception as exc:
+                raise StuckWorkerError(exc) from exc
+        except Exception:
+            return await self._fail(work, "failed", started)
         finished = self._clock()
         text = transcript.text.strip()
         if not text:

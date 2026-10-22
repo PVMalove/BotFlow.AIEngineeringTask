@@ -127,6 +127,14 @@ class AudioTooLong(Exception):
 class TranscriptionTimeout(Exception):
     """Speech recognition did not finish in time."""
 
+    restart_required: bool = True
+
+
+class StuckWorkerError(Exception):
+    """The decode thread timed out and could not settle; the process must exit."""
+
+    restart_required: bool = True
+
 
 @dataclass(frozen=True, slots=True)
 class Transcript:
@@ -309,7 +317,7 @@ class JobSummary:
     id: UUID
     chat_id: int
     author_id: UUID
-    text: str
+    text: str | None
 
 
 class ResultOutcome(StrEnum):

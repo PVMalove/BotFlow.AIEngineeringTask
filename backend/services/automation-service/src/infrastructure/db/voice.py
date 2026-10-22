@@ -56,6 +56,7 @@ async def _fail(
     chat_id: int,
     author_id: UUID,
     code: str,
+    body: str,
     now: datetime,
     marks: dict[str, Any],
 ) -> bool:
@@ -73,7 +74,7 @@ async def _fail(
         .where(jobs.c.id == job_id, jobs.c.status == JobStatus.ACCEPTED.value)
         .values(status=JobStatus.FAILED.value, last_error=code, updated_at=now)
     )
-    await _author_notice(session, job_id, chat_id, author_id, FAILURES[code], now)
+    await _author_notice(session, job_id, chat_id, author_id, body, now)
     return True
 
 
@@ -241,6 +242,7 @@ class SqlVoiceStore:
                 work.chat_id,
                 work.author_id,
                 error_code,
+                body,
                 now,
                 marks,
             )
@@ -268,6 +270,7 @@ async def fail_voice_job(tx: SqlOutboxTx, row: OutboxRow, error: str) -> None:
         job.chat_id,
         job.author_id,
         "unavailable",
+        FAILURES["unavailable"],
         datetime.now(UTC),
         {},
     )
