@@ -139,6 +139,13 @@ def main() -> int:
                     "before",
                 ),
                 ("migrations and initial admin", BOOTSTRAP, "before"),
+                # Relays the Identity outbox to RabbitMQ for the access checks. It is
+                # absent after the restart: those checks only read persisted state.
+                (
+                    "identity worker",
+                    (["up", "-d", "--no-deps", "--wait", "identity-worker"],),
+                    "before",
+                ),
                 (
                     "resource and isolation checks",
                     (["run", "--rm", "--no-deps", "smoke"],),
@@ -146,7 +153,7 @@ def main() -> int:
                 ),
                 (
                     "volume-preserving shutdown",
-                    (["down", "--timeout", "20"],),
+                    (["--profile", "workers", "down", "--timeout", "20"],),
                     "before",
                 ),
                 (
@@ -236,6 +243,7 @@ def main() -> int:
                     if line.startswith(
                         (
                             "FAIL: __main__.InfrastructureSmoke.",
+                            "FAIL: access_flow.AccessFlow.",
                             "FAIL: auth_flow.AuthFlow.",
                             "Resource checks:",
                         )
@@ -261,8 +269,9 @@ def main() -> int:
             return 1
         if result == 0:
             print(
-                "Integration smoke PASS: bot login/Identity exchange, "
-                "real PG/RabbitMQ/Redis/MinIO and restart persistence."
+                "Integration smoke PASS: join/access decisions and notifications, "
+                "bot login/Identity exchange, real PG/RabbitMQ/Redis/MinIO and "
+                "restart persistence."
             )
         return result
 
