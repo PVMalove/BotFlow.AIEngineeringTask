@@ -17,12 +17,26 @@ class JobStatus(StrEnum):
     FAILED = "failed"
 
 
+class JobKind(StrEnum):
+    TEXT = "text"
+    VOICE = "voice"
+
+
+class VoiceStage(StrEnum):
+    QUEUED = "queued"  # accepted, audio not fetched yet
+    STORED = "stored"  # audio checkpointed in object storage
+    DONE = "done"  # transcript saved, CreateTask handed to the outbox
+    FAILED = "failed"  # a final error ended the job
+
+
 @dataclass(frozen=True, slots=True)
 class JobLimits:
-    """Unfinished jobs allowed at once (ADR-0007)."""
+    """Unfinished jobs allowed at once (ADR-0007); voice jobs also count here."""
 
     total: int = 100
     per_author: int = 10
+    voice_total: int = 10
+    voice_per_author: int = 2
 
 
 def job_id_for(bot_id: int, chat_id: int, message_id: int) -> UUID:

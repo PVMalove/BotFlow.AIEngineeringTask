@@ -96,6 +96,147 @@ class NotificationQueue(Protocol):
     async def ack(self, entry_id: str) -> None: ...
 
 
+class TelegramFileUnavailable(Exception):
+    """Telegram no longer serves this file: a retry cannot help."""
+
+
+class AudioTooLarge(Exception):
+    """The audio is above the 5 MiB limit, by Telegram's size or by the bytes read."""
+
+
+class AudioMissing(Exception):
+    """The checkpointed object is not in the audio store."""
+
+
+class TransientIoError(Exception):
+    """A network or storage failure worth retrying; carries no driver message."""
+
+
+class EmptyAudio(Exception):
+    """No speech was found in the audio."""
+
+
+class CorruptedAudio(Exception):
+    """The audio cannot be decoded."""
+
+
+class AudioTooLong(Exception):
+    """The audio is longer than a voice task may be."""
+
+
+class TranscriptionTimeout(Exception):
+    """Speech recognition did not finish in time."""
+
+    restart_required: bool = True
+
+
+class StuckWorkerError(Exception):
+    """The decode thread timed out and could not settle; the process must exit."""
+
+    restart_required: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class Transcript:
+    text: str
+    language: str | None  # detected by the model, e.g. "ru" or "hy"
+
+
+class TelegramFiles(Protocol):
+    async def fetch(self, file_id: str) -> bytes:
+        """The whole file in memory; no URL or token leaves the adapter."""
+        ...
+
+
+class AudioStore(Protocol):
+    async def put(self, job_id: UUID, data: bytes, content_type: str | None) -> str:
+        """Store under a key derived from the job; the key is returned."""
+        ...
+
+    async def get(self, job_id: UUID) -> bytes: ...
+
+
+class SpeechToText(Protocol):
+    async def transcribe(self, audio: bytes) -> Transcript: ...
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceWork:
+    """What the STT worker needs to process one voice job."""
+
+    job_id: UUID
+    bot_id: int
+    chat_id: int
+    message_id: int
+    author_id: UUID
+    author_telegram_id: int
+    author_name: str
+    received_at: datetime
+    file_id: str
+    mime_type: str | None
+    stage: str  # a VoiceStage value: queued or stored here
+    s3_key: str | None
+    attempts: int  # including this one
+
+
+class VoiceStore(Protocol):
+    """Every method is one short transaction; none is open during slow work."""
+
+    async def begin(
+        self, job_id: UUID, now: datetime, cold_start: bool
+    ) -> VoiceWork | None:
+        """Count this attempt; None for an unknown job or one already finished."""
+        ...
+
+    async def checkpoint(
+        self, job_id: UUID, key: str, audio_bytes: int, sha256: str, now: datetime
+    ) -> None:
+        """The audio is in the store: a restart resumes from it, not from Telegram."""
+        ...
+
+    async def complete(
+        self,
+        work: VoiceWork,
+        transcript: Transcript,
+        create_task: "OutboxMessage",
+        stt_started_at: datetime,
+        stt_finished_at: datetime,
+        now: datetime,
+    ) -> bool:
+        """Text, stage and the CreateTask outbox row in ONE transaction."""
+        ...
+
+    async def fail(
+        self,
+        work: VoiceWork,
+        error_code: str,
+        body: str,
+        now: datetime,
+        stt_started_at: datetime | None = None,
+        stt_finished_at: datetime | None = None,
+    ) -> bool:
+        """Job, voice record and author notice in ONE transaction; the slot is freed."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class QueuedVoice:
+    entry_id: str
+    job_id: UUID | None  # None for an entry that names no job
+
+
+class VoiceQueue(Protocol):
+    """Voice jobs waiting for the STT worker; one entry at a time."""
+
+    async def ensure_group(self) -> None: ...
+
+    async def claim_idle(self, count: int) -> list[QueuedVoice]: ...
+
+    async def read(self, count: int, block_ms: int) -> list[QueuedVoice]: ...
+
+    async def ack(self, entry_id: str) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class NewJob:
     id: UUID
@@ -106,6 +247,26 @@ class NewJob:
     author_telegram_id: int
     author_name: str  # snapshot from Telegram, at most 64 characters
     text: str
+    message_date: datetime  # when Telegram says the author sent it
+    received_at: datetime  # when this process received the update
+
+
+@dataclass(frozen=True, slots=True)
+class NewVoiceJob:
+    """A voice message: only Telegram's file identity is kept, never a file URL."""
+
+    id: UUID
+    bot_id: int
+    chat_id: int
+    message_id: int
+    author_id: UUID
+    author_telegram_id: int
+    author_name: str  # snapshot from Telegram, at most 64 characters
+    file_id: str
+    file_unique_id: str
+    duration_seconds: int
+    file_size_bytes: int | None  # Telegram may omit it
+    mime_type: str | None
     message_date: datetime  # when Telegram says the author sent it
     received_at: datetime  # when this process received the update
 
@@ -125,6 +286,7 @@ class AcceptOutcome(StrEnum):
     ACCEPTED = "accepted"
     DUPLICATE = "duplicate"  # the same bot/chat/message was already accepted
     LIMIT = "limit"  # too many unfinished jobs; nothing was stored
+    VOICE_LIMIT = "voice_limit"  # too many unfinished voice jobs; nothing was stored
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,12 +304,20 @@ class JobStore(Protocol):
     async def mark_acked(self, job_id: UUID, at: datetime) -> None: ...
 
 
+class VoiceJobStore(Protocol):
+    async def accept_voice(self, job: NewVoiceJob, message: OutboxMessage) -> Accepted:
+        """The same path as `accept`: job, voice record and outbox row at once."""
+        ...
+
+    async def mark_acked(self, job_id: UUID, at: datetime) -> None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class JobSummary:
     id: UUID
     chat_id: int
     author_id: UUID
-    text: str
+    text: str | None
 
 
 class ResultOutcome(StrEnum):

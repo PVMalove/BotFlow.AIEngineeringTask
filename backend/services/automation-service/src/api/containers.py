@@ -4,7 +4,11 @@ from dataclasses import dataclass
 
 from aio_pika.abc import AbstractChannel, AbstractQueue
 from botflow_platform.consumer import QueueConsumer
-from botflow_platform.messaging import ConfirmedPublisher, declare_task_topology
+from botflow_platform.messaging import (
+    TASK_CREATE_ROUTING_KEY,
+    ConfirmedPublisher,
+    declare_task_topology,
+)
 from botflow_platform.outbox import RelayOutbox, SqlOutboxTx, sql_transactions
 from botflow_platform.resources import (
     Database,
@@ -15,8 +19,11 @@ from botflow_platform.resources import (
 from botflow_platform.settings import Settings
 from botflow_platform.streams import RedisStream
 from dependency_injector import containers, providers
+from redis.asyncio import Redis
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from application.commands.accept_text import AcceptTextMessage
+from application.commands.accept_voice import AcceptVoiceMessage
 from application.commands.deliver_notification import DeliverNotification, RunNotifier
 from application.commands.handle_bot_command import HandleBotCommand
 from application.commands.process_identity_event import ProcessIdentityEvent
@@ -27,12 +34,17 @@ from infrastructure.db.inbox import SqlUpdateInbox
 from infrastructure.db.jobs import SqlJobStore, outbox
 from infrastructure.db.notifications import SqlIntentStore
 from infrastructure.db.results import SqlTaskResultStore, fail_job
+from infrastructure.db.voice import fail_voice_job
 from infrastructure.messaging import IdentityEventConsumer
 from infrastructure.streams import (
     NOTIFICATION_GROUP,
     NOTIFICATION_STREAM,
     STUCK_AFTER_MS,
+    VOICE_GROUP,
+    VOICE_STREAM,
     RedisNotificationQueue,
+    RedisVoicePublisher,
+    RedisVoiceQueue,
 )
 
 
@@ -46,6 +58,12 @@ def build_accept_text(
     database: Database, identity: IdentityGateway, messenger: Messenger
 ) -> AcceptTextMessage:
     return AcceptTextMessage(identity, SqlJobStore(database.sessions), messenger)
+
+
+def build_accept_voice(
+    database: Database, identity: IdentityGateway, messenger: Messenger
+) -> AcceptVoiceMessage:
+    return AcceptVoiceMessage(identity, SqlJobStore(database.sessions), messenger)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,10 +118,42 @@ def build_task_flow(resources: Resources) -> TaskFlow:
     return TaskFlow(
         results=QueueConsumer(resources.rabbitmq, results_queue, process.handle),
         relay=RelayOutbox(
-            sql_transactions(resources.sessions, outbox),
+            sql_transactions(
+                resources.sessions, outbox, routing_keys=(TASK_CREATE_ROUTING_KEY,)
+            ),
             ConfirmedPublisher(resources.rabbitmq, declare_task_topology),
             on_exhausted=fail_job,
         ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceResources:
+    sessions: async_sessionmaker[AsyncSession]
+    redis: Redis | None
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceFlow:
+    """Voice outbox rows -> Redis Stream, and the stream the STT worker reads."""
+
+    relay: RelayOutbox[SqlOutboxTx]
+    queue: RedisVoiceQueue
+
+
+def build_voice_flow(
+    resources: Resources | VoiceResources, *, consumer_name: str
+) -> VoiceFlow:
+    if resources.redis is None:
+        raise RuntimeError("The voice flow needs the Redis connection.")
+    stream = RedisStream(resources.redis, VOICE_STREAM, VOICE_GROUP, consumer_name)
+    return VoiceFlow(
+        relay=RelayOutbox(
+            sql_transactions(resources.sessions, outbox, routing_keys=("voice.*",)),
+            RedisVoicePublisher(stream),
+            on_exhausted=fail_voice_job,
+        ),
+        queue=RedisVoiceQueue(stream),
     )
 
 
@@ -115,3 +165,4 @@ class Container(containers.DeclarativeContainer):
 
     bot_command = providers.Factory(build_bot_command, database=database)
     accept_text = providers.Factory(build_accept_text, database=database)
+    accept_voice = providers.Factory(build_accept_voice, database=database)

@@ -55,8 +55,8 @@ class TelegramPoller:
                 timeout=POLL_TIMEOUT_SECONDS,
                 allowed_updates=ALLOWED_UPDATES,
             )
-        except Exception:
-            self._log("Telegram fetch failed; retrying.")
+        except Exception as error:
+            self._log(f"Telegram fetch failed ({type(error).__name__}); retrying.")
             await self._pause()
             return 0
         confirmed = 0
@@ -70,8 +70,11 @@ class TelegramPoller:
                 self._log("Storage unavailable; the update will be retried.")
                 await self._pause()
                 return confirmed  # the offset stays on this update
-            except Exception:
-                self._log("Update handler failed; the update is skipped.")
+            except Exception as error:
+                self._log(
+                    f"Update handler failed ({type(error).__name__}); "
+                    "the update is skipped."
+                )
             self._offset = update.update_id + 1
             confirmed += 1
         return confirmed

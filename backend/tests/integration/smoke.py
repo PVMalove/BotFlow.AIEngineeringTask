@@ -17,6 +17,7 @@ from botflow_platform.settings import Settings
 from botocore.exceptions import ClientError
 from sqlalchemy import text
 from text_task_flow import TextTaskFlow
+from voice_task_flow import VoiceTaskFlow
 
 RUN_ID = UUID(os.environ["BOTFLOW_SMOKE_ID"]).hex
 AFTER = os.environ["BOTFLOW_SMOKE_PHASE"] == "after"
@@ -199,6 +200,7 @@ if __name__ == "__main__":
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(AccessFlow))
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(AuthFlow))
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TextTaskFlow))
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(VoiceTaskFlow))
     suite.addTests(
         unittest.defaultTestLoader.loadTestsFromTestCase(InfrastructureSmoke)
     )

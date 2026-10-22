@@ -42,7 +42,10 @@ async def main() -> None:
             accept = await container.accept_text.async_(
                 identity=identity, messenger=messenger
             )
-            dispatcher = create_dispatcher(command, accept, messenger)
+            accept_voice = await container.accept_voice.async_(
+                identity=identity, messenger=messenger
+            )
+            dispatcher = create_dispatcher(command, accept, messenger, accept_voice)
             print("Telegram polling started.", flush=True)
             # Our own loop: the offset moves only after the handler returned.
             await TelegramPoller(bot, dispatcher).run()

@@ -7,6 +7,7 @@ from aiogram.filters import Command
 from aiogram.types import Message, Update, User
 
 from application.commands.accept_text import AcceptTextDto, AcceptTextMessage
+from application.commands.accept_voice import AcceptVoiceDto, AcceptVoiceMessage
 from application.commands.handle_bot_command import (
     HandleBotCommand,
     HandleBotCommandDto,
@@ -14,7 +15,7 @@ from application.commands.handle_bot_command import (
 from application.ports import Messenger
 
 UNKNOWN_COMMAND = "Неизвестная команда. Отправьте текст задачи или /login."
-UNSUPPORTED = "Пока принимаются только текстовые сообщения."
+UNSUPPORTED = "Пока принимаются только текстовые и голосовые сообщения."
 
 
 class TelegramMessenger:
@@ -35,6 +36,7 @@ def create_dispatcher(
     command: HandleBotCommand,
     accept: AcceptTextMessage | None = None,
     messenger: Messenger | None = None,
+    accept_voice: AcceptVoiceMessage | None = None,
 ) -> Dispatcher:
     dispatcher = Dispatcher()
 
@@ -78,6 +80,31 @@ def create_dispatcher(
                 received_at=received_at or datetime.now(UTC),
             )
         )
+
+    if accept_voice is not None:
+
+        @dispatcher.message(F.chat.type == "private", F.voice)
+        async def voice(
+            message: Message, bot: Bot, received_at: datetime | None = None
+        ) -> None:
+            if message.from_user is None or message.voice is None:
+                return
+            await accept_voice.execute(
+                AcceptVoiceDto(
+                    bot_id=bot.id,
+                    chat_id=message.chat.id,
+                    message_id=message.message_id,
+                    telegram_id=message.from_user.id,
+                    file_id=message.voice.file_id,
+                    file_unique_id=message.voice.file_unique_id,
+                    duration_seconds=message.voice.duration,
+                    file_size_bytes=message.voice.file_size,
+                    mime_type=message.voice.mime_type,
+                    display_name=applicant_name(message.from_user),
+                    message_date=message.date,
+                    received_at=received_at or datetime.now(UTC),
+                )
+            )
 
     @dispatcher.message(F.chat.type == "private")
     async def other(message: Message) -> None:

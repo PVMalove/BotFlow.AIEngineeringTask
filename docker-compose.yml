@@ -245,8 +245,11 @@ services:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
     secrets:
       - "automation_db_password"
+      - "minio_password"
     depends_on:
       automation-db:
+        condition: "service_healthy"
+      minio:
         condition: "service_healthy"
     networks:
       - "backend"
@@ -281,23 +284,6 @@ services:
         condition: "service_healthy"
     networks:
       - "backend"
-  automation-bot:
-    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
-    profiles: ["bot"]
-    command: ["python", "scripts/bot.py"]
-    environment:
-      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
-      BOTFLOW_IDENTITY_URL: "http://identity-api:8000"
-    secrets:
-      - "automation_db_password"
-      - "automation_service_key"
-      - "telegram_bot_token"
-    depends_on:
-      automation-db:
-        condition: "service_healthy"
-      identity-api:
-        condition: "service_healthy"
-    networks: ["backend"]
   redis:
     image: "redis:8-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0"
     command:
@@ -386,43 +372,70 @@ services:
     image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
     profiles:
       - "workers"
+      - "bot"
     command:
       - "python"
       - "scripts/bot.py"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+      BOTFLOW_IDENTITY_URL: "http://identity-api:8000"
     secrets:
       - "telegram_bot_token"
       - "automation_service_key"
       - "automation_db_password"
+    depends_on:
+      automation-db:
+        condition: "service_healthy"
+      identity-api:
+        condition: "service_healthy"
     networks:
       - "backend"
   whisper-worker:
-    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
+    # The only container with Whisper and torch; its own image, never built by `make build`.
+    image: "botflow-whisper-worker:${BOTFLOW_IMAGE_TAG:-local}"
+    build:
+      context: "./backend"
+      network: "${BOTFLOW_BUILD_NETWORK:-default}"
+      dockerfile: "services/automation-service/Dockerfile"
+      target: "stt-runtime"
     profiles:
       - "workers"
     command:
       - "python"
       - "scripts/worker.py"
       - "transcription"
+    restart: "unless-stopped"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+      BOTFLOW_WHISPER_MODEL: "${WHISPER_MODEL:-turbo}"
+      BOTFLOW_STT_TIMEOUT_SECONDS: "${BOTFLOW_STT_TIMEOUT_SECONDS:-120}"
     secrets:
-      - "telegram_bot_token"
+      - "automation_db_password"
       - "redis_automation_password"
+      - "minio_password"
+      - "telegram_bot_token"
+    depends_on:
+      automation-db:
+        condition: "service_healthy"
+      redis:
+        condition: "service_healthy"
+      minio:
+        condition: "service_healthy"
     networks:
       - "backend"
     volumes:
-      - "whisper_models:/models"
-  notification-worker:
-    image: "botflow-automation:${BOTFLOW_IMAGE_TAG:-local}"
-    profiles:
-      - "workers"
-    command:
-      - "python"
-      - "scripts/worker.py"
-      - "notifications"
-    secrets:
-      - "telegram_bot_token"
-      - "redis_automation_password"
-    networks:
-      - "backend"
+      - "whisper_models:/models:ro"
+    healthcheck:
+      # Written only after the weights are verified and the model is in memory.
+      test:
+        - "CMD"
+        - "test"
+        - "-f"
+        - "/tmp/whisper-ready"
+      interval: "10s"
+      timeout: "3s"
+      retries: 3
+      start_period: "120s"
 networks:
   backend: {}
 volumes:

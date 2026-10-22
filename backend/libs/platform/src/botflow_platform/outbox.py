@@ -9,7 +9,7 @@ error stay in PostgreSQL. A row whose attempts are exhausted has no next attempt
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -19,6 +19,7 @@ from uuid import UUID
 from aiormq.exceptions import ChannelInvalidStateError
 from sqlalchemy import (
     Column,
+    ColumnElement,
     DateTime,
     Index,
     Integer,
@@ -26,6 +27,7 @@ from sqlalchemy import (
     Table,
     Text,
     Uuid,
+    or_,
     select,
     text,
     update,
@@ -134,15 +136,46 @@ class OutboxTx(Protocol):
 
 
 class SqlOutboxTx:
-    def __init__(self, session: AsyncSession, table: Table) -> None:
+    """One relay's view of the table.
+
+    `routing_keys` limits the claimed rows to the keys this relay can deliver: an
+    exact key, or `prefix.*` for every key under that prefix. None claims all.
+    """
+
+    def __init__(
+        self,
+        session: AsyncSession,
+        table: Table,
+        routing_keys: Sequence[str] | None = None,
+    ) -> None:
         self.session = session
         self._table = table
+        self._routing_keys = routing_keys
+
+    def _routed(self) -> list[ColumnElement[bool]]:
+        if self._routing_keys is None:
+            return []
+        column = self._table.c.routing_key
+        return [
+            or_(
+                *(
+                    column.startswith(key[:-1], autoescape=True)
+                    if key.endswith(".*")
+                    else column == key
+                    for key in self._routing_keys
+                )
+            )
+        ]
 
     async def claim_due(self, now: datetime, limit: int) -> list[OutboxRow]:
         t = self._table
         rows = await self.session.execute(
             select(t)
-            .where(t.c.published_at.is_(None), t.c.next_attempt_at <= now)
+            .where(
+                t.c.published_at.is_(None),
+                t.c.next_attempt_at <= now,
+                *self._routed(),
+            )
             .order_by(t.c.created_at, t.c.id)
             .limit(limit)
             .with_for_update(skip_locked=True)
@@ -185,12 +218,15 @@ class SqlOutboxTx:
 
 
 def sql_transactions(
-    sessions: async_sessionmaker[AsyncSession], table: Table
+    sessions: async_sessionmaker[AsyncSession],
+    table: Table,
+    *,
+    routing_keys: Sequence[str] | None = None,
 ) -> Callable[[], AbstractAsyncContextManager[SqlOutboxTx]]:
     @asynccontextmanager
     async def transaction() -> AsyncIterator[SqlOutboxTx]:
         async with sessions() as session:
-            yield SqlOutboxTx(session, table)
+            yield SqlOutboxTx(session, table, routing_keys)
             await session.commit()  # an error above rolls the session back on close
 
     return transaction

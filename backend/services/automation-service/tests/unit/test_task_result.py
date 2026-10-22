@@ -93,6 +93,16 @@ async def test_a_long_text_is_cut_in_the_notification() -> None:
     assert body.endswith("…")
 
 
+async def test_a_nullable_job_text_produces_a_fallback_notification() -> None:
+    results = Results()
+    results.job = JobSummary(JOB, CHAT, AUTHOR, None)
+
+    await ProcessTaskResult(results).execute(MESSAGE, "TaskCreated", created())
+
+    body = results.recorded[0][3].body
+    assert body == "Задача создана"
+
+
 async def test_the_intent_id_depends_only_on_the_job() -> None:
     first, second = Results(), Results()
 
