@@ -3,7 +3,8 @@
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
-from uuid import UUID
+from typing import Any
+from uuid import UUID, uuid4
 
 from domain.entities.auth import Member, MemberStatus, Role
 
@@ -104,4 +105,46 @@ def decide(
             decided_by=actor_id,
         ),
         changed=True,
+    )
+
+
+ACCESS_DECIDED = "member.access-decided"
+# A block deliberately has no notification: the blocked author hears nothing more.
+_NOTIFIED_AS = {
+    Action.APPROVE: "approved",
+    Action.REJECT: "rejected",
+    Action.UNBLOCK: "unblocked",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxEntry:
+    """An event stored in the decision transaction and relayed afterwards."""
+
+    id: UUID
+    type: str
+    payload: dict[str, Any]
+    created_at: datetime
+    attempts: int = 0
+    next_attempt_at: datetime | None = None
+    published_at: datetime | None = None
+
+
+def access_decided(member: Member, action: Action, now: datetime) -> OutboxEntry | None:
+    """The notification intent of a decision that just changed `member`."""
+    decision = _NOTIFIED_AS.get(action)
+    if decision is None:
+        return None
+    return OutboxEntry(
+        id=uuid4(),
+        type=ACCESS_DECIDED,
+        payload={
+            "member_id": str(member.id),
+            "telegram_id": member.telegram_id,
+            "decision": decision,
+            "access_version": member.access_version,
+            "decided_at": now.isoformat(),
+        },
+        created_at=now,
+        next_attempt_at=now,
     )

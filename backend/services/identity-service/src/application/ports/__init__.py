@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from domain.access import OutboxEntry
 from domain.entities.auth import AuthSession
 from domain.unit_of_work import UnitOfWork
 
@@ -33,4 +34,10 @@ class TokenService(Protocol):
 
     def verify(self, token: str) -> TokenClaims:
         """Check signature, issuer, audience and lifetime; else InvalidSession."""
+        ...
+
+
+class EventPublisher(Protocol):
+    async def publish(self, entry: OutboxEntry) -> None:
+        """Return only once the broker has confirmed; raise on any failure."""
         ...

@@ -74,6 +74,17 @@ services:
     command:
       - "python"
       - "scripts/worker.py"
+    restart: "unless-stopped"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    secrets:
+      - "identity_db_password"
+      - "rabbitmq_password"
+    depends_on:
+      identity-db:
+        condition: "service_healthy"
+      rabbitmq:
+        condition: "service_healthy"
     networks:
       - "backend"
   tasks-db:

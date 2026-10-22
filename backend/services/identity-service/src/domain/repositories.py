@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from domain.access import OutboxEntry
 from domain.entities.auth import AuthSession, LoginCode, Member, MemberStatus
 
 
@@ -61,3 +62,19 @@ class SessionRepository(Protocol):
     async def revoke(self, session_id: UUID, now: datetime) -> None: ...
 
     async def revoke_all(self, member_id: UUID, now: datetime) -> None: ...
+
+
+class OutboxRepository(Protocol):
+    async def add(self, entry: OutboxEntry) -> None: ...
+
+    async def claim_due(self, now: datetime, limit: int) -> list[OutboxEntry]:
+        """Unpublished entries whose next attempt is due, locked for this relay."""
+        ...
+
+    async def mark_published(self, entry_id: UUID, now: datetime) -> None: ...
+
+    async def reschedule(
+        self, entry_id: UUID, attempts: int, next_attempt_at: datetime | None
+    ) -> None:
+        """Record a failed attempt; `None` stops retrying and keeps the row visible."""
+        ...

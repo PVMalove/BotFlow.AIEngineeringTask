@@ -8,6 +8,7 @@ from domain.access import (
     Action,
     AdminRequired,
     MemberNotFound,
+    access_decided,
     decide,
 )
 from domain.entities.auth import InvalidSession, Member, MemberStatus, Role
@@ -74,5 +75,9 @@ class DecideMember:
                     # Same transaction as the status: no session outlives the block.
                     await uow.sessions.revoke_all(target.id, now)
                     await uow.login_codes.cancel_active(target.id, now)
+                intent = access_decided(decision.member, command.action, now)
+                if intent is not None:
+                    # Same transaction: no decision without its notification intent.
+                    await uow.outbox.add(intent)
             await uow.commit()
         return DecisionResult(member=decision.member, changed=decision.changed)

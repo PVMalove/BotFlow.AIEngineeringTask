@@ -27,4 +27,5 @@ python_version = "3.12"
 strict = true
 
 [tool.pytest.ini_options]
+asyncio_mode = "auto"
 testpaths = ["tests"]
