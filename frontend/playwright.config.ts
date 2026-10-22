@@ -11,6 +11,7 @@ export default defineConfig({
     'auth.spec.ts',
     'admin.spec.ts',
     'board.spec.ts',
+    'dnd.spec.ts',
   ],
   workers: 1,
   outputDir: process.env.BOTFLOW_E2E_OUTPUT_DIR,

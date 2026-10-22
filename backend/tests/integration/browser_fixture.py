@@ -29,9 +29,14 @@ async def board_fixture(action: str, author_id: UUID) -> None:
                 await session.execute(
                     text("DELETE FROM tasks WHERE source_key LIKE 'browser-board:%'")
                 )
-            elif action == "board":
-                for status in ("pending", "in_progress", "completed"):
-                    for index in range(52):
+            elif action in {"board", "dnd-board"}:
+                statuses = (
+                    ("pending", "in_progress", "completed")
+                    if action == "board"
+                    else ("pending", "in_progress")
+                )
+                for status in statuses:
+                    for index in range(52 if action == "board" else 1):
                         # Tied timestamps exercise the ID half of the keyset cursor.
                         await session.execute(
                             text(
@@ -46,7 +51,8 @@ async def board_fixture(action: str, author_id: UUID) -> None:
                                 "id": uuid4(),
                                 "source": f"browser-board:{status}:{index}",
                                 "correlation": uuid4(),
-                                "text": f"{status} #{index} / Տեքստ " + "длинный" * 20,
+                                "text": f"{status} #{index} / Տեքստ "
+                                + ("длинный" * 20 if action == "board" else ""),
                                 "status": status,
                                 "author": author_id,
                                 "telegram": int(
@@ -91,7 +97,7 @@ async def run(action: str) -> dict[str, str]:
         raise RuntimeError("Browser fixtures require an isolated test project")
 
     async with open_database(Settings(service="identity")) as identity:
-        if action in {"reset", "board", "board-change"}:
+        if action in {"reset", "board", "board-change", "dnd-board"}:
             async with identity.sessions() as session:
                 author_id = await session.scalar(
                     text("SELECT id FROM members WHERE telegram_id = :telegram"),
@@ -180,6 +186,7 @@ if __name__ == "__main__":
             "revoke",
             "board",
             "board-change",
+            "dnd-board",
         ],
     )
     arguments = parser.parse_args()

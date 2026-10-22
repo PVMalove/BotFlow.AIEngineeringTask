@@ -2,6 +2,8 @@ import {
   DndContext,
   KeyboardSensor,
   PointerSensor,
+  pointerWithin,
+  rectIntersection,
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
@@ -24,6 +26,7 @@ import type { Locale, Messages } from './locale';
 import { boardTasks } from './tasks';
 import { TaskCard, TaskColumn } from './TaskCard';
 import { TaskDialog } from './TaskDialog';
+import { columnKeyboardCoordinates } from './boardDrag';
 
 function useTaskColumn(memberId: string, status: TaskStatus) {
   return useInfiniteQuery({
@@ -83,7 +86,10 @@ export function Board({
   const suppressClick = useRef(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: columnKeyboardCoordinates,
+      scrollBehavior: 'auto',
+    }),
   );
   const mayEdit = (task: Task) =>
     member.role === 'admin' || member.id === task.author_id;
@@ -104,6 +110,13 @@ export function Board({
   });
 
   function putTask(task: Task | null, id: string) {
+    // A delayed mutation/GET must not replace a newer REST (or future WS) version.
+    const known = boardTasks(
+      client
+        .getQueriesData<InfiniteData<TaskPage>>({ queryKey: key })
+        .flatMap(([, data]) => data?.pages.flatMap((page) => page.data) ?? []),
+    ).find((item) => item.id === id);
+    if (task && known && known.version > task.version) task = known;
     for (const { status } of columns) {
       client.setQueryData<InfiniteData<TaskPage>>(
         [...key, status],
@@ -122,6 +135,7 @@ export function Board({
         },
       );
     }
+    return task;
   }
 
   async function reconcile(task: Task, reason: Notice) {
@@ -129,10 +143,12 @@ export function Board({
     try {
       const fresh = await getTask(task.id);
       await client.cancelQueries({ queryKey: key });
-      putTask(fresh, task.id);
-      setOpened((current) => (current?.id === fresh.id ? fresh : current));
+      const observed = putTask(fresh, task.id) ?? fresh;
+      setOpened((current) =>
+        current?.id === observed.id ? observed : current,
+      );
       // A second command requires the user to select again against the observed version.
-      setSelected(fresh.status);
+      setSelected(observed.status);
       setBlocked(false);
       setNotice(reason);
     } catch (error) {
@@ -142,7 +158,11 @@ export function Board({
         setOpened(null);
         setBlocked(false);
       } else {
-        setNotice('taskReconcileFailed');
+        setNotice(
+          error instanceof ApiError && [401, 403].includes(error.status)
+            ? 'accessDenied'
+            : 'taskReconcileFailed',
+        );
         if (error instanceof ApiError && [401, 403].includes(error.status))
           void client.invalidateQueries({ queryKey: ['session'] });
       }
@@ -171,6 +191,9 @@ export function Board({
         error.status >= 500
       ) {
         await reconcile(task, 'taskUnknown');
+      } else if (error.status === 403) {
+        await reconcile(task, 'accessDenied');
+        void client.invalidateQueries({ queryKey: ['session'] });
       } else if (error.status === 404) {
         await reconcile(task, 'taskMissing');
       } else {
@@ -208,7 +231,7 @@ export function Board({
     setOver(null);
     // Reset only on the next pointer/keyboard activation; the trailing click stays suppressed.
     suppressClick.current = true;
-    const task = event.active.data.current?.task as Task | undefined;
+    const task = dragged;
     const target = columns.find(
       (column) => column.status === event.over?.id,
     )?.status;
@@ -252,6 +275,11 @@ export function Board({
       {!denied && (
         <DndContext
           sensors={sensors}
+          collisionDetection={(args) =>
+            args.pointerCoordinates
+              ? pointerWithin(args)
+              : rectIntersection(args)
+          }
           accessibility={{
             screenReaderInstructions: { draggable: messages.dragInstructions },
             announcements: {

@@ -66,7 +66,24 @@ test('saves the selected status once and moves the card without duplicates', asy
   expect(patches).toEqual([{ status: 'in_progress', expected_version: 1 }]);
 });
 
-for (const outcome of ['conflict', 'lost', 'failed-read', 'denied'] as const) {
+for (const { outcome, expected, expectedStatus } of [
+  {
+    outcome: 'conflict',
+    expected: 'Задача изменилась',
+    expectedStatus: 'completed',
+  },
+  {
+    outcome: 'lost',
+    expected: 'Результат сохранения не подтверждён',
+    expectedStatus: 'completed',
+  },
+  {
+    outcome: 'failed-read',
+    expected: 'Не удалось перечитать задачу',
+    expectedStatus: 'in_progress',
+  },
+  { outcome: 'denied', expected: 'Запрос отклонён', expectedStatus: 'pending' },
+] as const) {
   test(
     'keeps the dialog and reconciles ' + outcome + ' without repeating PATCH',
     async ({ page }) => {
@@ -125,17 +142,9 @@ for (const outcome of ['conflict', 'lost', 'failed-read', 'denied'] as const) {
       await dialog
         .getByRole('button', { name: 'Сохранить', exact: true })
         .click();
-      const expected = {
-        conflict: 'Задача изменилась',
-        lost: 'Результат сохранения не подтверждён',
-        'failed-read': 'Не удалось перечитать задачу',
-        denied: 'Запрос отклонён',
-      }[outcome];
       await expect(dialog.getByRole('alert')).toContainText(expected);
       await expect(dialog.getByLabel('Статус', { exact: true })).toHaveValue(
-        outcome === 'denied' || outcome === 'failed-read'
-          ? 'in_progress'
-          : 'completed',
+        expectedStatus,
       );
       if (outcome === 'failed-read') {
         await expect(
