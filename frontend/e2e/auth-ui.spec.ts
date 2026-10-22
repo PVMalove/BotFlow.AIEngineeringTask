@@ -5,6 +5,7 @@ const member = {
   telegram_id: 4200000001,
   role: 'admin',
   status: 'approved',
+  display_name: 'Malove',
 };
 
 test('validates an empty or malformed code locally in both languages', async ({
@@ -95,7 +96,7 @@ test('requires login when a protected route has no session', async ({
   ).toBeVisible();
   await expect(page.getByLabel('Код из Telegram')).toBeVisible();
   await expect(
-    page.getByRole('heading', { name: 'Командная доска' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toHaveCount(0);
 });
 
@@ -113,7 +114,7 @@ test('returns to login when the active session is revoked', async ({
   );
   await page.goto('/');
   await expect(
-    page.getByRole('heading', { name: 'Командная доска' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toBeVisible();
 
   revoked = true;
@@ -124,7 +125,7 @@ test('returns to login when the active session is revoked', async ({
     page.getByRole('heading', { name: 'Вход в BotFlow' }),
   ).toBeVisible();
   await expect(
-    page.getByRole('heading', { name: 'Командная доска' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toHaveCount(0);
 });
 
@@ -141,7 +142,7 @@ test('hides cached protected content on Identity failure and allows a retry', as
   );
   await page.goto('/');
   await expect(
-    page.getByRole('heading', { name: 'Командная доска' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toBeVisible();
 
   unavailable = true;
@@ -149,17 +150,19 @@ test('hides cached protected content on Identity failure and allows a retry', as
     window.dispatchEvent(new Event('visibilitychange')),
   );
 
+  // Wait for the protected screen to leave before selecting the session alert;
+  // its three independent task reads can still show transient errors meanwhile.
+  await expect(
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
+  ).toHaveCount(0);
   await expect(page.getByRole('alert')).toHaveText(
     'Сервис входа временно недоступен. Попробуйте позже.',
   );
-  await expect(
-    page.getByRole('heading', { name: 'Командная доска' }),
-  ).toHaveCount(0);
 
   unavailable = false;
   await page.getByRole('button', { name: 'Повторить', exact: true }).click();
   await expect(
-    page.getByRole('heading', { name: 'Командная доска' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toBeVisible();
 });
 
@@ -219,14 +222,14 @@ test('exchanges a code, restores the session and logs out in the selected langua
 
   await expect(page).toHaveURL(/\/$/);
   await expect(
-    page.getByRole('heading', { name: 'Командная доска' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toBeVisible();
-  await expect(page.getByText('4200000001', { exact: true })).toBeVisible();
+  await expect(page.getByText('Malove', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Հայերեն', exact: true }).click();
   await page.reload();
 
   await expect(
-    page.getByRole('heading', { name: 'Թիմի առաջադրանքների վահանակ' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toBeVisible();
   await page.getByRole('button', { name: 'Դուրս գալ', exact: true }).click();
 

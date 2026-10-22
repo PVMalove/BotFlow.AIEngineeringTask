@@ -1,20 +1,29 @@
 import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core';
+import type { DragEndEvent } from '@dnd-kit/core';
+import {
   Alert,
   Box,
   Button,
-  Chip,
   Container,
-  Paper,
   Stack,
   Typography,
 } from '@mui/material';
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import type { InfiniteData } from '@tanstack/react-query';
+import { Fragment, useEffect, useRef, useState } from 'react';
 
-import { ApiError, listTasks } from './api';
-import type { Member, TaskStatus } from './api';
+import { ApiError, changeTaskStatus, getTask, listTasks } from './api';
+import type { Member, Task, TaskPage, TaskStatus } from './api';
 import type { Locale, Messages } from './locale';
 import { boardTasks } from './tasks';
+import { TaskCard, TaskColumn } from './TaskCard';
+import { TaskDialog } from './TaskDialog';
 
 function useTaskColumn(memberId: string, status: TaskStatus) {
   return useInfiniteQuery({
@@ -30,6 +39,15 @@ function useTaskColumn(memberId: string, status: TaskStatus) {
   });
 }
 
+type Notice =
+  | 'taskConflict'
+  | 'taskUnknown'
+  | 'taskReconcileFailed'
+  | 'taskSaveFailed'
+  | 'taskMissing'
+  | 'accessDenied'
+  | 'rateLimited';
+
 export function Board({
   member,
   messages,
@@ -40,6 +58,7 @@ export function Board({
   locale: Locale;
 }) {
   const client = useQueryClient();
+  const key = ['tasks', member.id];
   const pending = useTaskColumn(member.id, 'pending');
   const inProgress = useTaskColumn(member.id, 'in_progress');
   const completed = useTaskColumn(member.id, 'completed');
@@ -52,6 +71,22 @@ export function Board({
     },
     { status: 'completed', label: messages.taskCompleted, query: completed },
   ] as const;
+  const [opened, setOpened] = useState<Task | null>(null);
+  const [selected, setSelected] = useState<TaskStatus>('pending');
+  const [busy, setBusy] = useState(false);
+  const lock = useRef(false);
+  const failedTask = useRef<Task | null>(null);
+  const [blocked, setBlocked] = useState(false);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [dragged, setDragged] = useState<Task | null>(null);
+  const [over, setOver] = useState<string | null>(null);
+  const suppressClick = useRef(false);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(KeyboardSensor),
+  );
+  const mayEdit = (task: Task) =>
+    member.role === 'admin' || member.id === task.author_id;
   const denied = [pending.error, inProgress.error, completed.error].some(
     (error) => error instanceof ApiError && [401, 403].includes(error.status),
   );
@@ -68,137 +103,328 @@ export function Board({
     timeStyle: 'short',
   });
 
+  function putTask(task: Task | null, id: string) {
+    for (const { status } of columns) {
+      client.setQueryData<InfiniteData<TaskPage>>(
+        [...key, status],
+        (previous) => {
+          if (!previous) return previous;
+          return {
+            ...previous,
+            pages: previous.pages.map((page, index) => ({
+              ...page,
+              data: boardTasks([
+                ...page.data.filter((item) => item.id !== id),
+                ...(index === 0 && task?.status === status ? [task] : []),
+              ]),
+            })),
+          };
+        },
+      );
+    }
+  }
+
+  async function reconcile(task: Task, reason: Notice) {
+    setBlocked(true);
+    try {
+      const fresh = await getTask(task.id);
+      await client.cancelQueries({ queryKey: key });
+      putTask(fresh, task.id);
+      setOpened((current) => (current?.id === fresh.id ? fresh : current));
+      // A second command requires the user to select again against the observed version.
+      setSelected(fresh.status);
+      setBlocked(false);
+      setNotice(reason);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) {
+        putTask(null, task.id);
+        setNotice('taskMissing');
+        setOpened(null);
+        setBlocked(false);
+      } else {
+        setNotice('taskReconcileFailed');
+        if (error instanceof ApiError && [401, 403].includes(error.status))
+          void client.invalidateQueries({ queryKey: ['session'] });
+      }
+    }
+    void client.invalidateQueries({ queryKey: key });
+  }
+
+  async function save(task: Task, status: TaskStatus) {
+    if (lock.current || blocked || !mayEdit(task)) return;
+    failedTask.current = task;
+    lock.current = true;
+    setBusy(true);
+    setNotice(null);
+    try {
+      await client.cancelQueries({ queryKey: key });
+      const changed = await changeTaskStatus(task, status);
+      putTask(changed, task.id);
+      setOpened(null);
+      await client.invalidateQueries({ queryKey: key });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 409) {
+        await reconcile(task, 'taskConflict');
+      } else if (
+        !(error instanceof ApiError) ||
+        error.status === 0 ||
+        error.status >= 500
+      ) {
+        await reconcile(task, 'taskUnknown');
+      } else if (error.status === 404) {
+        await reconcile(task, 'taskMissing');
+      } else {
+        setNotice(
+          error instanceof ApiError && [401, 403].includes(error.status)
+            ? 'accessDenied'
+            : error.status === 429
+              ? 'rateLimited'
+              : 'taskSaveFailed',
+        );
+        if (error instanceof ApiError && [401, 403].includes(error.status))
+          void client.invalidateQueries({ queryKey: ['session'] });
+      }
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function retryReconcile() {
+    const task = failedTask.current;
+    if (!task || lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    try {
+      await reconcile(task, 'taskUnknown');
+    } finally {
+      lock.current = false;
+      setBusy(false);
+    }
+  }
+
+  function endDrag(event: DragEndEvent) {
+    setDragged(null);
+    setOver(null);
+    // Reset only on the next pointer/keyboard activation; the trailing click stays suppressed.
+    suppressClick.current = true;
+    const task = event.active.data.current?.task as Task | undefined;
+    const target = columns.find(
+      (column) => column.status === event.over?.id,
+    )?.status;
+    if (task && target && task.status !== target) void save(task, target);
+  }
+
   return (
-    <Container component="main" maxWidth="lg" sx={{ py: { xs: 4, md: 6 } }}>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-        {messages.workspace}
-      </Typography>
-      <Typography variant="h2" sx={{ mb: 1.5 }}>
-        {messages.board}
-      </Typography>
-      <Typography color="text.secondary" sx={{ mb: 3 }}>
-        {messages.boardDescription}
-      </Typography>
-      <Button
-        color="secondary"
-        variant="outlined"
-        sx={{ mb: 3 }}
-        disabled={columns.some(({ query }) => query.isFetching)}
-        onClick={() => {
-          void client.invalidateQueries({ queryKey: ['tasks', member.id] });
+    <Container component="main" maxWidth="lg" sx={{ py: { xs: 3, md: 4 } }}>
+      <Stack
+        direction="row"
+        useFlexGap
+        sx={{
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 2,
+          mb: 3,
+          flexWrap: 'wrap',
         }}
       >
-        {messages.refreshBoard}
-      </Button>
+        <Typography variant="h2">{messages.defaultBoardName}</Typography>
+        <Button
+          color="secondary"
+          variant="outlined"
+          disabled={busy || columns.some(({ query }) => query.isFetching)}
+          onClick={() => void client.invalidateQueries({ queryKey: key })}
+        >
+          {messages.refreshBoard}
+        </Button>
+      </Stack>
+      {notice && !opened && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {messages[notice]}
+          {blocked && (
+            <Button disabled={busy} onClick={() => void retryReconcile()}>
+              {messages.retry}
+            </Button>
+          )}
+        </Alert>
+      )}
       {denied && <Alert severity="error">{messages.tasksDenied}</Alert>}
       {!denied && (
-        <Box
-          sx={{
-            display: 'grid',
-            gridTemplateColumns: {
-              xs: 'minmax(0, 1fr)',
-              md: 'repeat(3, minmax(0, 1fr))',
+        <DndContext
+          sensors={sensors}
+          accessibility={{
+            screenReaderInstructions: { draggable: messages.dragInstructions },
+            announcements: {
+              onDragStart: () => messages.dragStarted,
+              onDragOver: ({ over }) =>
+                over
+                  ? messages.dragOver +
+                    ': ' +
+                    columns.find((column) => column.status === over.id)?.label
+                  : undefined,
+              onDragEnd: () => messages.dragEnded,
+              onDragCancel: () => messages.dragCancelled,
             },
-            gap: 2,
-            alignItems: 'start',
           }}
+          onDragStart={({ active }) => {
+            setDragged(active.data.current?.task as Task);
+            suppressClick.current = true;
+          }}
+          onDragOver={({ over }) => setOver(over ? String(over.id) : null)}
+          onDragCancel={() => {
+            setDragged(null);
+            setOver(null);
+            suppressClick.current = true;
+          }}
+          onDragEnd={endDrag}
         >
-          {columns.map(({ status, label, query }) => {
-            const items = tasks.filter((task) => task.status === status);
-            return (
-              <Paper
-                component="section"
-                aria-label={label}
-                key={status}
-                variant="outlined"
-                sx={{ minWidth: 0, p: 2, bgcolor: 'background.default' }}
-              >
-                <Typography variant="h3" sx={{ mb: 2 }}>
-                  {label}
-                </Typography>
-                {query.isFetching && (
-                  <Typography role="status" sx={{ mb: 2 }}>
-                    {messages.tasksLoading}
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: {
+                xs: 'minmax(0, 1fr)',
+                md: 'repeat(3, minmax(0, 1fr))',
+              },
+              gap: 3,
+              alignItems: 'start',
+            }}
+          >
+            {columns.map(({ status, label, query }) => {
+              const items = tasks.filter((task) => task.status === status);
+              const preview =
+                dragged && dragged.status !== status && over === status;
+              const position = preview
+                ? boardTasks([...items, dragged]).findIndex(
+                    (task) => task.id === dragged.id,
+                  )
+                : -1;
+              const placeholder = (
+                <Box
+                  component="li"
+                  role="status"
+                  sx={{
+                    listStyle: 'none',
+                    border: '1px dashed',
+                    borderColor: 'primary.main',
+                    borderRadius: 2,
+                    p: 2,
+                    color: 'text.secondary',
+                    fontSize: 13,
+                  }}
+                >
+                  {messages.taskDrop}
+                </Box>
+              );
+              return (
+                <TaskColumn key={status} status={status} label={label}>
+                  <Typography
+                    variant="h3"
+                    title={messages.loadedCount}
+                    sx={{ mb: 2, fontSize: 15 }}
+                  >
+                    {label} (
+                    {query.isPending ? '…' : query.isError ? '?' : items.length}
+                    {query.hasNextPage ? '+' : ''})
                   </Typography>
-                )}
-                {query.isError && (
-                  <Alert severity="error" sx={{ mb: 2 }}>
-                    {messages.tasksLoadFailed}
+                  {query.isFetching && (
+                    <Typography role="status" sx={{ mb: 2 }}>
+                      {messages.tasksLoading}
+                    </Typography>
+                  )}
+                  {query.isError && (
+                    <Alert severity="error" sx={{ mb: 2 }}>
+                      {messages.tasksLoadFailed}
+                      <Button
+                        color="secondary"
+                        disabled={query.isFetching}
+                        onClick={() => {
+                          if (query.isFetchNextPageError)
+                            void query.fetchNextPage({ cancelRefetch: false });
+                          else void query.refetch();
+                        }}
+                      >
+                        {messages.retry}
+                      </Button>
+                    </Alert>
+                  )}
+                  {!query.isPending &&
+                    !query.isError &&
+                    items.length === 0 &&
+                    !preview && (
+                      <Typography color="text.secondary">
+                        {messages.tasksEmpty}
+                      </Typography>
+                    )}
+                  <Stack
+                    component="ul"
+                    spacing={1.5}
+                    sx={{ listStyle: 'none', m: 0, p: 0 }}
+                  >
+                    {items.map((task, index) => (
+                      <Fragment key={task.id}>
+                        {position === index && placeholder}
+                        <TaskCard
+                          activate={() => {
+                            suppressClick.current = false;
+                          }}
+                          task={task}
+                          editable={mayEdit(task)}
+                          busy={busy || blocked}
+                          messages={messages}
+                          dateFormat={dateFormat}
+                          open={() => {
+                            if (
+                              suppressClick.current ||
+                              busy ||
+                              (blocked && failedTask.current?.id !== task.id)
+                            )
+                              return;
+                            setOpened(task);
+                            setSelected(task.status);
+                            if (!blocked) setNotice(null);
+                          }}
+                        />
+                      </Fragment>
+                    ))}
+                  </Stack>
+                  {position === items.length && placeholder}
+                  {query.hasNextPage && (
                     <Button
                       color="secondary"
-                      disabled={query.isFetching}
-                      onClick={() => {
-                        if (query.isFetchNextPageError)
-                          void query.fetchNextPage({ cancelRefetch: false });
-                        else void query.refetch();
-                      }}
+                      fullWidth
+                      sx={{ mt: 2 }}
+                      disabled={query.isFetching || busy}
+                      onClick={() =>
+                        void query.fetchNextPage({ cancelRefetch: false })
+                      }
                     >
-                      {messages.retry}
+                      {messages.showMore}
                     </Button>
-                  </Alert>
-                )}
-                {!query.isPending && !query.isError && items.length === 0 && (
-                  <Typography color="text.secondary">
-                    {messages.tasksEmpty}
-                  </Typography>
-                )}
-                <Stack
-                  component="ul"
-                  spacing={2}
-                  sx={{ listStyle: 'none', m: 0, p: 0 }}
-                >
-                  {items.map((task) => (
-                    <Paper
-                      component="li"
-                      variant="outlined"
-                      key={task.id}
-                      data-task-id={task.id}
-                      sx={{ p: 2, minWidth: 0, overflowWrap: 'anywhere' }}
-                    >
-                      <Chip
-                        size="small"
-                        label={label}
-                        sx={{
-                          mb: 1,
-                          maxWidth: '100%',
-                          height: 'auto',
-                          '& .MuiChip-label': { whiteSpace: 'normal' },
-                        }}
-                      />
-                      <Typography sx={{ whiteSpace: 'pre-wrap', mb: 2 }}>
-                        {task.text}
-                      </Typography>
-                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                        {task.author_name}
-                      </Typography>
-                      <Typography
-                        variant="body2"
-                        color="text.secondary"
-                        component="time"
-                        dateTime={task.created_at}
-                      >
-                        {dateFormat.format(new Date(task.created_at))}
-                      </Typography>
-                    </Paper>
-                  ))}
-                </Stack>
-                {query.hasNextPage && (
-                  <Button
-                    color="secondary"
-                    fullWidth
-                    sx={{ mt: 2 }}
-                    disabled={query.isFetching}
-                    onClick={() =>
-                      void query.fetchNextPage({ cancelRefetch: false })
-                    }
-                  >
-                    {messages.showMore}
-                  </Button>
-                )}
-              </Paper>
-            );
-          })}
-        </Box>
+                  )}
+                </TaskColumn>
+              );
+            })}
+          </Box>
+        </DndContext>
+      )}
+      {opened && (
+        <TaskDialog
+          task={opened}
+          selected={selected}
+          setSelected={setSelected}
+          editable={mayEdit(opened)}
+          busy={busy}
+          blocked={blocked}
+          error={notice ? messages[notice] : null}
+          messages={messages}
+          dateFormat={dateFormat}
+          close={() => setOpened(null)}
+          save={() => {
+            failedTask.current = opened;
+            void save(opened, selected);
+          }}
+          retry={() => void retryReconcile()}
+        />
       )}
     </Container>
   );

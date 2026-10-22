@@ -214,12 +214,15 @@ async def test_me_returns_the_current_member(
     client: httpx.AsyncClient, env: Env
 ) -> None:
     await login(client, env)
+    current = next(iter(env.store.members.values()))
+    env.store.members[current.id] = replace(current, display_name="Malove")
 
     response = await client.get("/api/v1/users/me")
 
     assert response.status_code == 200
     assert response.json()["telegram_id"] == ADMIN
     assert response.json()["role"] == "admin"
+    assert response.json()["display_name"] == "Malove"
     assert response.headers["cache-control"] == "no-store"
 
 

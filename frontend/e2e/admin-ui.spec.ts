@@ -59,7 +59,7 @@ test('approves a request with its observed version and refreshes the members lis
 
   await expect(page.getByText('Решение сохранено.')).toBeVisible();
   await expect(page.getByText('Заявок нет.')).toBeVisible();
-  await page.getByRole('tab', { name: 'Участники', exact: true }).click();
+  await page.getByRole('tab', { name: /^Участники \(/ }).click();
   await expect(page.getByText(applicant.display_name)).toBeVisible();
   await expect(page.getByText('Допущен', { exact: true })).toBeVisible();
 });
@@ -79,7 +79,7 @@ test('denies the admin route to a regular user without requesting admin data', a
 
   await expect(page).toHaveURL(/\/$/);
   await expect(
-    page.getByRole('heading', { name: 'Командная доска' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole('link', { name: 'Управление доступом' }),

@@ -82,3 +82,61 @@ test('reads and paginates all real columns, then refreshes changed history witho
   await page.getByRole('button', { name: 'Русский', exact: true }).click();
   await expect(pending.getByRole('listitem')).toHaveCount(52);
 });
+
+test('changes status through real PATCH, handles no-op and reconciles a concurrent version', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  fixture('reset');
+  fixture('board');
+  await page.goto('/login');
+  await page.getByLabel('Код из Telegram').fill(loginCode());
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  const card = page
+    .getByRole('region', { name: 'Ожидает', exact: true })
+    .getByRole('listitem')
+    .first();
+  const id = await card.getAttribute('data-task-id');
+  if (!id) throw new Error('Expected a real task');
+  await card.getByRole('button').first().click();
+  let dialog = page.getByRole('dialog');
+  await dialog
+    .getByLabel('Статус', { exact: true })
+    .selectOption('in_progress');
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const moved = page
+    .getByRole('region', { name: 'В работе', exact: true })
+    .locator('[data-task-id="' + id + '"]');
+  await expect(moved).toBeVisible();
+  const fresh = await (await page.request.get('/api/v1/tasks/' + id)).json();
+  expect(fresh.data.status).toBe('in_progress');
+  expect(fresh.data.version).toBe(2);
+
+  await moved.getByRole('button').first().click();
+  await page
+    .getByRole('dialog')
+    .getByRole('button', { name: 'Сохранить', exact: true })
+    .click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(
+    (await (await page.request.get('/api/v1/tasks/' + id)).json()).data.version,
+  ).toBe(2);
+
+  await moved.getByRole('button').first().click();
+  const concurrent = await page.request.patch('/api/v1/tasks/' + id, {
+    data: { status: 'completed', expected_version: 2 },
+    headers: { Origin: new URL(page.url()).origin },
+  });
+  expect(concurrent.status()).toBe(200);
+  dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Статус', { exact: true }).selectOption('pending');
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Задача изменилась');
+  await expect(dialog.getByLabel('Статус', { exact: true })).toHaveValue(
+    'completed',
+  );
+  expect(
+    (await (await page.request.get('/api/v1/tasks/' + id)).json()).data.version,
+  ).toBe(3);
+});

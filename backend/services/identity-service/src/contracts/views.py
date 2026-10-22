@@ -18,6 +18,7 @@ class MemberView:
     role: str
     status: str
     access_version: int
+    display_name: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

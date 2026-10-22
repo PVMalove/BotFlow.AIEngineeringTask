@@ -15,6 +15,7 @@ def member_view(member: Member) -> MemberView:
         role=member.role.value,
         status=member.status.value,
         access_version=member.access_version,
+        display_name=member.display_name,
     )
 
 

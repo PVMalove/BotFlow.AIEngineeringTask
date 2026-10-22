@@ -16,7 +16,7 @@ test('logs in through real Identity, restores the bilingual session and logs out
   await page.goto('/');
   await expect(page).toHaveURL(/\/login$/);
   await expect(
-    page.getByRole('heading', { name: 'Командная доска' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toHaveCount(0);
   await page.getByRole('button', { name: 'Հայերեն', exact: true }).click();
   await page.getByLabel('Telegram-ի կոդը').fill(code);
@@ -24,9 +24,8 @@ test('logs in through real Identity, restores the bilingual session and logs out
 
   await expect(page).toHaveURL(/\/$/);
   await expect(
-    page.getByRole('heading', { name: 'Թիմի առաջադրանքների վահանակ' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toBeVisible();
-  await expect(page.getByText('4200000001', { exact: true })).toBeVisible();
   const cookie = (await context.cookies()).find(
     (item) => item.name === 'botflow_session',
   );
@@ -34,15 +33,19 @@ test('logs in through real Identity, restores the bilingual session and logs out
   expect(cookie?.sameSite).toBe('Strict');
   const me = await page.request.get('/api/v1/users/me');
   expect(me.status()).toBe(200);
-  expect((await me.json()).role).toBe('admin');
+  const current = await me.json();
+  expect(current.role).toBe('admin');
+  await expect(page.getByRole('navigation')).toContainText(
+    current.display_name ?? 'Անունը նշված չէ',
+  );
 
   await page.reload();
   await expect(
-    page.getByRole('heading', { name: 'Թիմի առաջադրանքների վահանակ' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toBeVisible();
   await page.getByRole('button', { name: 'Русский', exact: true }).click();
   await expect(
-    page.getByRole('heading', { name: 'Командная доска' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toBeVisible();
   expect(
     await page.evaluate(
@@ -56,7 +59,7 @@ test('logs in through real Identity, restores the bilingual session and logs out
   await page.goto('/login');
   await expect(page).toHaveURL(/\/$/);
   await expect(
-    page.getByRole('heading', { name: 'Командная доска' }),
+    page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
   ).toBeVisible();
   await page.getByRole('button', { name: 'Выйти', exact: true }).click();
 
@@ -116,7 +119,7 @@ for (const action of ['expire', 'revoke'] as const) {
     await page.getByLabel('Код из Telegram').fill(code);
     await page.getByRole('button', { name: 'Войти', exact: true }).click();
     await expect(
-      page.getByRole('heading', { name: 'Командная доска' }),
+      page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
     ).toBeVisible();
 
     fixture(action);
@@ -127,7 +130,7 @@ for (const action of ['expire', 'revoke'] as const) {
       page.getByRole('heading', { name: 'Вход в BotFlow' }),
     ).toBeVisible();
     await expect(
-      page.getByRole('heading', { name: 'Командная доска' }),
+      page.getByRole('heading', { name: 'BotFlow', level: 2, exact: true }),
     ).toHaveCount(0);
     expect((await page.request.get('/api/v1/users/me')).status()).toBe(401);
   });

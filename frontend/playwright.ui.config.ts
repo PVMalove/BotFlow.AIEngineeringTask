@@ -7,6 +7,7 @@ export default defineConfig({
     'auth-ui.spec.ts',
     'admin-ui.spec.ts',
     'board-ui.spec.ts',
+    'task-status-ui.spec.ts',
   ],
   use: { baseURL: 'http://127.0.0.1:4174' },
   webServer: {

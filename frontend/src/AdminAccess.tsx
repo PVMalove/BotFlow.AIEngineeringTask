@@ -1,5 +1,6 @@
 import {
   Alert,
+  Avatar,
   Box,
   Button,
   Chip,
@@ -46,6 +47,29 @@ export function AdminAccess({
     queryFn: () => listAccess(list, page),
     retry: false,
   });
+  // Reuse the first page queries for each filter. The API has no total metadata yet.
+  const pendingCount = useQuery({
+    queryKey: [...key, 'pending', 0],
+    queryFn: () => listAccess('pending', 0),
+    retry: false,
+  });
+  const rejectedCount = useQuery({
+    queryKey: [...key, 'rejected', 0],
+    queryFn: () => listAccess('rejected', 0),
+    retry: false,
+  });
+  const memberCount = useQuery({
+    queryKey: [...key, 'members', 0],
+    queryFn: () => listAccess('members', 0),
+    retry: false,
+  });
+  const count = (query: typeof pendingCount) =>
+    query.isError
+      ? '?'
+      : query.data
+        ? String(query.data.length) +
+          (query.data.length === accessPageSize ? '+' : '')
+        : '…';
   const decision = useMutation({
     mutationFn: ({
       target,
@@ -119,6 +143,7 @@ export function AdminAccess({
         variant="scrollable"
         scrollButtons="auto"
         aria-label={messages.adminTitle}
+        title={messages.loadedCount}
         onChange={(_, value: AccessList) => {
           setList(value);
           setPage(0);
@@ -128,17 +153,17 @@ export function AdminAccess({
       >
         <Tab
           value="pending"
-          label={messages.joinRequests}
+          label={messages.joinRequests + ' (' + count(pendingCount) + ')'}
           disabled={decision.isPending}
         />
         <Tab
           value="rejected"
-          label={messages.rejectedRequests}
+          label={messages.rejectedRequests + ' (' + count(rejectedCount) + ')'}
           disabled={decision.isPending}
         />
         <Tab
           value="members"
-          label={messages.members}
+          label={messages.members + ' (' + count(memberCount) + ')'}
           disabled={decision.isPending}
         />
       </Tabs>
@@ -182,52 +207,87 @@ export function AdminAccess({
                 component="li"
                 variant="outlined"
                 key={target.id}
-                sx={{ p: { xs: 2, sm: 3 }, minWidth: 0 }}
+                sx={{ py: 2, px: { xs: 2, sm: 3 }, minWidth: 0 }}
               >
-                <Stack spacing={2}>
-                  <Box sx={{ overflowWrap: 'anywhere' }}>
-                    <Typography variant="h3">
-                      {target.display_name ?? messages.unnamedMember}
-                    </Typography>
-                    <Typography color="text.secondary">
-                      Telegram ID: {target.telegram_id}
-                    </Typography>
+                <Stack
+                  direction={{ xs: 'column', md: 'row' }}
+                  useFlexGap
+                  sx={{ gap: 1.5, alignItems: { md: 'center' } }}
+                >
+                  <Stack
+                    direction="row"
+                    spacing={2}
+                    sx={{ alignItems: 'center', minWidth: 0, flex: 1 }}
+                  >
+                    <Avatar
+                      aria-hidden="true"
+                      sx={{
+                        width: 44,
+                        height: 44,
+                        bgcolor: '#F4E8CD',
+                        color: 'text.primary',
+                        fontSize: 16,
+                      }}
+                    >
+                      {(target.display_name ?? '?').slice(0, 1)}
+                    </Avatar>
+                    <Box sx={{ overflowWrap: 'anywhere' }}>
+                      <Typography sx={{ fontWeight: 600, fontSize: 15 }}>
+                        {target.display_name ?? messages.unnamedMember}
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ fontSize: 12 }}
+                      >
+                        Telegram ID: {target.telegram_id}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {messages.requestedAt}:{' '}
+                        {dateFormat.format(new Date(target.created_at))}
+                      </Typography>
+                    </Box>
+                  </Stack>
+                  <Stack
+                    direction="row"
+                    useFlexGap
+                    sx={{ alignItems: 'center', flexWrap: 'wrap', gap: 1.5 }}
+                  >
                     <Typography variant="body2" color="text.secondary">
-                      {messages.requestedAt}:{' '}
-                      {dateFormat.format(new Date(target.created_at))}
-                    </Typography>
-                    <Typography variant="body2">
                       {target.role === 'admin'
                         ? messages.roleAdmin
                         : messages.roleUser}
                     </Typography>
-                  </Box>
-                  <Chip
-                    label={statuses[target.status]}
-                    sx={{
-                      alignSelf: 'flex-start',
-                      height: 'auto',
-                      '& .MuiChip-label': { whiteSpace: 'normal', py: 0.5 },
-                    }}
-                  />
-                  <Stack
-                    direction="row"
-                    useFlexGap
-                    sx={{ flexWrap: 'wrap', gap: 1 }}
-                  >
-                    {actions[target.status].map((action) => (
-                      <Button
-                        key={action}
-                        color={action === 'approve' ? 'primary' : 'secondary'}
-                        variant={
-                          action === 'approve' ? 'contained' : 'outlined'
-                        }
-                        disabled={busy || target.id === member.id}
-                        onClick={() => decision.mutate({ target, action })}
-                      >
-                        {labels[action]}
-                      </Button>
-                    ))}
+                    <Chip
+                      label={statuses[target.status]}
+                      sx={{
+                        bgcolor:
+                          target.status === 'approved' ? '#E8F2E9' : undefined,
+                        color:
+                          target.status === 'approved' ? '#2D6035' : undefined,
+                        height: 'auto',
+                        '& .MuiChip-label': { whiteSpace: 'normal', py: 0.5 },
+                      }}
+                    />
+                    <Stack
+                      direction="row"
+                      useFlexGap
+                      sx={{ flexWrap: 'wrap', gap: 1.5 }}
+                    >
+                      {actions[target.status].map((action) => (
+                        <Button
+                          key={action}
+                          color={action === 'approve' ? 'primary' : 'secondary'}
+                          variant={
+                            action === 'approve' ? 'contained' : 'outlined'
+                          }
+                          disabled={busy || target.id === member.id}
+                          onClick={() => decision.mutate({ target, action })}
+                        >
+                          {labels[action]}
+                        </Button>
+                      ))}
+                    </Stack>
                   </Stack>
                 </Stack>
               </Paper>

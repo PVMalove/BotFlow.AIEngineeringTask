@@ -12,7 +12,7 @@ import {
 } from '@mui/material';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { Link, Navigate, Route, Routes } from 'react-router';
+import { NavLink, Navigate, Route, Routes } from 'react-router';
 
 import { ApiError, exchangeCode, getCurrentMember, logout } from './api';
 import { Board } from './Board';
@@ -236,47 +236,90 @@ export function SessionRoutes({
         element={
           session.data ? (
             <>
-              <Container maxWidth="lg" sx={{ pt: 3 }}>
+              <Container
+                component="nav"
+                aria-label={messages.workspace}
+                maxWidth="lg"
+                sx={{ py: 1, borderBottom: 1, borderColor: 'divider' }}
+              >
                 <Stack
                   direction="row"
-                  spacing={2}
-                  sx={{ alignItems: 'center', justifyContent: 'space-between' }}
+                  useFlexGap
+                  sx={{
+                    flexWrap: 'wrap',
+                    gap: 1.5,
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                  }}
                 >
-                  <Typography>{session.data.telegram_id}</Typography>
-                  <Button
-                    color="secondary"
-                    onClick={() => signOut.mutate()}
-                    disabled={signOut.isPending}
+                  <Stack
+                    direction="row"
+                    useFlexGap
+                    sx={{ gap: { xs: 1, sm: 3 }, minWidth: 0 }}
                   >
-                    {messages.signOut}
-                  </Button>
+                    <Button
+                      component={NavLink}
+                      to="/"
+                      end
+                      color="secondary"
+                      sx={{
+                        px: 0,
+                        borderRadius: 0,
+                        fontWeight: 400,
+                        '&.active': {
+                          fontWeight: 600,
+                          borderBottom: '2px solid',
+                          borderColor: 'primary.main',
+                        },
+                      }}
+                    >
+                      {messages.board}
+                    </Button>
+                    {session.data.role === 'admin' && (
+                      <Button
+                        component={NavLink}
+                        to="/admin"
+                        color="secondary"
+                        sx={{
+                          px: 0,
+                          borderRadius: 0,
+                          fontWeight: 400,
+                          '&.active': {
+                            fontWeight: 600,
+                            borderBottom: '2px solid',
+                            borderColor: 'primary.main',
+                          },
+                        }}
+                      >
+                        {messages.adminTitle}
+                      </Button>
+                    )}
+                  </Stack>
+                  <Stack
+                    direction="row"
+                    spacing={1.5}
+                    sx={{ alignItems: 'center', minWidth: 0 }}
+                  >
+                    <Typography
+                      variant="body2"
+                      sx={{ overflowWrap: 'anywhere' }}
+                    >
+                      {session.data.display_name ?? messages.unnamedMember}
+                    </Typography>
+                    <Button
+                      color="secondary"
+                      onClick={() => signOut.mutate()}
+                      disabled={signOut.isPending}
+                    >
+                      {messages.signOut}
+                    </Button>
+                  </Stack>
                 </Stack>
                 {signOut.isError && (
                   <Alert severity="error">
                     {errorMessage(signOut.error, messages)}
                   </Alert>
                 )}
-              </Container>
-              <Container
-                component="nav"
-                aria-label={messages.workspace}
-                maxWidth="lg"
-                sx={{ pt: 2 }}
-              >
-                <Stack
-                  direction="row"
-                  useFlexGap
-                  sx={{ flexWrap: 'wrap', gap: 1 }}
-                >
-                  <Button component={Link} to="/" color="secondary">
-                    {messages.board}
-                  </Button>
-                  {session.data.role === 'admin' && (
-                    <Button component={Link} to="/admin" color="secondary">
-                      {messages.adminTitle}
-                    </Button>
-                  )}
-                </Stack>
               </Container>
               <Routes>
                 <Route

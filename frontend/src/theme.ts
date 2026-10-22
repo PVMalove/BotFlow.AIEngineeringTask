@@ -2,11 +2,11 @@ import { createTheme } from '@mui/material/styles';
 
 export const theme = createTheme({
   palette: {
-    primary: { main: '#DCAF46', dark: '#B78A25', contrastText: '#282525' },
-    secondary: { main: '#282525', contrastText: '#FFFFFF' },
-    background: { default: '#F6F5F2', paper: '#FFFFFF' },
-    text: { primary: '#282525', secondary: '#64615B' },
-    divider: '#E6E3DC',
+    primary: { main: '#D9A74A', dark: '#B78A25', contrastText: '#1F1E1C' },
+    secondary: { main: '#1F1E1C', contrastText: '#FFFFFF' },
+    background: { default: '#F6F4F0', paper: '#FFFFFF' },
+    text: { primary: '#1F1E1C', secondary: '#64615B' },
+    divider: '#EAE6DF',
   },
   typography: {
     fontFamily: 'Montserrat, "Noto Sans Armenian", sans-serif',
@@ -23,13 +23,22 @@ export const theme = createTheme({
     body2: { lineHeight: 1.7 },
     button: { textTransform: 'none', fontWeight: 600 },
   },
-  shape: { borderRadius: 16 },
+  shape: { borderRadius: 12 },
   components: {
+    MuiContainer: {
+      styleOverrides: { maxWidthLg: { maxWidth: '1200px !important' } },
+    },
+    MuiPaper: { defaultProps: { elevation: 0 } },
+    MuiTab: {
+      styleOverrides: {
+        root: { textTransform: 'none', '&.Mui-selected': { fontWeight: 600 } },
+      },
+    },
     MuiButtonBase: {
       styleOverrides: {
         root: {
           '&:focus-visible, &.Mui-focusVisible': {
-            outline: '3px solid #282525',
+            outline: '3px solid #1F1E1C',
             outlineOffset: '4px',
           },
         },
@@ -47,14 +56,14 @@ export const theme = createTheme({
         },
         'h1, h2, h3, p': { overflowWrap: 'anywhere' },
         ':focus-visible': {
-          outline: '3px solid #282525',
+          outline: '3px solid #1F1E1C',
           outlineOffset: '4px',
         },
         '.Mui-focusVisible': {
-          outline: '3px solid #282525',
+          outline: '3px solid #1F1E1C',
           outlineOffset: '4px',
         },
-        '::selection': { backgroundColor: '#F4E4BB', color: '#282525' },
+        '::selection': { backgroundColor: '#F4E4BB', color: '#1F1E1C' },
       },
     },
     MuiToggleButton: {
@@ -64,8 +73,8 @@ export const theme = createTheme({
           padding: '8px 14px',
           minHeight: 44,
           '&.Mui-selected': {
-            backgroundColor: '#DCAF46',
-            color: '#282525',
+            backgroundColor: '#D9A74A',
+            color: '#1F1E1C',
             '&:hover': { backgroundColor: '#E6BF61' },
           },
         },
