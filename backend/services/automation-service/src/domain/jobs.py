@@ -8,6 +8,7 @@ from uuid import UUID, uuid5
 # redelivered update addresses the same job and the same outbox row.
 _JOB_NAMESPACE = UUID("2c9d6f4e-5a0b-4b57-8e57-0e6f1b3a7d01")
 _OUTBOX_NAMESPACE = UUID("2c9d6f4e-5a0b-4b57-8e57-0e6f1b3a7d02")
+_RESULT_INTENT_NAMESPACE = UUID("2c9d6f4e-5a0b-4b57-8e57-0e6f1b3a7d03")
 
 
 class JobStatus(StrEnum):
@@ -30,3 +31,8 @@ def job_id_for(bot_id: int, chat_id: int, message_id: int) -> UUID:
 
 def outbox_id_for(job_id: UUID) -> UUID:
     return uuid5(_OUTBOX_NAMESPACE, str(job_id))
+
+
+def result_intent_id_for(job_id: UUID) -> UUID:
+    """One result notification per job, whichever message reports the result."""
+    return uuid5(_RESULT_INTENT_NAMESPACE, str(job_id))

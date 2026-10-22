@@ -23,6 +23,7 @@ class NotificationIntent:
     access_version: int
     status: IntentStatus = IntentStatus.PENDING
     attempts: int = 0
+    body: str | None = None  # the text of a result; decisions use fixed texts
 
 
 class Verdict(StrEnum):

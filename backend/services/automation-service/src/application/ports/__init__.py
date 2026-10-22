@@ -1,5 +1,6 @@
 """Boundaries used by the Telegram login and join commands."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -139,3 +140,32 @@ class JobStore(Protocol):
         ...
 
     async def mark_acked(self, job_id: UUID, at: datetime) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class JobSummary:
+    id: UUID
+    chat_id: int
+    author_id: UUID
+    text: str
+
+
+class ResultOutcome(StrEnum):
+    RECORDED = "recorded"
+    DUPLICATE = "duplicate"  # this result was already recorded
+    UNKNOWN_JOB = "unknown_job"  # no such job: the message can never work
+
+
+class TaskResultStore(Protocol):
+    async def record(
+        self,
+        message_id: str,
+        job_id: UUID,
+        task_id: UUID,
+        intent_for: Callable[[JobSummary], NotificationIntent],
+    ) -> ResultOutcome:
+        """Inbox, job completion and intent in ONE transaction.
+
+        A job that failed after its retries completes as well: a late result wins.
+        """
+        ...
