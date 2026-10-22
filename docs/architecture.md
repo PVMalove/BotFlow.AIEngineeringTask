@@ -99,7 +99,8 @@ expected_version; сравнение и UPDATE атомарны. Stale всег�
 
 ## Панель и realtime
 
-React SPA, Material UI, TanStack Query. Три колонки, явный переключатель статуса,
+React SPA, Material UI, TanStack Query. Три колонки, явный переключатель статуса и Drag & Drop между колонками на
+@dnd-kit/core через ту же mutation с expected_version,
 на узком экране вертикальное расположение. До 50 карточек/колонку, новая сверху,
 история через «Показать ещё». Reconnect, focus и периодический refresh раз
 в 30 секунд активной вкладки закрывают потерю Pub/Sub-сигнала. Сигнал во время

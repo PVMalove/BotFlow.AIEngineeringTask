@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 .secrets/
+/.local/whisper/
 *.pem
 *.key
 backups/
