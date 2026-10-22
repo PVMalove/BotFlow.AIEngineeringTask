@@ -4,12 +4,14 @@ from typing import Any
 
 import httpx
 import pytest
+from kernel_domain.result import Result
 
 from application.commands.handle_bot_command import (
     HandleBotCommand,
     HandleBotCommandDto,
 )
-from application.ports import IdentityUnavailable, JoinOutcome, TelegramMember
+from application.ports import IdentityUnavailable, TelegramMember
+from domain.value_objects.join_outcome import JoinOutcome
 
 ADMIN = 4_200_000_001
 CODE = "A" * 32
@@ -24,13 +26,13 @@ class Identity:
             raise self.failure
         return self.member
 
-    async def issue_login_code(self, telegram_id: int) -> str:
-        return CODE
+    async def issue_login_code(self, telegram_id: int) -> Result[str]:
+        return Result[str].ok(CODE)
 
     async def submit_join_request(
         self, telegram_id: int, display_name: str | None
-    ) -> JoinOutcome:
-        return JoinOutcome.SUBMITTED
+    ) -> Result[JoinOutcome]:
+        return Result[JoinOutcome].ok(JoinOutcome.SUBMITTED)
 
 
 class Messages:
@@ -137,10 +139,12 @@ async def test_http_gateway_uses_the_automation_key_for_member_lookup() -> None:
         return httpx.Response(
             200,
             json={
-                "telegram_id": ADMIN,
-                "role": "admin",
-                "status": "approved",
-                "access_version": 4,
+                "data": {
+                    "telegram_id": ADMIN,
+                    "role": "admin",
+                    "status": "approved",
+                    "access_version": 4,
+                }
             },
         )
 

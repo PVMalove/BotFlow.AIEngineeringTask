@@ -402,11 +402,11 @@ outbox TaskCreated. Идентификаторы задачи и результ�
 таймаут confirm) попытку не расходует (ADR-0007). После третьей ошибки в той же
 транзакции `on_exhausted` помечает задание `failed` с сохранённой ошибкой: слот
 свободен. Оператор повторяет исходное задание командой
-`python scripts/worker.py replay <job_id>`: у той же строки outbox (прежний id) сбрасываются
+`python -m api.worker replay <job_id>`: у той же строки outbox (прежний id) сбрасываются
 попытки, задание снова `accepted`. Поздний TaskCreated для `failed` задания допустим
 (`failed` → `completed`). При исчерпании попыток outbox публикации `TaskCreated` на стороне
 Tasks оператор повторяет отправку результата аналогичной командой Tasks worker:
-`python scripts/worker.py replay <job_id>`. Consumer (`QueueConsumer`) подтверждает сообщение только после
+`python -m api.worker replay <job_id>`. Consumer (`QueueConsumer`) подтверждает сообщение только после
 commit; при временной ошибке пауза с jitter и `nack(requeue=True)` без busy loop;
 невалидное сообщение — `reject(requeue=False)` без DLX (ADR-0021).
 
@@ -527,7 +527,7 @@ Whisper оставляют запись в stream без `XACK`: её забер
 файл), `unavailable` (временные ошибки исчерпаны), `text_too_long` (> 4096 символов,
 текст задачи не усекается), `failed`. Заблокированному автору итог подавляется
 прежним `delivery_verdict`. Оператор повторяет упавшее задание командой
-`python scripts/worker.py replay <job_id>`: запись снова `accepted`, читается из
+`python -m api.worker replay <job_id>`: запись снова `accepted`, читается из
 MinIO (если объект уже есть) или из Telegram, старое уведомление об ошибке удаляется.
 
 **Таймаут и перезапуск.** Decode идёт в daemon-потоке с таймаутом 120 с (вдвое больше

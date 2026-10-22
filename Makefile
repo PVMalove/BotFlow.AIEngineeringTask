@@ -123,7 +123,7 @@ setup: compose-check ## Поднять инфраструктуру и выпо�
 	$(COMPOSE) run --rm --no-deps automation-bootstrap
 
 bootstrap-admin: compose-check ## Явно назначить первоначального admin по INITIAL_ADMIN_TELEGRAM_ID
-	$(COMPOSE) run --rm identity-bootstrap python scripts/bootstrap.py admin
+	$(COMPOSE) run --rm identity-bootstrap python -m api.bootstrap admin
 
 run: compose-check ## Поднять HTTP-каркас; healthchecks проверяют liveness
 	$(COMPOSE) up -d --wait

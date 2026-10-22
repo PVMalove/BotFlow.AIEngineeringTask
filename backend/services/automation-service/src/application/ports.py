@@ -7,16 +7,10 @@ from enum import StrEnum
 from typing import Any, Protocol
 from uuid import UUID
 
+from kernel_domain.result import Result
+
 from domain.notifications import IntentStatus, NotificationIntent
-
-
-class JoinOutcome(StrEnum):
-    """Identity's answer to a join request; Automation never decides it."""
-
-    SUBMITTED = "submitted"
-    ALREADY_PENDING = "already_pending"
-    ALREADY_MEMBER = "already_member"
-    BLOCKED = "blocked"
+from domain.value_objects.join_outcome import JoinOutcome
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,14 +26,6 @@ class IdentityUnavailable(Exception):
     """The identity service cannot complete the operation."""
 
 
-class LoginDenied(Exception):
-    """The member is not approved."""
-
-
-class LoginRateLimited(Exception):
-    """The caller must wait before requesting another code."""
-
-
 class MemberDirectory(Protocol):
     async def find_member(self, telegram_id: int) -> TelegramMember | None: ...
 
@@ -47,11 +33,13 @@ class MemberDirectory(Protocol):
 class IdentityGateway(Protocol):
     async def find_member(self, telegram_id: int) -> TelegramMember | None: ...
 
-    async def issue_login_code(self, telegram_id: int) -> str: ...
+    async def issue_login_code(self, telegram_id: int) -> Result[str]:
+        """A denied or rate-limited request is an error; raises IdentityUnavailable."""
+        ...
 
     async def submit_join_request(
         self, telegram_id: int, display_name: str | None
-    ) -> JoinOutcome: ...
+    ) -> Result[JoinOutcome]: ...
 
 
 class Messenger(Protocol):

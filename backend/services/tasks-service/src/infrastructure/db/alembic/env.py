@@ -1,4 +1,4 @@
-"""Tasks migration environment; run through `scripts/bootstrap.py migrate`."""
+"""Tasks migration environment; run through `python -m api.bootstrap migrate`."""
 
 from kernel_platform.migrations import configure_environment
 from kernel_platform.settings import Settings

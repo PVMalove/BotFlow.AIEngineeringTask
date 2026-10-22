@@ -55,7 +55,8 @@ services:
       - "bootstrap"
     command:
       - "python"
-      - "scripts/bootstrap.py"
+      - "-m"
+      - "api.bootstrap"
       - "migrate"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
@@ -73,7 +74,8 @@ services:
       - "workers"
     command:
       - "python"
-      - "scripts/worker.py"
+      - "-m"
+      - "api.worker"
     restart: "unless-stopped"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
@@ -146,7 +148,8 @@ services:
       - "bootstrap"
     command:
       - "python"
-      - "scripts/bootstrap.py"
+      - "-m"
+      - "api.bootstrap"
       - "migrate"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
@@ -163,7 +166,8 @@ services:
       - "workers"
     command:
       - "python"
-      - "scripts/worker.py"
+      - "-m"
+      - "api.worker"
     restart: "unless-stopped"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
@@ -239,7 +243,8 @@ services:
       - "bootstrap"
     command:
       - "python"
-      - "scripts/bootstrap.py"
+      - "-m"
+      - "api.bootstrap"
       - "migrate"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
@@ -259,7 +264,8 @@ services:
       - "workers"
     command:
       - "python"
-      - "scripts/worker.py"
+      - "-m"
+      - "api.worker"
     restart: "unless-stopped"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
@@ -375,7 +381,8 @@ services:
       - "bot"
     command:
       - "python"
-      - "scripts/bot.py"
+      - "-m"
+      - "api.bot"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
       BOTFLOW_IDENTITY_URL: "http://identity-api:8000"
@@ -402,7 +409,8 @@ services:
       - "workers"
     command:
       - "python"
-      - "scripts/worker.py"
+      - "-m"
+      - "api.worker"
       - "transcription"
     restart: "unless-stopped"
     environment:

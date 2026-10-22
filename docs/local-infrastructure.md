@@ -177,7 +177,7 @@ ingress этого маршрута пока нет, поэтому до сре�
 
 ## Текстовый путь и Tasks (#9)
 
-`tasks-bootstrap` применяет миграции Tasks (`scripts/bootstrap.py migrate`).
+`tasks-bootstrap` применяет миграции Tasks (`python -m api.bootstrap migrate`).
 `tasks-worker` (БД, RabbitMQ, Redis) принимает CreateTask и переносит TaskCreated в
 RabbitMQ; `automation-worker` дополнительно переносит CreateTask из outbox Automation,
 принимает результат и создаёт уведомление. `tasks-api` обращается к `identity-api`
@@ -186,7 +186,7 @@ RabbitMQ; `automation-worker` дополнительно переносит Crea
 ```bash
 docker compose --profile bootstrap run --rm tasks-bootstrap
 docker compose --profile workers up -d identity-worker tasks-worker automation-worker
-docker compose --profile workers exec automation-worker python scripts/worker.py replay <job_id>
+docker compose --profile workers exec automation-worker python -m api.worker replay <job_id>
 ```
 
 Список и карточки доступны через ingress: `GET /api/v1/tasks`, `GET /api/v1/tasks/{id}`
@@ -211,7 +211,7 @@ make whisper-build                       # образ stt-runtime (нужна с
 make whisper-prepare WHISPER_MODEL=turbo # веса в том (единственный шаг с сетью)
 docker compose build whisper-worker
 docker compose --profile workers up -d automation-worker whisper-worker
-docker compose --profile workers exec automation-worker python scripts/worker.py replay <job_id>
+docker compose --profile workers exec automation-worker python -m api.worker replay <job_id>
 make voice-latency ARGS="--last 20"      # задержка update -> задача по данным Automation
 ```
 

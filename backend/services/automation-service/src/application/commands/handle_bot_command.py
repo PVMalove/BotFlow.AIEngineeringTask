@@ -2,15 +2,15 @@
 
 from dataclasses import dataclass
 
+from kernel_domain.errors import ErrorType
+
 from application.ports import (
     IdentityGateway,
     IdentityUnavailable,
-    JoinOutcome,
-    LoginDenied,
-    LoginRateLimited,
     Messenger,
     UpdateInbox,
 )
+from domain.value_objects.join_outcome import JoinOutcome
 
 _DENIED = "Доступ не предоставлен. Обратитесь к администратору."
 _JOIN_REPLIES = {
@@ -47,47 +47,31 @@ class HandleBotCommand:
         self._messenger = messenger
         self._inbox = inbox
 
-    async def execute(
-        self,
-        command: HandleBotCommandDto | None = None,
-        *,
-        update_id: int = 0,
-        telegram_id: int = 0,
-        chat_id: int = 0,
-        text: str = "",
-        private: bool = False,
-        display_name: str | None = None,
-    ) -> None:
-        if command is not None:
-            update_id = command.update_id
-            telegram_id = command.telegram_id
-            chat_id = command.chat_id
-            text = command.text
-            private = command.private
-            display_name = command.display_name
-
-        command_name = text.split(maxsplit=1)[0].split("@", 1)[0] if text else ""
-        if not private or command_name not in {"/start", "/login", "/join"}:
+    async def execute(self, command: HandleBotCommandDto) -> None:
+        command_name = (
+            command.text.split(maxsplit=1)[0].split("@", 1)[0] if command.text else ""
+        )
+        if not command.private or command_name not in {"/start", "/login", "/join"}:
             return
-        if not await self._inbox.claim(update_id):
+        if not await self._inbox.claim(command.update_id):
             return
         if command_name == "/join":
-            reply = await self._join(telegram_id, display_name)
+            reply = await self._join(command.telegram_id, command.display_name)
         else:
-            reply = await self._login(command_name, telegram_id)
-        await self._messenger.send(chat_id, reply)
+            reply = await self._login(command_name, command.telegram_id)
+        await self._messenger.send(command.chat_id, reply)
 
     async def _join(self, telegram_id: int, display_name: str | None) -> str:
         # Identity alone decides; the bot only relays the outcome.
         try:
-            outcome = await self._identity.submit_join_request(
-                telegram_id, display_name
-            )
-        except LoginRateLimited:
-            return "Слишком много запросов. Повторите /join через минуту."
-        except (IdentityUnavailable, LoginDenied):
+            joined = await self._identity.submit_join_request(telegram_id, display_name)
+        except IdentityUnavailable:
             return "Заявки временно недоступны. Повторите /join позже."
-        return _JOIN_REPLIES[outcome]
+        if joined.is_err:
+            if joined.error.type is ErrorType.RATE_LIMITED:
+                return "Слишком много запросов. Повторите /join через минуту."
+            return "Заявки временно недоступны. Повторите /join позже."
+        return _JOIN_REPLIES[joined.value]
 
     async def _login(self, command_name: str, telegram_id: int) -> str:
         try:
@@ -98,17 +82,14 @@ class HandleBotCommand:
                 if member.status in _START_HINTS:
                     return _START_HINTS[member.status]
             if member is None or member.status != "approved":
-                raise LoginDenied
+                return _DENIED
             if command_name == "/start":
                 return "Для входа в веб-панель отправьте /login."
-            code = await self._identity.issue_login_code(telegram_id)
-            return f"Код входа: {code}\nДействует 5 минут, только один раз."
-        except LoginDenied:
-            return _DENIED
-        except LoginRateLimited:
-            return "Слишком много запросов. Повторите /login через минуту."
+            issued = await self._identity.issue_login_code(telegram_id)
         except IdentityUnavailable:
             return "Вход временно недоступен. Повторите /login позже."
-
-
-__all__ = ["HandleBotCommand", "HandleBotCommandDto"]
+        if issued.is_err:
+            if issued.error.type is ErrorType.RATE_LIMITED:
+                return "Слишком много запросов. Повторите /login через минуту."
+            return _DENIED
+        return f"Код входа: {issued.value}\nДействует 5 минут, только один раз."

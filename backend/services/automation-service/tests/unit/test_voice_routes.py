@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 from aiogram import Bot
 from aiogram.types import Update
+from kernel_domain.result import Result
 
 from application.commands.accept_text import AcceptTextDto
 from application.commands.accept_voice import AcceptVoiceDto, AcceptVoiceMessage
@@ -57,8 +58,8 @@ class Identity:
     async def find_member(self, telegram_id: int) -> TelegramMember | None:
         return TelegramMember(USER, "member", "approved", 1, uuid4())
 
-    async def issue_login_code(self, telegram_id: int) -> str:
-        return "A" * 32
+    async def issue_login_code(self, telegram_id: int) -> Result[str]:
+        return Result[str].ok("A" * 32)
 
     async def submit_join_request(self, *args: Any) -> Any:
         raise AssertionError("not used")

@@ -22,7 +22,6 @@ RUN groupadd --gid 10001 botflow && useradd --uid 10001 --gid botflow --create-h
 WORKDIR /srv
 COPY --from=builder --chown=botflow:botflow /srv/.venv /srv/.venv
 COPY --chown=botflow:botflow services/tasks-service/src /srv/src
-COPY --chown=botflow:botflow services/tasks-service/scripts /srv/scripts
 ENV PYTHONPATH="/srv/src" PATH="/srv/.venv/bin:$PATH" PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 USER botflow
 EXPOSE 8000

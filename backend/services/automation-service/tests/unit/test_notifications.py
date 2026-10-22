@@ -5,6 +5,7 @@ from dataclasses import replace
 from uuid import UUID, uuid4
 
 import pytest
+from kernel_domain.result import Result
 
 from application.commands.deliver_notification import (
     MAX_ATTEMPTS,
@@ -25,6 +26,7 @@ from domain.notifications import (
     Verdict,
     delivery_verdict,
 )
+from domain.value_objects.join_outcome import JoinOutcome
 
 USER = 7_000_000_001
 MEMBER_ID = uuid4()
@@ -251,10 +253,12 @@ class Identity:
             raise self.failure
         return self.member
 
-    async def issue_login_code(self, telegram_id: int) -> str:
+    async def issue_login_code(self, telegram_id: int) -> Result[str]:
         raise AssertionError("notifications never issue codes")
 
-    async def submit_join_request(self, telegram_id: int, display_name: str | None):  # type: ignore[no-untyped-def]
+    async def submit_join_request(
+        self, telegram_id: int, display_name: str | None
+    ) -> Result[JoinOutcome]:
         raise AssertionError("notifications never create requests")
 
 
