@@ -15,6 +15,7 @@ class ErrorType(Enum):
     CONFLICT = "CONFLICT"
     FORBIDDEN = "FORBIDDEN"
     UNAUTHORIZED = "UNAUTHORIZED"
+    RATE_LIMITED = "RATE_LIMITED"
     PROBLEM = "PROBLEM"
     FAILURE = "FAILURE"
 
@@ -91,6 +92,17 @@ class Error:
         Пример: Error.unauthorized("invalid_token", "Токен доступа недействителен")
         """
         return cls(code=code, description=description, type=ErrorType.UNAUTHORIZED)
+
+    @classmethod
+    def rate_limited(cls, code: str, description: str) -> "Error":
+        """
+        Создаёт объект Error, указывающий, что превышен лимит попыток.
+
+        Используется, когда клиент слишком часто повторяет операцию.
+        Соответствует HTTP 429 (Too Many Requests).
+        Пример: Error.rate_limited("rate_limited", "Слишком много попыток")
+        """
+        return cls(code=code, description=description, type=ErrorType.RATE_LIMITED)
 
     @classmethod
     def problem(cls, code: str, description: str) -> "Error":

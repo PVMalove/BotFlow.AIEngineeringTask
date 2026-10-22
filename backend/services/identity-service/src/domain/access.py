@@ -6,7 +6,10 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
+from kernel_domain.result import Result
+
 from domain.entities.auth import Member, MemberStatus, Role
+from domain.errors import IdentityErrors
 
 
 class JoinOutcome(StrEnum):
@@ -21,31 +24,6 @@ class Action(StrEnum):
     REJECT = "reject"
     BLOCK = "block"
     UNBLOCK = "unblock"
-
-
-class AccessError(Exception):
-    """Base class of expected access-decision failures."""
-
-
-class MemberNotFound(AccessError): ...
-
-
-class AdminRequired(AccessError):
-    """The actor's current role is not admin."""
-
-
-class VersionConflict(AccessError):
-    """The member changed since the admin looked at it."""
-
-
-class InvalidTransition(AccessError): ...
-
-
-class CannotBlockSelf(AccessError): ...
-
-
-class LastAdmin(AccessError):
-    """Blocking would leave no approved admin."""
 
 
 # status a decision leads to; a member already there makes the repeat a no-op
@@ -78,33 +56,36 @@ def decide(
     approved_admins: int,
     expected_version: int,
     now: datetime,
-) -> Decision:
+) -> Result[Decision]:
     """Pure decision table; `approved_admins` counts inside the decision lock."""
     result = RESULT[action]
     if target.status is result:
-        return Decision(target, changed=False)  # a repeat has no new effect
+        # a repeat has no new effect
+        return Result[Decision].ok(Decision(target, changed=False))
     if target.access_version != expected_version:
-        raise VersionConflict
+        return Result[Decision].fail(IdentityErrors.version_conflict())
     if target.status not in ALLOWED_FROM[action]:
-        raise InvalidTransition
+        return Result[Decision].fail(IdentityErrors.invalid_transition())
     if action is Action.BLOCK:
         if target.id == actor_id:
-            raise CannotBlockSelf
+            return Result[Decision].fail(IdentityErrors.cannot_block_self())
         if (
             target.role is Role.ADMIN
             and target.status is MemberStatus.APPROVED
             and approved_admins <= 1
         ):
-            raise LastAdmin
-    return Decision(
-        replace(
-            target,
-            status=result,
-            access_version=target.access_version + 1,
-            status_changed_at=now,
-            decided_by=actor_id,
-        ),
-        changed=True,
+            return Result[Decision].fail(IdentityErrors.last_admin())
+    return Result[Decision].ok(
+        Decision(
+            replace(
+                target,
+                status=result,
+                access_version=target.access_version + 1,
+                status_changed_at=now,
+                decided_by=actor_id,
+            ),
+            changed=True,
+        )
     )
 
 

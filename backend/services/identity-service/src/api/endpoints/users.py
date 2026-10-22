@@ -1,36 +1,28 @@
 """User and member profile endpoints."""
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Response
+from kernel_platform.http import ApiResponse
 
-from api.dependencies import AuthenticateSessionDI
-from api.security import SESSION_COOKIE
-from application.queries.members import AuthenticateSessionQuery, member_view
+from api.dependencies import RequiredAuth
 from contracts.views import MemberView
-from domain.entities.auth import InvalidSession
 
 router = APIRouter(prefix="/api/v1/users", tags=["users"])
 
 
 @router.get(
     "/me",
-    response_model=MemberView,
+    response_model=ApiResponse[MemberView],
     summary="Получение профиля текущего участника",
     description=(
         "Возвращает данные текущего авторизованного участника по сессионной cookie."
     ),
 )
 async def current_member(
-    request: Request,
-    response: Response,
-    handler: AuthenticateSessionDI,
-) -> MemberView:
+    current: RequiredAuth, response: Response
+) -> ApiResponse[MemberView]:
     """Получить профиль текущего участника из активной сессии."""
-    token = request.cookies.get(SESSION_COOKIE)
-    if not token:
-        raise InvalidSession
-    current = await handler.execute(AuthenticateSessionQuery(token=token))
     response.headers["Cache-Control"] = "no-store"
-    return member_view(current.member)
+    return ApiResponse(data=MemberView.from_domain(current.member))
 
 
 __all__ = ["router"]

@@ -18,26 +18,6 @@ class MemberStatus(StrEnum):
     BLOCKED = "blocked"
 
 
-class AuthError(Exception):
-    """Base class of expected authentication failures."""
-
-
-class InvalidLoginCode(AuthError):
-    """Unknown, malformed, expired, cancelled or already used code."""
-
-
-class InvalidSession(AuthError):
-    """Missing, forged, expired or revoked session, or a member who lost access."""
-
-
-class MemberNotApproved(AuthError):
-    """The Telegram identity has no approved membership."""
-
-
-class RateLimited(AuthError):
-    """Too many attempts in the current window."""
-
-
 @dataclass(frozen=True, slots=True)
 class Member:
     id: UUID

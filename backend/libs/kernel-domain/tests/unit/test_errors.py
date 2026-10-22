@@ -4,13 +4,14 @@ import pytest
 from kernel_domain.errors import Error, ErrorType
 
 
-def test_error_type_has_exactly_the_seven_values() -> None:
+def test_error_type_has_exactly_the_eight_values() -> None:
     assert {member.name for member in ErrorType} == {
         "VALIDATION",
         "NOT_FOUND",
         "CONFLICT",
         "FORBIDDEN",
         "UNAUTHORIZED",
+        "RATE_LIMITED",
         "PROBLEM",
         "FAILURE",
     }
@@ -47,6 +48,7 @@ def test_error_carries_an_optional_invalid_field() -> None:
         ("conflict", ErrorType.CONFLICT),
         ("forbidden", ErrorType.FORBIDDEN),
         ("unauthorized", ErrorType.UNAUTHORIZED),
+        ("rate_limited", ErrorType.RATE_LIMITED),
         ("problem", ErrorType.PROBLEM),
         ("failure", ErrorType.FAILURE),
     ],

@@ -8,18 +8,12 @@ from dataclasses import dataclass
 from datetime import timedelta
 from uuid import UUID, uuid4
 
+from kernel_domain.result import Result
+
 from application.ports import Clock, RateLimiter, TokenService, UnitOfWorkFactory
 from contracts.views import LoginCodeView
-from domain.entities.auth import (
-    AuthSession,
-    InvalidLoginCode,
-    LoginCode,
-    Member,
-    MemberNotApproved,
-    MemberStatus,
-    RateLimited,
-    Role,
-)
+from domain.entities.auth import AuthSession, LoginCode, Member, MemberStatus, Role
+from domain.errors import IdentityErrors
 
 LOGIN_CODE_TTL = timedelta(minutes=5)
 SESSION_TTL = timedelta(hours=8)
@@ -93,18 +87,14 @@ class IssueLoginCode:
         self._generate_code = generate_code
         self._attempts = attempts_per_minute
 
-    async def execute(self, command: IssueLoginCodeCommand | int) -> LoginCodeView:
-        telegram_id = (
-            command.telegram_id
-            if isinstance(command, IssueLoginCodeCommand)
-            else command
-        )
+    async def execute(self, command: IssueLoginCodeCommand) -> Result[LoginCodeView]:
+        telegram_id = command.telegram_id
         if not await self._limiter.allow(f"issue:{telegram_id}", self._attempts, 60):
-            raise RateLimited
+            return Result[LoginCodeView].fail(IdentityErrors.rate_limited())
         async with self._uow_factory() as uow:
             member = await uow.members.get_by_telegram_id(telegram_id, lock=True)
             if member is None or member.status is not MemberStatus.APPROVED:
-                raise MemberNotApproved
+                return Result[LoginCodeView].fail(IdentityErrors.member_not_approved())
             now = self._clock()
             code = self._generate_code()
             await uow.login_codes.cancel_active(member.id, now)
@@ -118,7 +108,9 @@ class IssueLoginCode:
                 )
             )
             await uow.commit()
-        return LoginCodeView(code=code, expires_at=now + LOGIN_CODE_TTL)
+        return Result[LoginCodeView].ok(
+            LoginCodeView(code=code, expires_at=now + LOGIN_CODE_TTL)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,22 +145,14 @@ class ExchangeLoginCode:
         self._tokens = tokens
         self._attempts = attempts_per_minute
 
-    async def execute(
-        self,
-        command: ExchangeLoginCodeCommand | str,
-        *,
-        client: str | None = None,
-    ) -> SessionGrant:
-        if isinstance(command, ExchangeLoginCodeCommand):
-            code = command.code
-            client_str = command.client
-        else:
-            code = command
-            client_str = client or "unknown"
-        if not await self._limiter.allow(f"exchange:{client_str}", self._attempts, 60):
-            raise RateLimited
+    async def execute(self, command: ExchangeLoginCodeCommand) -> Result[SessionGrant]:
+        code = command.code
+        if not await self._limiter.allow(
+            f"exchange:{command.client}", self._attempts, 60
+        ):
+            return Result[SessionGrant].fail(IdentityErrors.rate_limited())
         if not _CODE_PATTERN.fullmatch(code):
-            raise InvalidLoginCode
+            return Result[SessionGrant].fail(IdentityErrors.invalid_login_code())
         async with self._uow_factory() as uow:
             now = self._clock()
             code_hash = hash_login_code(code)
@@ -176,12 +160,12 @@ class ExchangeLoginCode:
             # be created concurrently with a block that would have revoked it.
             member = await uow.members.get_by_login_code(code_hash, lock=True)
             if member is None:
-                raise InvalidLoginCode
+                return Result[SessionGrant].fail(IdentityErrors.invalid_login_code())
             if await uow.login_codes.consume(code_hash, now) is None:
-                raise InvalidLoginCode
+                return Result[SessionGrant].fail(IdentityErrors.invalid_login_code())
             if member.status is not MemberStatus.APPROVED:
                 await uow.commit()  # the code is spent either way
-                raise InvalidLoginCode
+                return Result[SessionGrant].fail(IdentityErrors.invalid_login_code())
             session = AuthSession(
                 id=uuid4(),
                 member_id=member.id,
@@ -190,8 +174,10 @@ class ExchangeLoginCode:
             )
             await uow.sessions.add(session)
             await uow.commit()
-        return SessionGrant(
-            session=session, member=member, token=self._tokens.issue(session)
+        return Result[SessionGrant].ok(
+            SessionGrant(
+                session=session, member=member, token=self._tokens.issue(session)
+            )
         )
 
 
@@ -209,12 +195,9 @@ class Logout:
         self._uow_factory = uow_factory
         self._clock = clock
 
-    async def execute(self, command: LogoutCommand | UUID) -> None:
-        session_id = (
-            command.session_id if isinstance(command, LogoutCommand) else command
-        )
+    async def execute(self, command: LogoutCommand) -> None:
         async with self._uow_factory() as uow:
-            await uow.sessions.revoke(session_id, self._clock())
+            await uow.sessions.revoke(command.session_id, self._clock())
             await uow.commit()
 
 

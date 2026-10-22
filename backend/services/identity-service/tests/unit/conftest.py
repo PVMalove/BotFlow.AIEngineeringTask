@@ -8,11 +8,13 @@ from types import TracebackType
 from typing import Self
 from uuid import UUID
 
+from kernel_domain.result import Result
+
 from application.ports import TokenClaims
 from domain.access import OutboxEntry
+from domain.errors import IdentityErrors
 from domain.entities.auth import (
     AuthSession,
-    InvalidSession,
     LoginCode,
     Member,
     MemberStatus,
@@ -229,11 +231,11 @@ class FakeTokens:
         self.issued[token] = TokenClaims(session.id, session.member_id)
         return token
 
-    def verify(self, token: str) -> TokenClaims:
-        try:
-            return self.issued[token]
-        except KeyError:
-            raise InvalidSession from None
+    def verify(self, token: str) -> Result[TokenClaims]:
+        claims = self.issued.get(token)
+        if claims is None:
+            return Result[TokenClaims].fail(IdentityErrors.invalid_session())
+        return Result[TokenClaims].ok(claims)
 
 
 class Clock:

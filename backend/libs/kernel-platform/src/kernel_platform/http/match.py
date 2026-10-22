@@ -1,5 +1,6 @@
 """Общее разворачивание доменного `Result` в HTTP-ответ (ADR 0002/0003)."""
 
+from kernel_domain.errors import ErrorType
 from kernel_domain.result import Result
 
 from kernel_platform.http.envelope import ApiResponse
@@ -19,6 +20,9 @@ def _raise_for_error[T](result: Result[T]) -> None:
             code=error.code,
             message=error.description,
             details=details_for_error(error),
+            headers=(
+                {"Retry-After": "60"} if error.type is ErrorType.RATE_LIMITED else None
+            ),
         )
 
 

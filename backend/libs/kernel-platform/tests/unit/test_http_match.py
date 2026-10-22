@@ -105,3 +105,14 @@ def test_match_page_raises_api_error_with_the_mapped_status_and_domain_code() ->
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.code == "invalid_cursor"
+
+
+def test_a_rate_limited_error_is_429_with_retry_after() -> None:
+    result = Result[str].fail(Error.rate_limited("rate_limited", "Слишком часто"))
+
+    with pytest.raises(ApiError) as raised:
+        match_result(result)
+
+    assert raised.value.status_code == 429
+    assert raised.value.code == "rate_limited"
+    assert raised.value.headers == {"Retry-After": "60"}

@@ -10,6 +10,7 @@ _STATUS_BY_ERROR_TYPE: dict[ErrorType, int] = {
     ErrorType.CONFLICT: 409,
     ErrorType.FORBIDDEN: 403,
     ErrorType.UNAUTHORIZED: 401,
+    ErrorType.RATE_LIMITED: 429,
     ErrorType.PROBLEM: 400,
     ErrorType.FAILURE: 500,
 }

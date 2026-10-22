@@ -6,6 +6,8 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
+from kernel_domain.result import Result
+
 from domain.access import OutboxEntry
 from domain.entities.auth import AuthSession
 from domain.unit_of_work import UnitOfWork
@@ -32,8 +34,8 @@ class TokenClaims:
 class TokenService(Protocol):
     def issue(self, session: AuthSession) -> str: ...
 
-    def verify(self, token: str) -> TokenClaims:
-        """Check signature, issuer, audience and lifetime; else InvalidSession."""
+    def verify(self, token: str) -> Result[TokenClaims]:
+        """Check signature, issuer, audience and lifetime; else an invalid session."""
         ...
 
 

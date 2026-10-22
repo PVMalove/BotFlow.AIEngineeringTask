@@ -1,13 +1,19 @@
 """API request schemas for identity service."""
 
+from typing import Literal
+from uuid import UUID
+
 from pydantic import BaseModel, Field
 
+from application.commands.access import DecideMemberCommand
 from application.commands.auth import (
     ExchangeLoginCodeCommand,
     IssueLoginCodeCommand,
 )
 from application.commands.join import SubmitJoinRequestCommand
-from application.queries.members import FindMemberByTelegramQuery
+from application.queries.members import FindMemberByTelegramQuery, ListMembersQuery
+from domain.access import Action
+from domain.entities.auth import MemberStatus
 
 
 class ExchangeRequest(BaseModel):
@@ -74,6 +80,45 @@ class DecisionBody(BaseModel):
         description="access_version участника в момент просмотра",
     )
 
+    def to_command(
+        self, actor_id: UUID, member_id: UUID, action: Action
+    ) -> DecideMemberCommand:
+        return DecideMemberCommand(
+            actor_id=actor_id,
+            member_id=member_id,
+            action=action,
+            expected_version=self.expected_version,
+        )
+
+
+class JoinRequestsListRequest(BaseModel):
+    """Страница заявок: ожидающие или отклонённые."""
+
+    status: Literal["pending", "rejected"] = Field(
+        "pending", description="pending|rejected"
+    )
+    limit: int = Field(50, ge=1, le=100)
+    offset: int = Field(0, ge=0)
+
+    def to_query(self) -> ListMembersQuery:
+        return ListMembersQuery((MemberStatus(self.status),), self.limit, self.offset)
+
+
+class MembersListRequest(BaseModel):
+    """Страница участников; без status — допущенные и заблокированные."""
+
+    status: MemberStatus | None = None
+    limit: int = Field(50, ge=1, le=100)
+    offset: int = Field(0, ge=0)
+
+    def to_query(self) -> ListMembersQuery:
+        statuses = (
+            (self.status,)
+            if self.status
+            else (MemberStatus.APPROVED, MemberStatus.BLOCKED)
+        )
+        return ListMembersQuery(statuses, self.limit, self.offset)
+
 
 __all__ = [
     "DecisionBody",
@@ -81,4 +126,6 @@ __all__ = [
     "FindMemberRequest",
     "IssueCodeRequest",
     "JoinRequestBody",
+    "JoinRequestsListRequest",
+    "MembersListRequest",
 ]

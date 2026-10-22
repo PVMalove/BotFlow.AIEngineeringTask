@@ -3,9 +3,13 @@
 from dataclasses import dataclass, replace
 from uuid import uuid4
 
+from kernel_domain.result import Result
+
 from application.ports import Clock, RateLimiter, UnitOfWorkFactory
+from contracts.views import JoinRequestView, MemberView
 from domain.access import JoinOutcome
-from domain.entities.auth import Member, MemberStatus, RateLimited, Role
+from domain.entities.auth import Member, MemberStatus, Role
+from domain.errors import IdentityErrors
 
 
 @dataclass(frozen=True, slots=True)
@@ -16,10 +20,10 @@ class SubmitJoinRequestCommand:
     display_name: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
-class JoinResult:
-    outcome: JoinOutcome
-    member: Member
+def _joined(outcome: JoinOutcome, member: Member) -> Result[JoinRequestView]:
+    return Result[JoinRequestView].ok(
+        JoinRequestView(outcome=outcome.value, member=MemberView.from_domain(member))
+    )
 
 
 class SubmitJoinRequest:
@@ -35,10 +39,12 @@ class SubmitJoinRequest:
         self._clock = clock
         self._attempts = attempts_per_minute
 
-    async def execute(self, command: SubmitJoinRequestCommand) -> JoinResult:
+    async def execute(
+        self, command: SubmitJoinRequestCommand
+    ) -> Result[JoinRequestView]:
         telegram_id = command.telegram_id
         if not await self._limiter.allow(f"join:{telegram_id}", self._attempts, 60):
-            raise RateLimited
+            return Result[JoinRequestView].fail(IdentityErrors.rate_limited())
         now = self._clock()
         async with self._uow_factory() as uow:
             member = await uow.members.get_by_telegram_id(telegram_id, lock=True)
@@ -54,7 +60,7 @@ class SubmitJoinRequest:
                 )
                 if await uow.members.add_if_absent(created):
                     await uow.commit()
-                    return JoinResult(JoinOutcome.SUBMITTED, created)
+                    return _joined(JoinOutcome.SUBMITTED, created)
                 # A concurrent first request won; answer from its committed row.
                 member = await uow.members.get_by_telegram_id(telegram_id, lock=True)
                 assert member is not None
@@ -72,10 +78,10 @@ class SubmitJoinRequest:
                 ):
                     raise RuntimeError("Member changed under its row lock.")
                 await uow.commit()
-                return JoinResult(JoinOutcome.SUBMITTED, reopened)
+                return _joined(JoinOutcome.SUBMITTED, reopened)
         outcome = {
             MemberStatus.PENDING: JoinOutcome.ALREADY_PENDING,
             MemberStatus.APPROVED: JoinOutcome.ALREADY_MEMBER,
             MemberStatus.BLOCKED: JoinOutcome.BLOCKED,
         }[member.status]
-        return JoinResult(outcome, member)
+        return _joined(outcome, member)
