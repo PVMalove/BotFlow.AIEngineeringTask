@@ -3,9 +3,9 @@
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from botflow_platform.resources import Resources, open_database, open_resources
-from botflow_platform.settings import Settings
 from dependency_injector import containers, providers
+from kernel_platform.resources import Resources, open_database, open_resources
+from kernel_platform.settings import Settings
 
 from api.security import CookiePolicy, Operation, ServiceKeys
 from application.commands.access import DecideMember

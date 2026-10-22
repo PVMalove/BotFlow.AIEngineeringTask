@@ -25,15 +25,15 @@ from application.commands.accept_text import ACK, AcceptTextDto, AcceptTextMessa
 from application.commands.handle_bot_command import HandleBotCommandDto
 from application.commands.process_task_result import ProcessTaskResult
 from application.ports import AcceptOutcome, NewJob, OutboxMessage
-from botflow_platform.messaging import (
+from kernel_platform.messaging import (
     TASK_CREATE_ROUTING_KEY,
     ConfirmedPublisher,
     declare_task_topology,
 )
-from botflow_platform.outbox import RelayOutbox, sql_transactions
-from botflow_platform.resources import open_database, open_resources
-from botflow_platform.retry import RetryPolicy
-from botflow_platform.settings import Settings
+from kernel_platform.outbox import RelayOutbox, sql_transactions
+from kernel_platform.resources import open_database, open_resources
+from kernel_platform.retry import RetryPolicy
+from kernel_platform.settings import Settings
 from domain.jobs import job_id_for, outbox_id_for
 from infrastructure.db.jobs import SqlJobStore, outbox
 from infrastructure.db.results import SqlTaskResultStore, fail_job, replay_job

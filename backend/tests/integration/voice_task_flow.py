@@ -50,11 +50,11 @@ from application.ports import (
     Transcript,
     TranscriptionTimeout,
 )
-from botflow_platform.messaging import declare_task_topology
-from botflow_platform.resources import open_database, open_resources
-from botflow_platform.retry import RetryPolicy
-from botflow_platform.settings import Settings
-from botflow_platform.streams import RedisStream
+from kernel_platform.messaging import declare_task_topology
+from kernel_platform.resources import open_database, open_resources
+from kernel_platform.retry import RetryPolicy
+from kernel_platform.settings import Settings
+from kernel_platform.streams import RedisStream
 from domain.jobs import job_id_for, outbox_id_for
 from infrastructure.db.jobs import SqlJobStore
 from infrastructure.db.results import SqlTaskResultStore

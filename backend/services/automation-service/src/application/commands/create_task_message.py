@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from botflow_platform.messaging import TASK_CREATE_ROUTING_KEY
+from kernel_platform.messaging import TASK_CREATE_ROUTING_KEY
 
 from application.ports import OutboxMessage
 from domain.jobs import outbox_id_for

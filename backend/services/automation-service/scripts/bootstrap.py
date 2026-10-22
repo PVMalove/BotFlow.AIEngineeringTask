@@ -4,8 +4,8 @@ import argparse
 import asyncio
 from pathlib import Path
 
-from botflow_platform.migrations import run_migrations
-from botflow_platform.resources import open_s3
+from kernel_platform.migrations import run_migrations
+from kernel_platform.resources import open_s3
 
 import infrastructure.db as db_package
 from api.containers import Container

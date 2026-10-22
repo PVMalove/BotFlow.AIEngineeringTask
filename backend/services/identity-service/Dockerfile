@@ -4,12 +4,14 @@ COPY --from=uv /uv /usr/local/bin/uv
 WORKDIR /srv
 ENV UV_LINK_MODE=copy UV_COMPILE_BYTECODE=1
 COPY pyproject.toml uv.lock ./
-COPY libs/platform/pyproject.toml libs/platform/pyproject.toml
+COPY libs/kernel-domain/pyproject.toml libs/kernel-domain/pyproject.toml
+COPY libs/kernel-platform/pyproject.toml libs/kernel-platform/pyproject.toml
 COPY services/identity-service/pyproject.toml services/identity-service/pyproject.toml
 COPY services/tasks-service/pyproject.toml services/tasks-service/pyproject.toml
 COPY services/automation-service/pyproject.toml services/automation-service/pyproject.toml
 RUN uv sync --locked --package identity-service --no-dev --no-install-workspace
-COPY libs/platform/src libs/platform/src
+COPY libs/kernel-domain/src libs/kernel-domain/src
+COPY libs/kernel-platform/src libs/kernel-platform/src
 RUN uv sync --locked --package identity-service --no-dev --no-editable
 
 FROM python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70 AS runtime

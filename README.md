@@ -122,7 +122,7 @@ BotFlow.AIEngineeringTask/
     ├── Makefile
     ├── pyproject.toml                  # uv workspace
     ├── uv.lock
-    ├── libs/platform/                 # общие технические адаптеры, не бизнес-модели
+    ├── libs/kernel-platform/                 # общие технические адаптеры, не бизнес-модели
     └── services/
         ├── identity-service/
         ├── tasks-service/

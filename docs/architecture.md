@@ -395,7 +395,7 @@ outbox TaskCreated. Идентификаторы задачи и результ�
 другой `message_id` с тем же источником не создаёт ни второй задачи, ни второго
 результата. Ack — только после commit.
 
-**Retry, ошибка, replay.** `RelayOutbox` (`botflow_platform.outbox`) берёт готовые строки
+**Retry, ошибка, replay.** `RelayOutbox` (`kernel_platform.outbox`) берёт готовые строки
 `FOR UPDATE SKIP LOCKED`, публикует с confirm и пишет исход в той же транзакции:
 `attempts`, `next_attempt_at`, `last_error` (только имя класса исключения). До трёх
 попыток с паузами 5 и 30 с ±20 %. Недоступность брокера (ошибки соединения,

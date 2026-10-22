@@ -6,8 +6,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from botflow_platform.consumer import InvalidMessage
-from botflow_platform.messaging import TASK_CREATED_ROUTING_KEY
+from kernel_platform.consumer import InvalidMessage
+from kernel_platform.messaging import TASK_CREATED_ROUTING_KEY
 
 from application.ports import NewTask, TaskCommandStore, TaskCreatedMessage
 from domain.tasks import created_message_id_for, source_key, task_id_for

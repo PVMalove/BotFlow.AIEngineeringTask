@@ -6,12 +6,12 @@ from dataclasses import dataclass
 
 import httpx
 from aio_pika.abc import AbstractChannel, AbstractQueue
-from botflow_platform.consumer import QueueConsumer
-from botflow_platform.messaging import ConfirmedPublisher, declare_task_topology
-from botflow_platform.outbox import RelayOutbox, SqlOutboxTx, sql_transactions
-from botflow_platform.resources import Resources, open_resources
-from botflow_platform.settings import Settings
 from dependency_injector import containers, providers
+from kernel_platform.consumer import QueueConsumer
+from kernel_platform.messaging import ConfirmedPublisher, declare_task_topology
+from kernel_platform.outbox import RelayOutbox, SqlOutboxTx, sql_transactions
+from kernel_platform.resources import Resources, open_resources
+from kernel_platform.settings import Settings
 
 from application.commands.change_task_status import ChangeTaskStatus
 from application.commands.create_task import CreateTaskFromCommand

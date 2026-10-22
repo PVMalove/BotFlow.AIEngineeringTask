@@ -2,9 +2,9 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from botflow_platform.http import create_app
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
+from kernel_platform.http import create_app
 from sqlalchemy.exc import DBAPIError, TimeoutError
 
 from api.containers import Container

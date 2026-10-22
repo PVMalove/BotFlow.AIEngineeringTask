@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from botflow_platform.consumer import InvalidMessage
+from kernel_platform.consumer import InvalidMessage
 
 from application.commands.deliver_notification import DeliverNotification, Delivery
 from application.commands.process_task_result import ProcessTaskResult

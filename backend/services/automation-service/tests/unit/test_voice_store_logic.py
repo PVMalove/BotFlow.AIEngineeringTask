@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
-from botflow_platform.outbox import OutboxRow
+from kernel_platform.outbox import OutboxRow
 from sqlalchemy.dialects import postgresql
 
 from application.ports import OutboxMessage, Transcript, VoiceStore, VoiceWork

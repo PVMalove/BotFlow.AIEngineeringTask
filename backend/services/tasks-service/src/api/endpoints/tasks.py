@@ -3,8 +3,8 @@
 from typing import Annotated
 from uuid import UUID
 
-from botflow_platform.http import ApiResponse
 from fastapi import APIRouter, Depends, Query, Request, Response
+from kernel_platform.http import ApiResponse
 
 from api.dependencies import ServicesDI
 from api.security import require_same_origin

@@ -1,6 +1,6 @@
 # Локальная инфраструктура и проверки #2
 
-Общие технические адаптеры находятся в `botflow_platform.resources`. У каждого
+Общие технические адаптеры находятся в `kernel_platform.resources`. У каждого
 сервиса свой `src/api/containers.py` с `Container`: при старте HTTP-процесса
 открываются его PostgreSQL и RabbitMQ, у Tasks/Automation также Redis, у Automation — S3-клиент. FastAPI
 lifespan и `providers.Resource` закрывают их при остановке. `AsyncExitStack`
@@ -35,7 +35,7 @@ bot находятся в `scripts/`; bootstrap всех трёх сервисо
 зависимости, но не смешивает одноимённые пакеты `api`, `domain` и другие слои в
 `site-packages`. Проверки каждого сервиса выполняются отдельным процессом из
 его каталога; pytest и mypy получают только его `src`. Общая техническая
-библиотека по-прежнему устанавливается как `botflow_platform`.
+библиотека по-прежнему устанавливается как `kernel_platform`.
 
 Docker-образ копирует только исходники выбранного сервиса в `/srv/src`, задаёт
 `PYTHONPATH=/srv/src` и запускает `uvicorn api.main:app`. Smoke использует

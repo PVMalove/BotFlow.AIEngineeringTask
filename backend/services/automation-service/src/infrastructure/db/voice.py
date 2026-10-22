@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from botflow_platform.outbox import OutboxRow, SqlOutboxTx, enqueue
+from kernel_platform.outbox import OutboxRow, SqlOutboxTx, enqueue
 from sqlalchemy import Boolean, case, delete, func, literal, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker

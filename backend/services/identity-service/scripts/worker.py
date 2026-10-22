@@ -4,7 +4,7 @@ import asyncio
 import inspect
 from datetime import UTC, datetime
 
-from botflow_platform.messaging import ConfirmedPublisher
+from kernel_platform.messaging import ConfirmedPublisher
 
 from api.containers import Container
 from application.commands.relay import RelayOutbox

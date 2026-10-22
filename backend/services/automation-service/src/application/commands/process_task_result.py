@@ -3,7 +3,7 @@
 import json
 from uuid import UUID
 
-from botflow_platform.consumer import InvalidMessage
+from kernel_platform.consumer import InvalidMessage
 
 from application.ports import JobSummary, ResultOutcome, TaskResultStore
 from domain.jobs import result_intent_id_for

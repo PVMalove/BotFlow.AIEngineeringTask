@@ -3,7 +3,7 @@
 import json
 from uuid import UUID
 
-from botflow_platform.streams import RedisStream, StreamEntry
+from kernel_platform.streams import RedisStream, StreamEntry
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 

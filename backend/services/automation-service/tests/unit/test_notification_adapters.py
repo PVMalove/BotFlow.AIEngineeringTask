@@ -3,7 +3,7 @@
 from uuid import UUID, uuid4
 
 import pytest
-from botflow_platform.streams import StreamEntry
+from kernel_platform.streams import StreamEntry
 
 from application.commands.process_identity_event import InvalidEvent
 from application.ports import QueuedIntent

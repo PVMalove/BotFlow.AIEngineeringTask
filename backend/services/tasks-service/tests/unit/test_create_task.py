@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from botflow_platform.consumer import InvalidMessage
+from kernel_platform.consumer import InvalidMessage
 
 from application.commands.create_task import CreateTaskFromCommand
 from application.ports import NewTask, TaskCreatedMessage

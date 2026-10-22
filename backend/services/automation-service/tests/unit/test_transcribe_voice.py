@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from botflow_platform.retry import RetryPolicy
+from kernel_platform.retry import RetryPolicy
 
 from application.commands.transcribe_voice import (
     FAILURES,

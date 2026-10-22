@@ -3,7 +3,7 @@
 import asyncio
 
 from aio_pika.abc import AbstractConnection, AbstractIncomingMessage
-from botflow_platform.messaging import declare_identity_events
+from kernel_platform.messaging import declare_identity_events
 
 from application.commands.process_identity_event import (
     InvalidEvent,

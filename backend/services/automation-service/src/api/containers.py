@@ -3,22 +3,22 @@
 from dataclasses import dataclass
 
 from aio_pika.abc import AbstractChannel, AbstractQueue
-from botflow_platform.consumer import QueueConsumer
-from botflow_platform.messaging import (
+from dependency_injector import containers, providers
+from kernel_platform.consumer import QueueConsumer
+from kernel_platform.messaging import (
     TASK_CREATE_ROUTING_KEY,
     ConfirmedPublisher,
     declare_task_topology,
 )
-from botflow_platform.outbox import RelayOutbox, SqlOutboxTx, sql_transactions
-from botflow_platform.resources import (
+from kernel_platform.outbox import RelayOutbox, SqlOutboxTx, sql_transactions
+from kernel_platform.resources import (
     Database,
     Resources,
     open_database,
     open_resources,
 )
-from botflow_platform.settings import Settings
-from botflow_platform.streams import RedisStream
-from dependency_injector import containers, providers
+from kernel_platform.settings import Settings
+from kernel_platform.streams import RedisStream
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 

@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID
 
-from botflow_platform.retry import RetryPolicy
+from kernel_platform.retry import RetryPolicy
 
 from application.commands.create_task_message import create_task_message
 from application.ports import (

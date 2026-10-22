@@ -21,7 +21,7 @@ from uuid import UUID
 
 import httpx
 from aiogram import Bot
-from botflow_platform.resources import open_redis, open_s3
+from kernel_platform.resources import open_redis, open_s3
 
 from api.containers import (
     Container,

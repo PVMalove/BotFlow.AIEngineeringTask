@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from botflow_platform.outbox import enqueue, outbox_table
+from kernel_platform.outbox import enqueue, outbox_table
 from sqlalchemy import (
     BigInteger,
     Boolean,

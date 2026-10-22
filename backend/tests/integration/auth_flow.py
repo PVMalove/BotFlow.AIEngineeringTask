@@ -13,8 +13,8 @@ import httpx
 from api.containers import build_bot_command
 from application.commands.handle_bot_command import HandleBotCommandDto
 from application.ports import IdentityUnavailable
-from botflow_platform.resources import open_database
-from botflow_platform.settings import Settings
+from kernel_platform.resources import open_database
+from kernel_platform.settings import Settings
 from infrastructure.identity_gateway import HttpIdentityGateway
 from sqlalchemy import text
 
