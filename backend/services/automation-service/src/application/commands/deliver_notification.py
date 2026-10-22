@@ -65,8 +65,8 @@ class DeliverNotification:
                 else IntentStatus.SUPPRESSED_BLOCKED,
             )
             return Delivery.DONE
-        text = TEXTS.get(intent.kind)
-        if text is None:  # a result kind: its slice supplies the text
+        text = intent.body or TEXTS.get(intent.kind)
+        if text is None:  # a kind with a rule but no text to send
             await self._store.settle(intent_id, IntentStatus.FAILED)
             return Delivery.DONE
         try:

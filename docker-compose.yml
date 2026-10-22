@@ -115,6 +115,7 @@ services:
       dockerfile: "services/tasks-service/Dockerfile"
     environment:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+      BOTFLOW_IDENTITY_URL: "http://identity-api:8000"
     secrets:
       - "tasks_db_password"
       - "rabbitmq_password"
@@ -125,6 +126,8 @@ services:
       rabbitmq:
         condition: "service_healthy"
       redis:
+        condition: "service_healthy"
+      identity-api:
         condition: "service_healthy"
     networks:
       - "backend"
@@ -144,6 +147,14 @@ services:
     command:
       - "python"
       - "scripts/bootstrap.py"
+      - "migrate"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    secrets:
+      - "tasks_db_password"
+    depends_on:
+      tasks-db:
+        condition: "service_healthy"
     networks:
       - "backend"
   tasks-worker:
@@ -153,6 +164,20 @@ services:
     command:
       - "python"
       - "scripts/worker.py"
+    restart: "unless-stopped"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    secrets:
+      - "tasks_db_password"
+      - "rabbitmq_password"
+      - "redis_tasks_password"
+    depends_on:
+      tasks-db:
+        condition: "service_healthy"
+      rabbitmq:
+        condition: "service_healthy"
+      redis:
+        condition: "service_healthy"
     networks:
       - "backend"
   automation-db:

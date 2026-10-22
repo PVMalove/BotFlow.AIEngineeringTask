@@ -1,3 +1,8 @@
-"""Migration shell: wire service-owned metadata and settings before first use."""
+"""Tasks migration environment; run through `scripts/bootstrap.py migrate`."""
 
-raise RuntimeError("Migration metadata and database connection are not configured.")
+from botflow_platform.migrations import configure_environment
+from botflow_platform.settings import Settings
+
+from infrastructure.db.tables import metadata
+
+configure_environment(metadata, Settings(service="tasks"))

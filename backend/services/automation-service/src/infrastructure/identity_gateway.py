@@ -1,6 +1,7 @@
 """Service-key HTTP adapter. Exceptions never contain credentials or response bodies."""
 
 import re
+from uuid import UUID
 
 import httpx
 
@@ -48,6 +49,7 @@ class HttpIdentityGateway:
                 role=body["role"],
                 status=body["status"],
                 access_version=body["access_version"],
+                member_id=UUID(body["id"]) if "id" in body else None,
             )
             if not isinstance(member.access_version, int):
                 raise ValueError

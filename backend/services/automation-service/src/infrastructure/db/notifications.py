@@ -41,6 +41,7 @@ notification_intents = Table(
     Column("access_version", Integer, nullable=False),
     Column("status", Text, nullable=False),
     Column("attempts", Integer, nullable=False, server_default=text("0")),
+    Column("body", Text),  # text of a result notification
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     CheckConstraint(
@@ -82,6 +83,7 @@ class SqlIntentStore:
                     access_version=intent.access_version,
                     status=intent.status.value,
                     attempts=intent.attempts,
+                    body=intent.body,
                     created_at=now,
                     updated_at=now,
                 )
@@ -123,6 +125,7 @@ class SqlIntentStore:
             access_version=row.access_version,
             status=IntentStatus(row.status),
             attempts=row.attempts,
+            body=row.body,
         )
 
     async def settle(self, intent_id: UUID, status: IntentStatus) -> None:
