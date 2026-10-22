@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from uuid import UUID
 
 from api.containers import Container, build_worker
-from infrastructure.db.task_store import replay_task_created
+from infrastructure.db.replay import replay_task_created
 
 IDLE_SECONDS = 1.0
 FAILURE_SECONDS = 5.0

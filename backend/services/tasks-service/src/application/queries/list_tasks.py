@@ -14,7 +14,7 @@ from kernel_platform.pagination import (
 from application.ports import TaskReader
 from contracts.task import TaskView
 from domain.errors import TaskErrors
-from domain.tasks import TaskStatus
+from domain.value_objects.task_status import TaskStatus
 
 
 @dataclass(frozen=True)
@@ -37,7 +37,9 @@ class ListTasksQueryHandler:
         items = rows[: query.limit]
         has_more = len(rows) > query.limit
         next_cursor = (
-            encode_cursor(items[-1].created_at, items[-1].id) if has_more else None
+            encode_cursor(items[-1].created_at, items[-1].id.value)
+            if has_more
+            else None
         )
         return Result[Page[TaskView]].ok(
             Page(

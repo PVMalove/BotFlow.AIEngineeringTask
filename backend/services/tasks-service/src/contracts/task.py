@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
-from domain.tasks import Task
+from domain.entities.task import Task
 
 
 class TaskView(BaseModel):
@@ -21,7 +21,7 @@ class TaskView(BaseModel):
     @classmethod
     def from_domain(cls, task: Task) -> "TaskView":
         return cls(
-            id=task.id,
+            id=task.id.value,
             text=task.text,
             status=task.status.value,
             version=task.version,

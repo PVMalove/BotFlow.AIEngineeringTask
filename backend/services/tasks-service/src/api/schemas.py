@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 from application.commands.change_task_status import ChangeTaskStatusCommand
 from application.queries.list_tasks import ListTasksQuery
-from domain.tasks import TaskStatus
+from domain.value_objects.task_status import TaskStatus
 
 DEFAULT_LIMIT = 50
 MAX_LIMIT = 100

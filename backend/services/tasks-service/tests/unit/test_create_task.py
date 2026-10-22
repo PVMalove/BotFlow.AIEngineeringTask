@@ -1,4 +1,4 @@
-"""CreateTaskFromCommand at its command seam: envelope in, one stored result out."""
+"""CreateTask at its command seam and the queue adapter in front of it."""
 
 import json
 from datetime import UTC, datetime
@@ -7,32 +7,123 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
+from conftest import Board, FakeTasksUnitOfWork
+from kernel_domain.errors import ErrorType
 from kernel_platform.consumer import InvalidMessage
 
-from application.commands.create_task import CreateTaskFromCommand
-from application.ports import NewTask, TaskCreatedMessage
-from infrastructure.db.task_store import replay_task_created
+from application.commands.create_task import (
+    CreateTaskCommand,
+    CreateTaskCommandHandler,
+)
+from domain.events.task_domain_event import TaskCreated
+from domain.value_objects.task_id import TaskId
+from infrastructure.db.replay import replay_task_created
+from infrastructure.messaging.create_task_consumer import CreateTaskConsumer
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 JOB = uuid4()
 AUTHOR = uuid4()
 
 
-class Store:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, NewTask, TaskCreatedMessage]] = []
-        self.failure: Exception | None = None
+def new_command(**overrides: Any) -> CreateTaskCommand:
+    values: dict[str, Any] = dict(
+        message_id="m-1",
+        correlation_id=JOB,
+        bot_id=123,
+        chat_id=456,
+        source_message_id=7,
+        text="Купить молоко",
+        author_id=AUTHOR,
+        author_telegram_id=456,
+        author_name="Ann (@ann)",
+    )
+    values.update(overrides)
+    return CreateTaskCommand(**values)
 
-    async def create(
-        self, message_id: str, task: NewTask, created: TaskCreatedMessage
-    ) -> bool:
-        if self.failure:
-            raise self.failure
-        self.calls.append((message_id, task, created))
-        return True
+
+def handler(board: Board) -> CreateTaskCommandHandler:
+    return CreateTaskCommandHandler(lambda: FakeTasksUnitOfWork(board), lambda: NOW)
 
 
-def command(**overrides: Any) -> bytes:
+async def test_a_valid_command_stores_the_task_with_its_source_and_author() -> None:
+    board = Board()
+
+    result = await handler(board).execute(new_command())
+
+    assert result.is_ok and result.value is True
+    (task,) = board.tasks.values()
+    assert task.id == TaskId.from_source("123:456:7")
+    assert task.source_key == "123:456:7"
+    assert task.correlation_id == JOB
+    assert (task.text, task.author_id, task.author_name) == (
+        "Купить молоко",
+        AUTHOR,
+        "Ann (@ann)",
+    )
+    assert task.author_telegram_id == 456
+    assert task.created_at == NOW
+
+
+async def test_the_created_event_names_the_task_and_the_job() -> None:
+    board = Board()
+
+    await handler(board).execute(new_command())
+
+    (event,) = board.events
+    assert isinstance(event, TaskCreated)
+    assert event.task_id == TaskId.from_source("123:456:7")
+    assert event.correlation_id == JOB
+    assert event.source_key == "123:456:7"
+
+
+async def test_a_redelivered_message_changes_nothing() -> None:
+    board = Board()
+    sut = handler(board)
+
+    await sut.execute(new_command())
+    again = await sut.execute(new_command())
+
+    assert again.is_ok and again.value is False
+    assert len(board.tasks) == 1 and len(board.events) == 1
+
+
+async def test_a_second_message_for_one_source_yields_one_task_and_one_event() -> None:
+    board = Board()
+    sut = handler(board)
+
+    await sut.execute(new_command(message_id="m-1"))
+    second = await sut.execute(new_command(message_id="m-2"))
+
+    assert second.is_ok
+    assert len(board.tasks) == 1
+    assert len(board.events) == 1  # and one TaskCreated outbox row
+
+
+async def test_a_different_source_is_a_different_task() -> None:
+    board = Board()
+    sut = handler(board)
+
+    await sut.execute(new_command(message_id="m-1", source_message_id=7))
+    await sut.execute(new_command(message_id="m-2", source_message_id=8))
+
+    assert len(board.tasks) == 2
+
+
+@pytest.mark.parametrize(
+    "overrides", [{"text": ""}, {"text": "x" * 4097}, {"author_name": ""}]
+)
+async def test_an_invalid_task_is_a_validation_error_and_stores_nothing(
+    overrides: dict[str, Any],
+) -> None:
+    board = Board()
+
+    result = await handler(board).execute(new_command(**overrides))
+
+    assert result.is_err and result.error.type is ErrorType.VALIDATION
+    assert board.tasks == {} and board.inbox == set()
+
+
+def envelope(**payload_overrides: Any) -> bytes:
     payload: dict[str, Any] = {
         "job_id": str(JOB),
         "bot_id": 123,
@@ -43,7 +134,7 @@ def command(**overrides: Any) -> bytes:
         "author_name": "Ann (@ann)",
         "text": "Купить молоко",
     }
-    payload.update(overrides)
+    payload.update(payload_overrides)
     return json.dumps(
         {
             "envelope_version": 1,
@@ -56,105 +147,62 @@ def command(**overrides: Any) -> bytes:
     ).encode()
 
 
-def use_case(store: Store) -> CreateTaskFromCommand:
-    return CreateTaskFromCommand(store, clock=lambda: NOW)
+def consumer(board: Board) -> CreateTaskConsumer:
+    return CreateTaskConsumer(handler(board))
 
 
-async def test_a_valid_command_stores_the_task_with_its_source_and_author() -> None:
-    store = Store()
+async def test_a_valid_envelope_becomes_a_stored_task() -> None:
+    board = Board()
 
-    await use_case(store).execute("m-1", "CreateTask", command())
+    await consumer(board).handle("m-1", "CreateTask", envelope())
 
-    ((message_id, task, created),) = store.calls
-    assert message_id == "m-1"
+    (task,) = board.tasks.values()
     assert task.source_key == "123:456:7"
-    assert task.correlation_id == JOB
-    assert (task.text, task.author_id, task.author_name) == (
-        "Купить молоко",
-        AUTHOR,
-        "Ann (@ann)",
-    )
-    assert task.author_telegram_id == 456
-    assert created.correlation_id == JOB
-
-
-async def test_the_created_event_names_the_task_and_the_job_in_its_envelope() -> None:
-    store = Store()
-
-    await use_case(store).execute("m-1", "CreateTask", command())
-
-    _, task, created = store.calls[0]
-    envelope = created.payload
-    assert envelope["envelope_version"] == 1
-    assert envelope["type"] == "TaskCreated"
-    assert envelope["message_id"] == str(created.id)
-    assert envelope["correlation_id"] == str(JOB)
-    assert envelope["payload"] == {
-        "job_id": str(JOB),
-        "task_id": str(task.id),
-        "source_key": "123:456:7",
-    }
-    assert created.routing_key == "task.created"
-
-
-async def test_a_second_message_for_one_source_yields_the_same_task_and_result() -> (
-    None
-):
-    store = Store()
-
-    await use_case(store).execute("m-1", "CreateTask", command())
-    await use_case(store).execute("m-2", "CreateTask", command())
-
-    (_, first, first_event), (_, second, second_event) = store.calls
-    assert first.id == second.id  # the store's unique source then makes it one task
-    assert first_event.id == second_event.id  # and one TaskCreated outbox row
-
-
-async def test_a_different_source_is_a_different_task() -> None:
-    store = Store()
-
-    await use_case(store).execute("m-1", "CreateTask", command(message_id=7))
-    await use_case(store).execute("m-2", "CreateTask", command(message_id=8))
-
-    assert store.calls[0][1].id != store.calls[1][1].id
+    assert board.inbox == {"m-1"}
 
 
 @pytest.mark.parametrize(
     "type_, body",
     [
-        ("Other", command()),
-        (None, command()),
+        ("Other", envelope()),
+        (None, envelope()),
         ("CreateTask", b"not json"),
-        ("CreateTask", command(text="")),
-        ("CreateTask", command(text="x" * 4097)),
-        ("CreateTask", command(author_id="nope")),
-        ("CreateTask", command(chat_id="1")),
-        ("CreateTask", command(author_name="")),
-        ("CreateTask", command(author_name="n" * 65)),
+        ("CreateTask", envelope(text="")),
+        ("CreateTask", envelope(text="x" * 4097)),
+        ("CreateTask", envelope(author_id="nope")),
+        ("CreateTask", envelope(chat_id="1")),
+        ("CreateTask", envelope(author_name="")),
+        ("CreateTask", envelope(author_name="n" * 65)),
     ],
 )
 async def test_a_message_that_can_never_work_is_invalid(
     type_: str | None, body: bytes
 ) -> None:
-    store = Store()
+    board = Board()
 
     with pytest.raises(InvalidMessage):
-        await use_case(store).execute("m-1", type_, body)
+        await consumer(board).handle("m-1", type_, body)
 
-    assert store.calls == []
+    assert board.tasks == {}
 
 
 async def test_a_missing_message_id_is_invalid() -> None:
     with pytest.raises(InvalidMessage):
-        await use_case(Store()).execute(None, "CreateTask", command())
+        await consumer(Board()).handle(None, "CreateTask", envelope())
 
 
 async def test_a_storage_failure_propagates_so_the_message_is_requeued() -> None:
-    store = Store()
-    store.failure = OSError("pg down")
+    board = Board()
+
+    def broken() -> FakeTasksUnitOfWork:
+        raise OSError("pg down")
+
+    sut = CreateTaskConsumer(CreateTaskCommandHandler(broken, lambda: NOW))
 
     with pytest.raises(OSError):
-        await use_case(store).execute("m-1", "CreateTask", command())
+        await sut.handle("m-1", "CreateTask", envelope())
+
+    assert board.tasks == {}
 
 
 async def test_replay_task_created_commits_when_outbox_row_replayed() -> None:
@@ -163,7 +211,7 @@ async def test_replay_task_created_commits_when_outbox_row_replayed() -> None:
     sessions = MagicMock(return_value=session)
 
     with patch(
-        "infrastructure.db.task_store.replay", new_callable=AsyncMock
+        "infrastructure.db.replay.replay", new_callable=AsyncMock
     ) as mock_replay:
         mock_replay.return_value = True
         replayed = await replay_task_created(sessions, JOB)
@@ -178,7 +226,7 @@ async def test_replay_task_created_does_not_commit_when_nothing_replayed() -> No
     sessions = MagicMock(return_value=session)
 
     with patch(
-        "infrastructure.db.task_store.replay", new_callable=AsyncMock
+        "infrastructure.db.replay.replay", new_callable=AsyncMock
     ) as mock_replay:
         mock_replay.return_value = False
         replayed = await replay_task_created(sessions, JOB)

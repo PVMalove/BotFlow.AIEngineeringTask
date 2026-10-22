@@ -8,6 +8,7 @@ from kernel_domain.result import Result
 from application.ports import TaskReader
 from contracts.task import TaskView
 from domain.errors import TaskErrors
+from domain.value_objects.task_id import TaskId
 
 
 @dataclass(frozen=True)
@@ -20,7 +21,7 @@ class GetTaskQueryHandler:
         self._reader = reader
 
     async def execute(self, query: GetTaskQuery) -> Result[TaskView]:
-        task = await self._reader.get(query.task_id)
+        task = await self._reader.get(TaskId(query.task_id))
         if task is None:
             return Result[TaskView].fail(TaskErrors.not_found())
         return Result[TaskView].ok(TaskView.from_domain(task))

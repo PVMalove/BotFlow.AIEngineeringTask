@@ -2,7 +2,7 @@
 
 from kernel_platform.security import Actor, ActorRole
 
-from domain.tasks import Task
+from domain.entities.task import Task
 
 
 def may_change_status(actor: Actor, task: Task) -> bool:

@@ -26,6 +26,22 @@ class TaskErrors:
         )
 
     @staticmethod
+    def invalid_text(max_length: int) -> Error:
+        return Error.validation(
+            "invalid_text",
+            f"Текст задачи должен быть от 1 до {max_length} символов.",
+            invalid_field="text",
+        )
+
+    @staticmethod
+    def invalid_author_name(max_length: int) -> Error:
+        return Error.validation(
+            "invalid_author_name",
+            f"Имя автора должно быть от 1 до {max_length} символов.",
+            invalid_field="author_name",
+        )
+
+    @staticmethod
     def invalid_cursor() -> Error:
         return Error.validation(
             "invalid_cursor",

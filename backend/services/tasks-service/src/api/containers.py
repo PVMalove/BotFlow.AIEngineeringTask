@@ -14,14 +14,15 @@ from kernel_platform.resources import Resources, open_resources
 from kernel_platform.settings import Settings
 
 from application.commands.change_task_status import ChangeTaskStatusCommandHandler
-from application.commands.create_task import CreateTaskFromCommand
+from application.commands.create_task import CreateTaskCommandHandler
 from application.queries.get_task import GetTaskQueryHandler
 from application.queries.list_tasks import ListTasksQueryHandler
 from infrastructure.board_signal import RedisBoardSignal
 from infrastructure.db.tables import outbox
 from infrastructure.db.task_reader import SqlTaskReader
-from infrastructure.db.task_store import SqlTaskCommandStore, SqlTaskStatusStore
+from infrastructure.db.unit_of_work import SqlTasksUnitOfWork
 from infrastructure.identity_gateway import HttpIdentityGateway
+from infrastructure.messaging.create_task_consumer import CreateTaskConsumer
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +34,10 @@ class TaskWorker:
 
 
 def build_worker(resources: Resources) -> TaskWorker:
-    create = CreateTaskFromCommand(SqlTaskCommandStore(resources.sessions))
+    def uow() -> SqlTasksUnitOfWork:
+        return SqlTasksUnitOfWork(resources.sessions)
+
+    create = CreateTaskConsumer(CreateTaskCommandHandler(uow))
 
     async def commands_queue(channel: AbstractChannel) -> AbstractQueue:
         _, commands, _ = await declare_task_topology(channel)
@@ -67,14 +71,16 @@ async def open_services(resources: Resources) -> AsyncIterator[Services]:
         identity = HttpIdentityGateway(client)
         reader = SqlTaskReader(resources.sessions)
         assert resources.redis is not None  # Tasks always opens Redis
-        store = SqlTaskStatusStore(
-            resources.sessions, RedisBoardSignal(resources.redis)
-        )
+        board_signal = RedisBoardSignal(resources.redis)
+
+        def uow() -> SqlTasksUnitOfWork:
+            return SqlTasksUnitOfWork(resources.sessions, event_handlers=[board_signal])
+
         yield Services(
             identity=identity,
             list_tasks=ListTasksQueryHandler(reader),
             get_task=GetTaskQueryHandler(reader),
-            change_task_status=ChangeTaskStatusCommandHandler(reader, store),
+            change_task_status=ChangeTaskStatusCommandHandler(uow),
         )
 
 

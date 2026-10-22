@@ -1,16 +1,14 @@
 """Tasks REST contract: board visibility, keyset cursor, status filter, auth."""
 
 from collections.abc import AsyncIterator
-from dataclasses import replace
-from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import httpx
 import pytest
+from conftest import AUTHOR, Board, FakeTasksUnitOfWork
 from kernel_domain.errors import Error
 from kernel_domain.result import Result
-from kernel_platform.pagination import Cursor
 from kernel_platform.security import Actor, ActorRole, AuthErrors
 
 from api.containers import Services
@@ -20,12 +18,10 @@ from application.commands.change_task_status import ChangeTaskStatusCommandHandl
 from application.ports import IdentityUnavailable
 from application.queries.get_task import GetTaskQueryHandler
 from application.queries.list_tasks import ListTasksQueryHandler
-from domain.errors import TaskErrors
-from domain.tasks import Task, TaskStatus
+from domain.entities.task import Task
+from domain.value_objects.task_status import TaskStatus
 
-BASE = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 COOKIES = {"botflow_session": "session-token"}
-AUTHOR = uuid4()
 
 
 class Identity:
@@ -44,72 +40,6 @@ class Identity:
         return Result[Actor].ok(self.actor)
 
 
-class Board:
-    """Rows ordered like the SQL adapter: (created_at, id) descending."""
-
-    def __init__(self) -> None:
-        self.tasks: dict[UUID, Task] = {}
-
-    def add(self, minutes: int, **overrides: object) -> Task:
-        values: dict[str, object] = dict(
-            id=uuid4(),
-            text=f"task {minutes}",
-            status=TaskStatus.PENDING,
-            version=1,
-            author_id=AUTHOR,
-            author_name="Ann (@ann)",
-            created_at=BASE + timedelta(minutes=minutes),
-            updated_at=BASE + timedelta(minutes=minutes),
-        )
-        values.update(overrides)
-        task = Task(**values)  # type: ignore[arg-type]
-        self.tasks[task.id] = task
-        return task
-
-    async def list_page(
-        self, status: TaskStatus | None, after: Cursor | None, limit: int
-    ) -> list[Task]:
-        rows = sorted(
-            self.tasks.values(), key=lambda t: (t.created_at, t.id), reverse=True
-        )
-        if status is not None:
-            rows = [t for t in rows if t.status is status]
-        if after is not None:
-            rows = [
-                t for t in rows if (t.created_at, t.id) < (after.created_at, after.id)
-            ]
-        return rows[:limit]
-
-    async def get(self, task_id: UUID) -> Task | None:
-        return self.tasks.get(task_id)
-
-
-class StatusStore:
-    """The store's contract over the in-memory board: same rules as the SQL UPDATE."""
-
-    def __init__(self, board: Board) -> None:
-        self.board = board
-
-    async def change(
-        self, task_id: UUID, target: TaskStatus, expected_version: int
-    ) -> Result[Task]:
-        task = self.board.tasks.get(task_id)
-        if task is None:
-            return Result[Task].fail(TaskErrors.not_found())
-        if task.version != expected_version:
-            return Result[Task].fail(TaskErrors.version_conflict())
-        if task.status is target:
-            return Result[Task].ok(task)
-        changed = replace(
-            task,
-            status=target,
-            version=task.version + 1,
-            updated_at=task.updated_at + timedelta(minutes=1),
-        )
-        self.board.tasks[task_id] = changed
-        return Result[Task].ok(changed)
-
-
 class Env:
     def __init__(self) -> None:
         self.identity = Identity()
@@ -119,7 +49,7 @@ class Env:
             list_tasks=ListTasksQueryHandler(self.board),
             get_task=GetTaskQueryHandler(self.board),
             change_task_status=ChangeTaskStatusCommandHandler(
-                self.board, StatusStore(self.board)
+                lambda: FakeTasksUnitOfWork(self.board)
             ),
         )
 
@@ -164,9 +94,9 @@ async def test_the_list_returns_the_whole_board_newest_first_with_authorship(
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     body = response.json()
-    assert [t["id"] for t in body["data"]] == [str(newer.id), str(older.id)]
+    assert [t["id"] for t in body["data"]] == [str(newer.id.value), str(older.id.value)]
     assert body["data"][0] == {
-        "id": str(newer.id),
+        "id": str(newer.id.value),
         "text": "task 2",
         "status": "pending",
         "version": 1,
@@ -244,7 +174,7 @@ async def test_the_status_filter_selects_one_status(
 
     response = await client.get("/api/v1/tasks", params={"status": "completed"})
 
-    assert [t["id"] for t in response.json()["data"]] == [str(done.id)]
+    assert [t["id"] for t in response.json()["data"]] == [str(done.id.value)]
 
 
 async def test_an_unknown_status_is_rejected(client: httpx.AsyncClient) -> None:
@@ -269,10 +199,10 @@ async def test_a_malformed_cursor_is_a_client_error(
 async def test_the_card_returns_one_task(env: Env, client: httpx.AsyncClient) -> None:
     task = env.board.add(1)
 
-    response = await client.get(f"/api/v1/tasks/{task.id}")
+    response = await client.get(f"/api/v1/tasks/{task.id.value}")
 
     assert response.status_code == 200
-    assert response.json()["data"]["id"] == str(task.id)
+    assert response.json()["data"]["id"] == str(task.id.value)
     assert response.json()["data"]["version"] == 1
     assert response.json()["meta"] == {}
 
@@ -290,7 +220,7 @@ async def test_the_session_is_checked_with_identity_on_every_request(
     task = env.board.add(1)
 
     await client.get("/api/v1/tasks")
-    await client.get(f"/api/v1/tasks/{task.id}")
+    await client.get(f"/api/v1/tasks/{task.id.value}")
 
     assert env.identity.tokens == ["session-token", "session-token"]
 
@@ -364,7 +294,7 @@ async def patch(
     headers: dict[str, str] | None = None,
 ) -> httpx.Response:
     return await client.patch(
-        f"/api/v1/tasks/{task.id}",
+        f"/api/v1/tasks/{task.id.value}",
         json={"status": status, "expected_version": version},
         headers=headers,
     )
@@ -483,7 +413,7 @@ async def test_an_invalid_patch_body_is_rejected(
 ) -> None:
     task = env.board.add(1)
 
-    response = await client.patch(f"/api/v1/tasks/{task.id}", json=payload)
+    response = await client.patch(f"/api/v1/tasks/{task.id.value}", json=payload)
 
     assert response.status_code == 422
     assert error_of(response)["code"] == "VALIDATION_ERROR"
