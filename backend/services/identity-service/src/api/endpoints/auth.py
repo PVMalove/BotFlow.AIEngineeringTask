@@ -1,8 +1,9 @@
 """Authentication endpoints for identity service."""
 
 from fastapi import APIRouter, Depends, Request, Response
-from kernel_platform.http import ApiResponse, unwrap
-from kernel_platform.security import require_same_origin
+from kernel_platform.http.envelope import ApiResponse
+from kernel_platform.http.match import unwrap
+from kernel_platform.security.origin import require_same_origin
 
 from api.dependencies import (
     AuthenticateSessionDI,

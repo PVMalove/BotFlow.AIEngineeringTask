@@ -9,7 +9,8 @@ import pytest
 from conftest import AUTHOR, Board, FakeTasksUnitOfWork
 from kernel_domain.errors import Error
 from kernel_domain.result import Result
-from kernel_platform.security import Actor, ActorRole, AuthErrors
+from kernel_platform.security.actor import Actor, ActorRole
+from kernel_platform.security.errors import AuthErrors
 
 from api.containers import Services
 from api.dependencies import get_services

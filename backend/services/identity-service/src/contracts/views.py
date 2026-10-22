@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from domain.entities.auth import Member
+from domain.entities.member import Member
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,7 +24,7 @@ class MemberView:
     @classmethod
     def from_domain(cls, member: Member) -> "MemberView":
         return cls(
-            id=member.id,
+            id=member.id.value,
             telegram_id=member.telegram_id,
             role=member.role.value,
             status=member.status.value,
@@ -46,7 +46,7 @@ class AdminMemberView:
     @classmethod
     def from_domain(cls, member: Member) -> "AdminMemberView":
         return cls(
-            id=member.id,
+            id=member.id.value,
             telegram_id=member.telegram_id,
             display_name=member.display_name,
             role=member.role.value,

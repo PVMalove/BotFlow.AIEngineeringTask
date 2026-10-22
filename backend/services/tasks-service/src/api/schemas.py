@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from kernel_platform.security import Actor
+from kernel_platform.security.actor import Actor
 from pydantic import BaseModel, Field
 
 from application.commands.change_task_status import ChangeTaskStatusCommand

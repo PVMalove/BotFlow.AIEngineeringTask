@@ -1,21 +1,34 @@
 """Outbox intents written by decisions and relayed with bounded retries."""
 
 from datetime import timedelta
-from uuid import uuid4
 
 import pytest
 from conftest import NOW, Clock, FakeUnitOfWork, Store
 
 from application.commands.access import DecideMember, DecideMemberCommand
 from application.commands.relay import RelayOutbox
-from domain.access import ACCESS_DECIDED, Action, OutboxEntry, VersionConflict
-from domain.entities.auth import Member, MemberStatus, Role
+from domain.entities.member import Member
+from domain.outbox import ACCESS_DECIDED, OutboxEntry
+from domain.value_objects.access import Action
+from domain.value_objects.member_id import MemberId
+from domain.value_objects.member_status import MemberStatus
+from domain.value_objects.role import Role
 
 
 def member(
     status: MemberStatus, role: Role = Role.USER, telegram_id: int = 1
 ) -> Member:
-    return Member(uuid4(), telegram_id, role, status, NOW)
+    return Member.reconstitute(
+        MemberId.new_id(),
+        telegram_id=telegram_id,
+        role=role,
+        status=status,
+        created_at=NOW,
+        display_name=None,
+        access_version=1,
+        status_changed_at=None,
+        decided_by=None,
+    )
 
 
 class World:
@@ -27,14 +40,14 @@ class World:
         self.applicant = member(MemberStatus.PENDING, telegram_id=3)
         for m in (self.admin, self.second, self.applicant):
             self.store.members[m.id] = m
-        self.decide = DecideMember(lambda: FakeUnitOfWork(self.store), self.clock)
+        self.decide = DecideMember(lambda: FakeUnitOfWork(self.store), self.clock.now)
 
     async def act(self, action: Action, target: Member, version: int | None = None):  # type: ignore[no-untyped-def]
         current = self.store.members[target.id]
         return await self.decide.execute(
             DecideMemberCommand(
-                self.admin.id,
-                target.id,
+                self.admin.id.value,
+                target.id.value,
                 action,
                 current.access_version if version is None else version,
             )
@@ -58,7 +71,7 @@ async def test_a_decision_stores_exactly_one_intent_in_its_transaction(
     (entry,) = world.store.outbox.values()
     assert entry.type == ACCESS_DECIDED
     assert entry.payload == {
-        "member_id": str(world.applicant.id),
+        "member_id": str(world.applicant.id.value),
         "telegram_id": 3,
         "decision": decision,
         "access_version": 2,
@@ -90,13 +103,14 @@ async def test_a_repeat_adds_no_second_intent(world: World) -> None:
 
     again = await world.act(Action.APPROVE, world.applicant, version=1)
 
-    assert not again.changed
+    assert again.is_ok and not again.value.changed
     assert len(world.store.outbox) == 1
 
 
 async def test_a_refused_decision_leaves_no_intent(world: World) -> None:
-    with pytest.raises(VersionConflict):
-        await world.act(Action.APPROVE, world.applicant, version=7)
+    result = await world.act(Action.APPROVE, world.applicant, version=7)
+
+    assert result.is_err and result.error.code == "version_conflict"
 
     assert world.store.outbox == {}
 
@@ -117,7 +131,7 @@ class Broker:
 
 
 def relay(world: World, broker: Broker) -> RelayOutbox:
-    return RelayOutbox(lambda: FakeUnitOfWork(world.store), broker, world.clock)
+    return RelayOutbox(lambda: FakeUnitOfWork(world.store), broker, world.clock.now)
 
 
 async def test_confirmed_entries_are_marked_published_once(world: World) -> None:

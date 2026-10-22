@@ -1,7 +1,8 @@
 from typing import Any
 
 from fastapi import FastAPI
-from kernel_platform.http import create_app, register_error_handlers
+from kernel_platform.http.app import create_app
+from kernel_platform.http.exception_handlers import register_error_handlers
 from sqlalchemy.exc import DBAPIError, TimeoutError
 
 from api.containers import Container

@@ -1,8 +1,9 @@
 """In-memory ports with transaction semantics: nothing is visible before commit."""
 
 from collections import Counter
+from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Self
@@ -11,15 +12,21 @@ from uuid import UUID
 from kernel_domain.result import Result
 
 from application.ports import TokenClaims
-from domain.access import OutboxEntry
+from domain.entities.auth_session import AuthSession
+from domain.entities.login_code import LoginCode
+from domain.entities.member import Member
 from domain.errors import IdentityErrors
-from domain.entities.auth import (
-    AuthSession,
-    LoginCode,
-    Member,
-    MemberStatus,
-    Role,
+from domain.outbox import OutboxEntry
+from domain.repositories import (
+    LoginCodeRepository,
+    MemberRepository,
+    OutboxRepository,
+    SessionRepository,
 )
+from domain.value_objects.member_id import MemberId
+from domain.value_objects.member_status import MemberStatus
+from domain.value_objects.role import Role
+from infrastructure.db.outbox_events import outbox_entry_for
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
@@ -33,15 +40,31 @@ class CodeRow:
 
 @dataclass
 class Store:
-    members: dict[UUID, Member] = field(default_factory=dict)
+    members: dict[MemberId, Member] = field(default_factory=dict)
     codes: dict[UUID, CodeRow] = field(default_factory=dict)
     sessions: dict[UUID, AuthSession] = field(default_factory=dict)
     outbox: dict[UUID, OutboxEntry] = field(default_factory=dict)
 
 
+def with_status(member: Member, status: MemberStatus) -> Member:
+    """The same member in another status (a test double of an admin's decision)."""
+    return Member.reconstitute(
+        member.id,
+        telegram_id=member.telegram_id,
+        role=member.role,
+        status=status,
+        created_at=member.created_at,
+        display_name=member.display_name,
+        access_version=member.access_version,
+        status_changed_at=member.status_changed_at,
+        decided_by=member.decided_by,
+    )
+
+
 class FakeMembers:
-    def __init__(self, data: Store) -> None:
+    def __init__(self, data: Store, track: Callable[[Member], None]) -> None:
         self._data = data
+        self._track = track
 
     async def add_if_absent(self, member: Member) -> bool:
         if any(
@@ -52,15 +75,21 @@ class FakeMembers:
         self._data.members[member.id] = member
         return True
 
-    async def get(self, member_id: UUID, *, lock: bool = False) -> Member | None:
-        return self._data.members.get(member_id)
+    async def get(self, member_id: MemberId, *, lock: bool = False) -> Member | None:
+        return self._loaded(self._data.members.get(member_id))
 
     async def get_by_telegram_id(
         self, telegram_id: int, *, lock: bool = False
     ) -> Member | None:
-        return next(
-            (m for m in self._data.members.values() if m.telegram_id == telegram_id),
-            None,
+        return self._loaded(
+            next(
+                (
+                    m
+                    for m in self._data.members.values()
+                    if m.telegram_id == telegram_id
+                ),
+                None,
+            )
         )
 
     async def get_by_login_code(
@@ -70,7 +99,9 @@ class FakeMembers:
             (r for r in self._data.codes.values() if r.code.code_hash == code_hash),
             None,
         )
-        return self._data.members.get(row.code.member_id) if row else None
+        return self._loaded(
+            self._data.members.get(MemberId(row.code.member_id)) if row else None
+        )
 
     async def lock_decisions(self) -> None:
         return None
@@ -86,16 +117,25 @@ class FakeMembers:
     ) -> list[Member]:
         rows = sorted(
             (m for m in self._data.members.values() if m.status in statuses),
-            key=lambda m: (m.created_at, m.id),
+            key=lambda m: (m.created_at, m.id.value),
         )
         return rows[offset : offset + limit]
 
-    async def update_access(self, member: Member, *, expected_version: int) -> bool:
+    async def update_access(self, member: Member, *, loaded_version: int) -> bool:
         stored = self._data.members.get(member.id)
-        if stored is None or stored.access_version != expected_version:
+        if stored is None or stored.access_version != loaded_version:
             return False
-        self._data.members[member.id] = member
+        self._data.members[member.id] = with_status(member, member.status)
+        self._track(member)
         return True
+
+    def _loaded(self, member: Member | None) -> Member | None:
+        """A separate load, like a session of its own: the row keeps its version."""
+        if member is None:
+            return None
+        loaded = with_status(member, member.status)
+        self._track(loaded)
+        return loaded
 
 
 class FakeLoginCodes:
@@ -140,12 +180,12 @@ class FakeSessions:
     async def revoke(self, session_id: UUID, now: datetime) -> None:
         session = self._data.sessions.get(session_id)
         if session is not None and session.revoked_at is None:
-            self._data.sessions[session_id] = replace(session, revoked_at=now)
+            session.revoked_at = now
 
     async def revoke_all(self, member_id: UUID, now: datetime) -> None:
-        for session_id, session in list(self._data.sessions.items()):
+        for session in self._data.sessions.values():
             if session.member_id == member_id and session.revoked_at is None:
-                self._data.sessions[session_id] = replace(session, revoked_at=now)
+                session.revoked_at = now
 
 
 class FakeOutbox:
@@ -167,25 +207,44 @@ class FakeOutbox:
 
     async def mark_published(self, entry_id: UUID, now: datetime) -> None:
         entry = self._data.outbox[entry_id]
-        self._data.outbox[entry_id] = replace(entry, published_at=now)
+        self._data.outbox[entry_id] = OutboxEntry(
+            entry.id,
+            entry.type,
+            entry.payload,
+            entry.created_at,
+            entry.attempts,
+            entry.next_attempt_at,
+            now,
+        )
 
     async def reschedule(
         self, entry_id: UUID, attempts: int, next_attempt_at: datetime | None
     ) -> None:
         entry = self._data.outbox[entry_id]
-        self._data.outbox[entry_id] = replace(
-            entry, attempts=attempts, next_attempt_at=next_attempt_at
+        self._data.outbox[entry_id] = OutboxEntry(
+            entry.id,
+            entry.type,
+            entry.payload,
+            entry.created_at,
+            attempts,
+            next_attempt_at,
+            entry.published_at,
         )
 
 
 class FakeUnitOfWork:
+    """Works on a copy of the store; a commit stages the events, then publishes it."""
+
     def __init__(self, store: Store) -> None:
         self._store = store
         self._working = Store()
-        self.members = FakeMembers(self._working)
-        self.login_codes = FakeLoginCodes(self._working)
-        self.sessions = FakeSessions(self._working)
-        self.outbox = FakeOutbox(self._working)
+        self._tracked: list[Member] = []
+        self.members: MemberRepository = FakeMembers(
+            self._working, self._tracked.append
+        )
+        self.login_codes: LoginCodeRepository = FakeLoginCodes(self._working)
+        self.sessions: SessionRepository = FakeSessions(self._working)
+        self.outbox: OutboxRepository = FakeOutbox(self._working)
 
     async def __aenter__(self) -> Self:
         self._working.members = deepcopy(self._store.members)
@@ -198,15 +257,23 @@ class FakeUnitOfWork:
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
-        traceback: TracebackType | None,
+        tb: TracebackType | None,
     ) -> None:
         return None
 
     async def commit(self) -> None:
+        for member in self._tracked:
+            for event in member.pull_events():
+                entry = outbox_entry_for(event)
+                if entry is not None:
+                    self._working.outbox[entry.id] = entry
         self._store.members = deepcopy(self._working.members)
         self._store.codes = deepcopy(self._working.codes)
         self._store.sessions = deepcopy(self._working.sessions)
         self._store.outbox = deepcopy(self._working.outbox)
+
+    async def rollback(self) -> None:
+        return None
 
 
 class FakeRateLimiter:
@@ -242,7 +309,7 @@ class Clock:
     def __init__(self) -> None:
         self.current = NOW
 
-    def __call__(self) -> datetime:
+    def now(self) -> datetime:
         return self.current
 
     def advance(self, **delta: float) -> None:

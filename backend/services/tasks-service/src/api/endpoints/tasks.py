@@ -4,8 +4,9 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
-from kernel_platform.http import ApiResponse, match_page, match_result
-from kernel_platform.security import require_same_origin
+from kernel_platform.http.envelope import ApiResponse
+from kernel_platform.http.match import match_page, match_result
+from kernel_platform.security.origin import require_same_origin
 
 from api.dependencies import ChangeTaskStatusDI, GetTaskDI, ListTasksDI, RequiredAuth
 from api.schemas import ChangeStatusBody, TaskListRequest

@@ -4,7 +4,8 @@ from uuid import UUID
 
 import httpx
 from kernel_domain.result import Result
-from kernel_platform.security import Actor, ActorRole, AuthErrors
+from kernel_platform.security.actor import Actor, ActorRole
+from kernel_platform.security.errors import AuthErrors
 
 from application.ports import IdentityUnavailable
 
@@ -29,7 +30,7 @@ class HttpIdentityGateway:
         if response.status_code != 200:
             raise IdentityUnavailable
         try:
-            member = response.json()
+            member = response.json()["data"]
             status = member["status"]
             actor = Actor(UUID(member["id"]), ActorRole(member["role"]))
         except (ValueError, KeyError, TypeError):

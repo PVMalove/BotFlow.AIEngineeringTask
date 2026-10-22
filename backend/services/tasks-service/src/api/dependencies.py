@@ -4,8 +4,9 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 from kernel_domain.result import Result
-from kernel_platform.http import unwrap
-from kernel_platform.security import Actor, AuthErrors
+from kernel_platform.http.match import unwrap
+from kernel_platform.security.actor import Actor
+from kernel_platform.security.errors import AuthErrors
 
 from api.containers import Services
 from application.commands.change_task_status import ChangeTaskStatusCommandHandler

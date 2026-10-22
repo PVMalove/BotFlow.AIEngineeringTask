@@ -4,7 +4,7 @@ from typing import Protocol
 
 from kernel_domain.result import Result
 from kernel_platform.pagination import Cursor
-from kernel_platform.security import Actor
+from kernel_platform.security.actor import Actor
 
 from domain.entities.task import Task
 from domain.value_objects.task_id import TaskId

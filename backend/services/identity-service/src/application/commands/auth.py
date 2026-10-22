@@ -12,8 +12,12 @@ from kernel_domain.result import Result
 
 from application.ports import Clock, RateLimiter, TokenService, UnitOfWorkFactory
 from contracts.views import LoginCodeView
-from domain.entities.auth import AuthSession, LoginCode, Member, MemberStatus, Role
+from domain.entities.auth_session import AuthSession
+from domain.entities.login_code import LoginCode
+from domain.entities.member import Member
 from domain.errors import IdentityErrors
+from domain.value_objects.member_id import MemberId
+from domain.value_objects.member_status import MemberStatus
 
 LOGIN_CODE_TTL = timedelta(minutes=5)
 SESSION_TTL = timedelta(hours=8)
@@ -44,18 +48,9 @@ class EnsureInitialAdmin:
         self._uow_factory = uow_factory
         self._clock = clock
 
-    async def execute(self, command: EnsureInitialAdminCommand | int) -> bool:
-        telegram_id = (
-            command.telegram_id
-            if isinstance(command, EnsureInitialAdminCommand)
-            else command
-        )
-        member = Member(
-            id=uuid4(),
-            telegram_id=telegram_id,
-            role=Role.ADMIN,
-            status=MemberStatus.APPROVED,
-            created_at=self._clock(),
+    async def execute(self, command: EnsureInitialAdminCommand) -> bool:
+        member = Member.initial_admin(
+            MemberId.new_id(), telegram_id=command.telegram_id, now=self._clock()
         )
         async with self._uow_factory() as uow:
             created = await uow.members.add_if_absent(member)
@@ -97,11 +92,11 @@ class IssueLoginCode:
                 return Result[LoginCodeView].fail(IdentityErrors.member_not_approved())
             now = self._clock()
             code = self._generate_code()
-            await uow.login_codes.cancel_active(member.id, now)
+            await uow.login_codes.cancel_active(member.id.value, now)
             await uow.login_codes.add(
                 LoginCode(
-                    id=uuid4(),
-                    member_id=member.id,
+                    uuid4(),
+                    member_id=member.id.value,
                     code_hash=hash_login_code(code),
                     created_at=now,
                     expires_at=now + LOGIN_CODE_TTL,
@@ -167,8 +162,8 @@ class ExchangeLoginCode:
                 await uow.commit()  # the code is spent either way
                 return Result[SessionGrant].fail(IdentityErrors.invalid_login_code())
             session = AuthSession(
-                id=uuid4(),
-                member_id=member.id,
+                uuid4(),
+                member_id=member.id.value,
                 created_at=now,
                 expires_at=now + SESSION_TTL,
             )

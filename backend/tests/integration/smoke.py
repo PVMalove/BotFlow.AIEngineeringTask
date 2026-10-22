@@ -11,7 +11,7 @@ from access_flow import AccessFlow
 from aio_pika import DeliveryMode, Message
 from api.containers import Container as AutomationContainer
 from auth_flow import AuthFlow
-from kernel_platform.http import create_app
+from kernel_platform.http.app import create_app
 from kernel_platform.resources import open_database, open_resources
 from kernel_platform.settings import Settings
 from botocore.exceptions import ClientError

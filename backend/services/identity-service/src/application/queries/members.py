@@ -7,8 +7,10 @@ from kernel_domain.result import Result
 
 from application.ports import Clock, TokenService, UnitOfWorkFactory
 from contracts.views import AdminMemberView, MemberView
-from domain.entities.auth import Member, MemberStatus
+from domain.entities.member import Member
 from domain.errors import IdentityErrors
+from domain.value_objects.member_id import MemberId
+from domain.value_objects.member_status import MemberStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,14 +42,11 @@ class AuthenticateSession:
             return Result[CurrentSession].fail(claims.error)
         async with self._uow_factory() as uow:
             session = await uow.sessions.get(claims.value.session_id)
-            if (
-                session is None
-                or session.member_id != claims.value.member_id
-                or session.revoked_at is not None
-                or session.expires_at <= self._clock()
+            if session is None or not session.is_usable(
+                claims.value.member_id, self._clock()
             ):
                 return Result[CurrentSession].fail(IdentityErrors.invalid_session())
-            member = await uow.members.get(session.member_id)
+            member = await uow.members.get(MemberId(session.member_id))
         if member is None or member.status is not MemberStatus.APPROVED:
             return Result[CurrentSession].fail(IdentityErrors.invalid_session())
         return Result[CurrentSession].ok(

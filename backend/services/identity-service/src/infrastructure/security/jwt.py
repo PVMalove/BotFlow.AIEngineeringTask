@@ -8,7 +8,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from kernel_domain.result import Result
 
 from application.ports import TokenClaims
-from domain.entities.auth import AuthSession
+from domain.entities.auth_session import AuthSession
 from domain.errors import IdentityErrors
 
 ISSUER = "botflow-identity"

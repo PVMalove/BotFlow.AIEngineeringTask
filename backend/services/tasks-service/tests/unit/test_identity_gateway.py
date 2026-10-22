@@ -4,7 +4,7 @@ from uuid import UUID
 
 import httpx
 import pytest
-from kernel_platform.security import Actor, ActorRole
+from kernel_platform.security.actor import Actor, ActorRole
 
 from application.ports import IdentityUnavailable
 from infrastructure.identity_gateway import HttpIdentityGateway
@@ -34,7 +34,7 @@ async def test_the_session_cookie_is_forwarded_to_the_current_member_endpoint() 
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        return httpx.Response(200, json=APPROVED)
+        return httpx.Response(200, json={"data": APPROVED})
 
     await gateway(httpx.MockTransport(handler)).require_approved("tok")
 
@@ -43,15 +43,15 @@ async def test_the_session_cookie_is_forwarded_to_the_current_member_endpoint() 
 
 
 async def test_an_approved_member_passes_as_an_actor_with_id_and_role() -> None:
-    result = await gateway(answer(200, APPROVED)).require_approved("tok")
+    result = await gateway(answer(200, {"data": APPROVED})).require_approved("tok")
 
     assert result.value == Actor(UUID(str(APPROVED["id"])), ActorRole.USER)
 
 
 async def test_an_admin_is_reported_with_the_admin_role() -> None:
-    result = await gateway(answer(200, {**APPROVED, "role": "admin"})).require_approved(
-        "tok"
-    )
+    result = await gateway(
+        answer(200, {"data": {**APPROVED, "role": "admin"}})
+    ).require_approved("tok")
 
     assert result.value.role is ActorRole.ADMIN
 
@@ -61,7 +61,7 @@ async def test_an_admin_is_reported_with_the_admin_role() -> None:
     [
         (401, {"detail": "unauthenticated"}, "unauthenticated"),
         (403, {"detail": "not_approved"}, "not_approved"),
-        (200, {**APPROVED, "status": "blocked"}, "not_approved"),
+        (200, {"data": {**APPROVED, "status": "blocked"}}, "not_approved"),
     ],
 )
 async def test_identitys_refusals_come_back_as_errors(
@@ -78,8 +78,8 @@ async def test_identitys_refusals_come_back_as_errors(
         (500, None),
         (429, None),
         (200, {"unexpected": True}),
-        (200, {**APPROVED, "role": "owner"}),
-        (200, {**APPROVED, "id": "not-a-uuid"}),
+        (200, {"data": {**APPROVED, "role": "owner"}}),
+        (200, {"data": {**APPROVED, "id": "not-a-uuid"}}),
     ],
 )
 async def test_an_unusable_answer_is_identity_unavailable(

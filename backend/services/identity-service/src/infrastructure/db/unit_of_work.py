@@ -1,22 +1,34 @@
 """SQLAlchemy unit of work: one session per operation, rollback by default."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from types import TracebackType
-from typing import Any, Self
+from typing import Any
 from uuid import UUID
 
+from kernel_domain.entity import Entity
+from kernel_platform.unit_of_work import EventHandler, SqlAlchemyUnitOfWork
 from sqlalchemy import Row, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from domain.access import OutboxEntry
-from domain.entities.auth import AuthSession, LoginCode, Member, MemberStatus, Role
+from domain.entities.auth_session import AuthSession
+from domain.entities.login_code import LoginCode
+from domain.entities.member import Member
+from domain.repositories import (
+    LoginCodeRepository,
+    MemberRepository,
+    OutboxRepository,
+    SessionRepository,
+)
+from domain.value_objects.member_id import MemberId
+from domain.value_objects.member_status import MemberStatus
+from domain.value_objects.role import Role
+from infrastructure.db.outbox import SqlOutbox
+from infrastructure.db.outbox_events import stage_identity_event
 from infrastructure.db.tables import (
     auth_sessions,
     login_codes,
     members,
-    outbox,
     rate_limits,
 )
 
@@ -25,14 +37,17 @@ _DECISION_LOCK_KEY = 7_204_122
 
 
 class SqlMembers:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self, session: AsyncSession, track: Callable[[Entity[MemberId]], None]
+    ) -> None:
         self._session = session
+        self._track = track
 
     async def add_if_absent(self, member: Member) -> bool:
         result = await self._session.execute(
             insert(members)
             .values(
-                id=member.id,
+                id=member.id.value,
                 telegram_id=member.telegram_id,
                 role=member.role.value,
                 status=member.status.value,
@@ -47,12 +62,11 @@ class SqlMembers:
         )
         return result.scalar_one_or_none() is not None
 
-    async def get(self, member_id: UUID, *, lock: bool = False) -> Member | None:
-        query = select(members).where(members.c.id == member_id)
+    async def get(self, member_id: MemberId, *, lock: bool = False) -> Member | None:
+        query = select(members).where(members.c.id == member_id.value)
         if lock:
             query = query.with_for_update()
-        row = (await self._session.execute(query)).one_or_none()
-        return _member(row) if row else None
+        return self._loaded((await self._session.execute(query)).one_or_none())
 
     async def get_by_telegram_id(
         self, telegram_id: int, *, lock: bool = False
@@ -60,8 +74,7 @@ class SqlMembers:
         query = select(members).where(members.c.telegram_id == telegram_id)
         if lock:
             query = query.with_for_update()
-        row = (await self._session.execute(query)).one_or_none()
-        return _member(row) if row else None
+        return self._loaded((await self._session.execute(query)).one_or_none())
 
     async def get_by_login_code(
         self, code_hash: str, *, lock: bool = False
@@ -73,8 +86,7 @@ class SqlMembers:
         )
         if lock:
             query = query.with_for_update(of=members)
-        row = (await self._session.execute(query)).one_or_none()
-        return _member(row) if row else None
+        return self._loaded((await self._session.execute(query)).one_or_none())
 
     async def lock_decisions(self) -> None:
         await self._session.execute(
@@ -104,12 +116,12 @@ class SqlMembers:
         )
         return [_member(row) for row in rows]
 
-    async def update_access(self, member: Member, *, expected_version: int) -> bool:
+    async def update_access(self, member: Member, *, loaded_version: int) -> bool:
         result = await self._session.execute(
             update(members)
             .where(
-                members.c.id == member.id,
-                members.c.access_version == expected_version,
+                members.c.id == member.id.value,
+                members.c.access_version == loaded_version,
             )
             .values(
                 status=member.status.value,
@@ -120,21 +132,13 @@ class SqlMembers:
             )
             .returning(members.c.id)
         )
-        return result.scalar_one_or_none() is not None
+        if result.scalar_one_or_none() is None:
+            return False
+        self._track(member)  # its events are staged by the commit
+        return True
 
-
-def _member(row: Row[Any]) -> Member:
-    return Member(
-        id=row.id,
-        telegram_id=row.telegram_id,
-        role=Role(row.role),
-        status=MemberStatus(row.status),
-        created_at=row.created_at,
-        display_name=row.display_name,
-        access_version=row.access_version,
-        status_changed_at=row.status_changed_at,
-        decided_by=row.decided_by,
-    )
+    def _loaded(self, row: Row[Any] | None) -> Member | None:
+        return _member(row) if row else None
 
 
 class SqlLoginCodes:
@@ -203,7 +207,7 @@ class SqlSessions:
         if row is None:
             return None
         return AuthSession(
-            id=row.id,
+            row.id,
             member_id=row.member_id,
             created_at=row.created_at,
             expires_at=row.expires_at,
@@ -231,84 +235,29 @@ class SqlSessions:
         )
 
 
-class SqlOutbox:
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+class SqlUnitOfWork(SqlAlchemyUnitOfWork):
+    members: MemberRepository
+    login_codes: LoginCodeRepository
+    sessions: SessionRepository
+    outbox: OutboxRepository
 
-    async def add(self, entry: OutboxEntry) -> None:
-        await self._session.execute(
-            outbox.insert().values(
-                id=entry.id,
-                type=entry.type,
-                payload=entry.payload,
-                created_at=entry.created_at,
-                attempts=entry.attempts,
-                next_attempt_at=entry.next_attempt_at,
-            )
-        )
-
-    async def claim_due(self, now: datetime, limit: int) -> list[OutboxEntry]:
-        # SKIP LOCKED lets several relays run without publishing a row twice.
-        rows = await self._session.execute(
-            select(outbox)
-            .where(outbox.c.published_at.is_(None), outbox.c.next_attempt_at <= now)
-            .order_by(outbox.c.created_at, outbox.c.id)
-            .limit(limit)
-            .with_for_update(skip_locked=True)
-        )
-        return [
-            OutboxEntry(
-                id=row.id,
-                type=row.type,
-                payload=row.payload,
-                created_at=row.created_at,
-                attempts=row.attempts,
-                next_attempt_at=row.next_attempt_at,
-                published_at=row.published_at,
-            )
-            for row in rows
-        ]
-
-    async def mark_published(self, entry_id: UUID, now: datetime) -> None:
-        await self._session.execute(
-            update(outbox).where(outbox.c.id == entry_id).values(published_at=now)
-        )
-
-    async def reschedule(
-        self, entry_id: UUID, attempts: int, next_attempt_at: datetime | None
-    ) -> None:
-        await self._session.execute(
-            update(outbox)
-            .where(outbox.c.id == entry_id)
-            .values(attempts=attempts, next_attempt_at=next_attempt_at)
-        )
-
-
-class SqlUnitOfWork:
-    def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
-        self._sessions = sessions
-        self._session: AsyncSession | None = None
-
-    async def __aenter__(self) -> Self:
-        self._session = self._sessions()
-        self.members = SqlMembers(self._session)
-        self.login_codes = SqlLoginCodes(self._session)
-        self.sessions = SqlSessions(self._session)
-        self.outbox = SqlOutbox(self._session)
-        return self
-
-    async def __aexit__(
+    def __init__(
         self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
+        session_factory: async_sessionmaker[AsyncSession],
+        *,
+        event_handlers: Sequence[EventHandler] = (),
     ) -> None:
-        assert self._session is not None
-        await self._session.close()  # discards anything not committed
+        super().__init__(
+            session_factory,
+            stage_outbox=stage_identity_event,
+            event_handlers=event_handlers,
+        )
 
-    async def commit(self) -> None:
-        assert self._session is not None
-        await self._session.commit()
+    def _attach(self, session: AsyncSession) -> None:
+        self.members = SqlMembers(session, self.track)
+        self.login_codes = SqlLoginCodes(session)
+        self.sessions = SqlSessions(session)
+        self.outbox = SqlOutbox(session)
 
 
 class SqlRateLimiter:
@@ -340,3 +289,17 @@ class SqlRateLimiter:
             )
             await session.commit()
         return bool(count is not None and count <= limit)
+
+
+def _member(row: Row[Any]) -> Member:
+    return Member.reconstitute(
+        MemberId(row.id),
+        telegram_id=row.telegram_id,
+        role=Role(row.role),
+        status=MemberStatus(row.status),
+        created_at=row.created_at,
+        display_name=row.display_name,
+        access_version=row.access_version,
+        status_changed_at=row.status_changed_at,
+        decided_by=row.decided_by,
+    )

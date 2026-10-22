@@ -4,7 +4,7 @@ import json
 
 from kernel_platform.messaging import ConfirmedPublisher
 
-from domain.access import OutboxEntry
+from domain.outbox import OutboxEntry
 
 
 class RabbitEventPublisher:

@@ -74,7 +74,9 @@ async def open_services(resources: Resources) -> AsyncIterator[Services]:
         board_signal = RedisBoardSignal(resources.redis)
 
         def uow() -> SqlTasksUnitOfWork:
-            return SqlTasksUnitOfWork(resources.sessions, event_handlers=[board_signal])
+            return SqlTasksUnitOfWork(
+                resources.sessions, event_handlers=[board_signal.handle]
+            )
 
         yield Services(
             identity=identity,

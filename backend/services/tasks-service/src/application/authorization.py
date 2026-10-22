@@ -1,6 +1,6 @@
 """Who may do what with a task."""
 
-from kernel_platform.security import Actor, ActorRole
+from kernel_platform.security.actor import Actor, ActorRole
 
 from domain.entities.task import Task
 

@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import Depends, Header, Request
 from fastapi.params import Depends as DependsParameter
 from kernel_domain.result import Result
-from kernel_platform.http import unwrap
+from kernel_platform.http.match import unwrap
 
 from api.containers import Services
 from api.security import SESSION_COOKIE, Operation
@@ -19,8 +19,8 @@ from application.queries.members import (
     FindMemberByTelegram,
     ListMembers,
 )
-from domain.entities.auth import Role
 from domain.errors import IdentityErrors
+from domain.value_objects.role import Role
 
 
 async def get_services(request: Request) -> Services:

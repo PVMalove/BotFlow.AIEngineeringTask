@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from kernel_platform.http.errors import ApiError
-from kernel_platform.security import Actor, ActorRole, require_admin
+from kernel_platform.security.actor import Actor, ActorRole, require_admin
 
 
 def test_actor_role_values_match_the_pre_existing_service_role_strings() -> None:

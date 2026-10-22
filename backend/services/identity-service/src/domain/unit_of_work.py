@@ -1,7 +1,8 @@
-"""Domain unit-of-work port: commit is explicit, rollback is the default."""
+"""Transaction contract of the identity service; rollback is the default."""
 
-from types import TracebackType
-from typing import Protocol, Self
+from typing import Protocol
+
+from kernel_platform.unit_of_work import UnitOfWork
 
 from domain.repositories import (
     LoginCodeRepository,
@@ -11,26 +12,8 @@ from domain.repositories import (
 )
 
 
-class UnitOfWork(Protocol):
-    @property
-    def members(self) -> MemberRepository: ...
-
-    @property
-    def login_codes(self) -> LoginCodeRepository: ...
-
-    @property
-    def sessions(self) -> SessionRepository: ...
-
-    @property
-    def outbox(self) -> OutboxRepository: ...
-
-    async def __aenter__(self) -> Self: ...
-
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None: ...
-
-    async def commit(self) -> None: ...
+class IdentityUnitOfWork(UnitOfWork, Protocol):
+    members: MemberRepository
+    login_codes: LoginCodeRepository
+    sessions: SessionRepository
+    outbox: OutboxRepository

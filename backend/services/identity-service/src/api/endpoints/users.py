@@ -1,7 +1,7 @@
 """User and member profile endpoints."""
 
 from fastapi import APIRouter, Response
-from kernel_platform.http import ApiResponse
+from kernel_platform.http.envelope import ApiResponse
 
 from api.dependencies import RequiredAuth
 from contracts.views import MemberView

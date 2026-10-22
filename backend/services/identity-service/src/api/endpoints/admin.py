@@ -4,13 +4,14 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response
-from kernel_platform.http import ApiResponse, match_result
-from kernel_platform.security import require_same_origin
+from kernel_platform.http.envelope import ApiResponse
+from kernel_platform.http.match import match_result
+from kernel_platform.security.origin import require_same_origin
 
 from api.dependencies import AdminAuth, DecideMemberDI, ListMembersDI
 from api.schemas import DecisionBody, JoinRequestsListRequest, MembersListRequest
 from contracts.views import AdminMemberView, DecisionView
-from domain.access import Action
+from domain.value_objects.access import Action
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -72,7 +73,7 @@ async def decide_member(
     """Принять решение от имени текущего администратора."""
     response.headers["Cache-Control"] = "no-store"
     return match_result(
-        await handler.execute(body.to_command(admin.member.id, member_id, action))
+        await handler.execute(body.to_command(admin.member.id.value, member_id, action))
     )
 
 

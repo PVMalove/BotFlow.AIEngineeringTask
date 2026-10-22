@@ -12,7 +12,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from kernel_domain.domain_event import DomainEvent
-from kernel_platform.security import Actor, ActorRole
+from kernel_platform.security.actor import Actor, ActorRole
 from sqlalchemy import delete, insert, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -51,7 +51,7 @@ class Signals:
     def __init__(self) -> None:
         self.events: list[DomainEvent] = []
 
-    async def __call__(self, event: DomainEvent) -> None:
+    async def handle(self, event: DomainEvent) -> None:
         self.events.append(event)
 
     @property
@@ -86,7 +86,7 @@ def change(
     sessions: async_sessionmaker[AsyncSession], signals: Signals
 ) -> ChangeTaskStatusCommandHandler:
     return ChangeTaskStatusCommandHandler(
-        lambda: SqlTasksUnitOfWork(sessions, event_handlers=[signals])
+        lambda: SqlTasksUnitOfWork(sessions, event_handlers=[signals.handle])
     )
 
 

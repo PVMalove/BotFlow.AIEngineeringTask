@@ -12,8 +12,8 @@ from application.commands.auth import (
 )
 from application.commands.join import SubmitJoinRequestCommand
 from application.queries.members import FindMemberByTelegramQuery, ListMembersQuery
-from domain.access import Action
-from domain.entities.auth import MemberStatus
+from domain.value_objects.access import Action
+from domain.value_objects.member_status import MemberStatus
 
 
 class ExchangeRequest(BaseModel):

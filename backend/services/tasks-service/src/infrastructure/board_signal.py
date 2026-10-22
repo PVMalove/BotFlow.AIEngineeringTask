@@ -21,7 +21,7 @@ class RedisBoardSignal:
         self._redis = redis
         self._timeout = timeout
 
-    async def __call__(self, event: DomainEvent) -> None:
+    async def handle(self, event: DomainEvent) -> None:
         if not isinstance(event, TaskStatusChanged):
             return
         # Pub/Sub never replays; a lost signal is covered by the panel's refresh.

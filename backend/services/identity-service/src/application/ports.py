@@ -8,12 +8,12 @@ from uuid import UUID
 
 from kernel_domain.result import Result
 
-from domain.access import OutboxEntry
-from domain.entities.auth import AuthSession
-from domain.unit_of_work import UnitOfWork
+from domain.entities.auth_session import AuthSession
+from domain.outbox import OutboxEntry
+from domain.unit_of_work import IdentityUnitOfWork
 
 Clock = Callable[[], datetime]
-UnitOfWorkFactory = Callable[[], UnitOfWork]
+UnitOfWorkFactory = Callable[[], IdentityUnitOfWork]
 
 
 class RateLimiter(Protocol):

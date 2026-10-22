@@ -1,7 +1,8 @@
 """Internal member queries and login code issuance endpoints."""
 
 from fastapi import APIRouter, Response
-from kernel_platform.http import ApiResponse, match_result
+from kernel_platform.http.envelope import ApiResponse
+from kernel_platform.http.match import match_result
 
 from api.dependencies import (
     FindMemberDI,

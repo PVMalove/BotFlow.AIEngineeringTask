@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from kernel_domain.result import Result
-from kernel_platform.security import Actor
+from kernel_platform.security.actor import Actor
 
 from application.authorization import may_change_status
 from contracts.task import TaskView
