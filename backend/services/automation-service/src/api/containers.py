@@ -12,12 +12,14 @@ from botflow_platform.settings import Settings
 from botflow_platform.streams import RedisStream
 from dependency_injector import containers, providers
 
+from application.commands.accept_text import AcceptTextMessage
 from application.commands.deliver_notification import DeliverNotification, RunNotifier
 from application.commands.handle_bot_command import HandleBotCommand
 from application.commands.process_identity_event import ProcessIdentityEvent
 from application.commands.relay_intents import RelayIntents
 from application.ports import IdentityGateway, Messenger
 from infrastructure.db.inbox import SqlUpdateInbox
+from infrastructure.db.jobs import SqlJobStore
 from infrastructure.db.notifications import SqlIntentStore
 from infrastructure.messaging import IdentityEventConsumer
 from infrastructure.streams import (
@@ -32,6 +34,12 @@ def build_bot_command(
     database: Database, identity: IdentityGateway, messenger: Messenger
 ) -> HandleBotCommand:
     return HandleBotCommand(identity, messenger, SqlUpdateInbox(database.sessions))
+
+
+def build_accept_text(
+    database: Database, identity: IdentityGateway, messenger: Messenger
+) -> AcceptTextMessage:
+    return AcceptTextMessage(identity, SqlJobStore(database.sessions), messenger)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,3 +84,4 @@ class Container(containers.DeclarativeContainer):
     database = providers.Resource(open_database, settings=settings)
 
     bot_command = providers.Factory(build_bot_command, database=database)
+    accept_text = providers.Factory(build_accept_text, database=database)

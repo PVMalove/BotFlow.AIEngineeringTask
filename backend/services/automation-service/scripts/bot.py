@@ -10,6 +10,7 @@ from aiogram import Bot
 
 from api.containers import Container
 from infrastructure.identity_gateway import HttpIdentityGateway
+from infrastructure.polling import TelegramPoller
 from infrastructure.telegram import TelegramMessenger, create_dispatcher
 
 
@@ -31,17 +32,20 @@ async def main() -> None:
                 follow_redirects=False,
             ) as client,
         ):
+            identity = HttpIdentityGateway(
+                client, settings.secret("automation_service_key").get_secret_value()
+            )
+            messenger = TelegramMessenger(bot)
             command = await container.bot_command.async_(
-                identity=HttpIdentityGateway(
-                    client, settings.secret("automation_service_key").get_secret_value()
-                ),
-                messenger=TelegramMessenger(bot),
+                identity=identity, messenger=messenger
             )
-            dispatcher = create_dispatcher(command)
+            accept = await container.accept_text.async_(
+                identity=identity, messenger=messenger
+            )
+            dispatcher = create_dispatcher(command, accept, messenger)
             print("Telegram polling started.", flush=True)
-            await dispatcher.start_polling(
-                bot, allowed_updates=["message"], handle_as_tasks=False
-            )
+            # Our own loop: the offset moves only after the handler returned.
+            await TelegramPoller(bot, dispatcher).run()
     finally:
         shutdown = container.shutdown_resources()
         if inspect.isawaitable(shutdown):
