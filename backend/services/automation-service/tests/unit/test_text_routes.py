@@ -119,7 +119,7 @@ async def test_an_unknown_command_gets_a_short_reply_and_no_job() -> None:
 @pytest.mark.parametrize(
     "content",
     [
-        {"voice": {"file_id": "f", "file_unique_id": "u", "duration": 3}},
+        {"audio": {"file_id": "f", "file_unique_id": "u", "duration": 3}},
         {"photo": [{"file_id": "f", "file_unique_id": "u", "width": 1, "height": 1}]},
         {"dice": {"emoji": "x", "value": 1}},
     ],
