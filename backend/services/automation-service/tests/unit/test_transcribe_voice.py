@@ -471,16 +471,14 @@ async def test_a_storage_failure_on_begin_propagates_so_the_entry_stays_pending(
     assert h.log.events == ["begin"]
 
 
-async def test_an_unexpected_recognition_error_fails_immediately() -> None:
+async def test_an_unexpected_recognition_error_propagates_without_a_verdict() -> None:
     h = Harness()
     h.stt.error = RuntimeError("model crashed")
 
-    result = await h.sut.execute(JOB_ID)
+    with pytest.raises(RuntimeError):
+        await h.sut.execute(JOB_ID)
 
-    assert result.outcome is TranscribeOutcome.FAILED
-    assert result.error_code == "failed"
-    assert len(h.store.failed) == 1
-    assert h.store.failed[0]["code"] == "failed"
+    assert h.store.failed == [] and h.store.completed == []
 
 
 async def test_store_failure_during_timeout_raises_stuck_worker_error() -> None:

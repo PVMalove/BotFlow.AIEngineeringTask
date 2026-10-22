@@ -167,8 +167,6 @@ class TranscribeVoice:
                 return await self._fail(work, _code_of(error), started)
             except Exception as exc:
                 raise StuckWorkerError(exc) from exc
-        except Exception:
-            return await self._fail(work, "failed", started)
         finished = self._clock()
         text = transcript.text.strip()
         if not text:
