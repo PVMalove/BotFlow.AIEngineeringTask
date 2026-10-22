@@ -1,8 +1,9 @@
 """Boundaries used by the Telegram login and join commands."""
 
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
-from typing import Protocol
+from typing import Any, Protocol
 from uuid import UUID
 
 from domain.notifications import IntentStatus, NotificationIntent
@@ -23,6 +24,7 @@ class TelegramMember:
     role: str
     status: str
     access_version: int = 0
+    member_id: UUID | None = None  # Identity's stable member id
 
 
 class IdentityUnavailable(Exception):
@@ -35,6 +37,10 @@ class LoginDenied(Exception):
 
 class LoginRateLimited(Exception):
     """The caller must wait before requesting another code."""
+
+
+class MemberDirectory(Protocol):
+    async def find_member(self, telegram_id: int) -> TelegramMember | None: ...
 
 
 class IdentityGateway(Protocol):
@@ -87,3 +93,49 @@ class NotificationQueue(Protocol):
     async def read(self, count: int, block_ms: int) -> list[QueuedIntent]: ...
 
     async def ack(self, entry_id: str) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class NewJob:
+    id: UUID
+    bot_id: int
+    chat_id: int
+    message_id: int
+    author_id: UUID
+    author_telegram_id: int
+    author_name: str  # snapshot from Telegram, at most 64 characters
+    text: str
+    message_date: datetime  # when Telegram says the author sent it
+    received_at: datetime  # when this process received the update
+
+
+@dataclass(frozen=True, slots=True)
+class OutboxMessage:
+    """A message written in the business transaction and relayed to RabbitMQ."""
+
+    id: UUID
+    correlation_id: UUID
+    type: str
+    routing_key: str
+    payload: dict[str, Any]  # the complete envelope
+
+
+class AcceptOutcome(StrEnum):
+    ACCEPTED = "accepted"
+    DUPLICATE = "duplicate"  # the same bot/chat/message was already accepted
+    LIMIT = "limit"  # too many unfinished jobs; nothing was stored
+
+
+@dataclass(frozen=True, slots=True)
+class Accepted:
+    outcome: AcceptOutcome
+    job_id: UUID
+    acknowledged: bool  # a positive ACK was already recorded for this job
+
+
+class JobStore(Protocol):
+    async def accept(self, job: NewJob, message: OutboxMessage) -> Accepted:
+        """Duplicate check, limits, job and outbox row in ONE transaction."""
+        ...
+
+    async def mark_acked(self, job_id: UUID, at: datetime) -> None: ...

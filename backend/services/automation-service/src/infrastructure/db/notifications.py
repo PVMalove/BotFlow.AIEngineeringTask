@@ -41,6 +41,7 @@ notification_intents = Table(
     Column("access_version", Integer, nullable=False),
     Column("status", Text, nullable=False),
     Column("attempts", Integer, nullable=False, server_default=text("0")),
+    Column("body", Text),  # text of a result notification
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     CheckConstraint(
