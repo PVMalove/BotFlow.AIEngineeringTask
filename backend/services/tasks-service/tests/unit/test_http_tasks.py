@@ -137,6 +137,7 @@ async def client(env: Env) -> AsyncIterator[httpx.AsyncClient]:
         transport=httpx.ASGITransport(app=app),
         base_url="http://test",
         cookies=COOKIES,
+        headers={"Origin": "http://test"},
     ) as client:
         yield client
 
@@ -242,7 +243,7 @@ async def test_a_malformed_cursor_is_a_client_error(
     response = await client.get("/api/v1/tasks", params={"cursor": cursor})
 
     assert response.status_code == 400
-    assert response.json() == {"detail": "invalid_cursor"}
+    assert response.json()["detail"] == "invalid_cursor"
 
 
 async def test_the_card_returns_one_task(env: Env, client: httpx.AsyncClient) -> None:
@@ -259,7 +260,7 @@ async def test_an_unknown_card_is_not_found(client: httpx.AsyncClient) -> None:
     response = await client.get(f"/api/v1/tasks/{uuid4()}")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "task_not_found"}
+    assert response.json()["detail"] == "task_not_found"
 
 
 async def test_the_session_is_checked_with_identity_on_every_request(
@@ -281,7 +282,7 @@ async def test_a_request_without_a_session_cookie_is_unauthenticated(
     response = await client.get("/api/v1/tasks")
 
     assert response.status_code == 401
-    assert response.json() == {"detail": "unauthenticated"}
+    assert response.json()["detail"] == "unauthenticated"
     assert env.identity.tokens == []
 
 
@@ -307,7 +308,7 @@ async def test_identitys_verdict_is_relayed_without_exposing_tasks(
     for path in ("/api/v1/tasks", f"/api/v1/tasks/{card.id}"):
         response = await client.get(path)
         assert response.status_code == status
-        assert response.json() == {"detail": detail}
+        assert response.json()["detail"] == detail
 
 
 async def test_the_health_endpoint_still_reports_not_ready(
@@ -329,7 +330,9 @@ async def test_a_storage_failure_is_service_unavailable(
     response = await client.get("/api/v1/tasks")
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "tasks_unavailable"}
+    body = response.json()
+    assert body["detail"] == "tasks_unavailable"
+    assert body["message"] and body["request_id"] == response.headers["x-request-id"]
 
 
 async def test_the_author_moves_a_task_and_gets_the_new_version(
@@ -432,7 +435,7 @@ async def test_an_unknown_task_is_404_with_the_plain_contract(
     )
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "task_not_found"}
+    assert response.json()["detail"] == "task_not_found"
 
 
 async def test_a_malformed_request_id_is_replaced_not_echoed(
@@ -454,6 +457,7 @@ async def test_a_malformed_request_id_is_replaced_not_echoed(
     [
         {"status": "archived", "expected_version": 1},
         {"status": "completed", "expected_version": 0},
+        {"status": "completed", "expected_version": 2**31},
         {"status": "completed"},
         {"expected_version": 1},
     ],
@@ -485,5 +489,57 @@ async def test_identitys_verdict_blocks_a_status_change(
     response = await patch(client, task, "completed")
 
     assert response.status_code == status
-    assert response.json() == {"detail": detail}
+    assert response.json()["detail"] == detail
     assert env.board.tasks[task.id].status is TaskStatus.PENDING
+
+
+@pytest.mark.parametrize("origin", [None, "http://evil.example", "https://test"])
+async def test_a_status_change_from_a_foreign_origin_is_refused(
+    env: Env, client: httpx.AsyncClient, origin: str | None
+) -> None:
+    task = env.board.add(1)
+    del client.headers["Origin"]
+    headers = {} if origin is None else {"Origin": origin}
+
+    response = await patch(client, task, "completed", headers=headers)
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "origin_not_allowed"}
+    assert env.identity.tokens == []
+    assert env.board.tasks[task.id].status is TaskStatus.PENDING
+
+
+async def test_the_largest_integer_version_is_accepted(
+    env: Env, client: httpx.AsyncClient
+) -> None:
+    task = env.board.add(1, version=2**31 - 1)
+
+    response = await patch(client, task, "completed", version=2**31 - 1)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    "path, status, detail",
+    [
+        ("missing", 404, "task_not_found"),
+        ("bad-cursor", 400, "invalid_cursor"),
+    ],
+)
+async def test_every_rejection_carries_message_and_request_id(
+    client: httpx.AsyncClient, path: str, status: int, detail: str
+) -> None:
+    if path == "missing":
+        response = await client.get(
+            f"/api/v1/tasks/{uuid4()}", headers={"X-Request-ID": "req-7"}
+        )
+    else:
+        response = await client.get(
+            "/api/v1/tasks", params={"cursor": "!"}, headers={"X-Request-ID": "req-7"}
+        )
+
+    assert response.status_code == status
+    assert response.headers["x-request-id"] == "req-7"
+    body = response.json()
+    assert body["detail"] == detail and body["request_id"] == "req-7"
+    assert body["message"] and set(body) == {"detail", "message", "request_id"}

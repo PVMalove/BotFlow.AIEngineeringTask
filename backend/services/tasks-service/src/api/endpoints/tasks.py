@@ -4,9 +4,10 @@ from typing import Annotated
 from uuid import UUID
 
 from botflow_platform.http import ApiResponse
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 from api.dependencies import ServicesDI
+from api.security import require_same_origin
 from application.queries.tasks import DEFAULT_LIMIT, MAX_LIMIT
 from contracts.views import ChangeStatusRequest, TaskView, task_view
 from domain.tasks import TaskStatus
@@ -58,6 +59,7 @@ async def get_task(
 @router.patch(
     "/{task_id}",
     response_model=ApiResponse[TaskView],
+    dependencies=[Depends(require_same_origin)],
     summary="Сменить статус задачи",
     description=(
         "Автор или администратор переводит задачу в любой статус. "

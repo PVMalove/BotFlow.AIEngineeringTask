@@ -21,7 +21,9 @@ class TaskView(BaseModel):
 
 class ChangeStatusRequest(BaseModel):
     status: TaskStatus
-    expected_version: int = Field(ge=1)
+    expected_version: int = Field(
+        ge=1, le=2**31 - 1
+    )  # the tasks.version column is a 32-bit integer
 
 
 def task_view(task: Task) -> TaskView:
