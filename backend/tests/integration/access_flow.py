@@ -17,6 +17,8 @@ from uuid import UUID, uuid4
 import httpx
 from api.containers import build_bot_command, build_notifications
 from application.commands.handle_bot_command import HandleBotCommandDto
+from infrastructure.identity_gateway import HttpIdentityGateway
+from infrastructure.streams import NOTIFICATION_STREAM
 from kernel_platform.messaging import (
     ACCESS_DECIDED_ROUTING_KEY,
     AUTOMATION_IDENTITY_QUEUE,
@@ -25,8 +27,6 @@ from kernel_platform.messaging import (
 )
 from kernel_platform.resources import open_database, open_resources
 from kernel_platform.settings import Settings
-from infrastructure.identity_gateway import HttpIdentityGateway
-from infrastructure.streams import NOTIFICATION_STREAM
 from sqlalchemy import text
 
 IDENTITY_URL = "http://identity-api:8000"

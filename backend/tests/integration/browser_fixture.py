@@ -13,9 +13,9 @@ import httpx
 from api.containers import build_bot_command
 from application.commands.handle_bot_command import HandleBotCommandDto
 from auth_flow import TelegramPort
+from infrastructure.identity_gateway import HttpIdentityGateway
 from kernel_platform.resources import open_database
 from kernel_platform.settings import Settings
-from infrastructure.identity_gateway import HttpIdentityGateway
 from sqlalchemy import text
 
 APPLICANT = 4_200_000_008

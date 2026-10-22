@@ -23,8 +23,14 @@ import httpx
 from api.containers import build_bot_command, build_notifications, build_task_flow
 from application.commands.accept_text import ACK, AcceptTextDto, AcceptTextMessage
 from application.commands.handle_bot_command import HandleBotCommandDto
-from application.commands.process_task_result import ProcessTaskResult
+from application.commands.record_task_result import RecordTaskResultCommandHandler
 from application.ports import AcceptOutcome, NewJob, OutboxMessage
+from domain.jobs import job_id_for, outbox_id_for
+from infrastructure.db.jobs import SqlJobStore, outbox
+from infrastructure.db.results import SqlTaskResultStore, fail_job, replay_job
+from infrastructure.identity_gateway import HttpIdentityGateway
+from infrastructure.messaging.task_result_consumer import TaskResultConsumer
+from infrastructure.streams import NOTIFICATION_STREAM
 from kernel_platform.messaging import (
     TASK_CREATE_ROUTING_KEY,
     ConfirmedPublisher,
@@ -34,11 +40,6 @@ from kernel_platform.outbox import RelayOutbox, sql_transactions
 from kernel_platform.resources import open_database, open_resources
 from kernel_platform.retry import RetryPolicy
 from kernel_platform.settings import Settings
-from domain.jobs import job_id_for, outbox_id_for
-from infrastructure.db.jobs import SqlJobStore, outbox
-from infrastructure.db.results import SqlTaskResultStore, fail_job, replay_job
-from infrastructure.identity_gateway import HttpIdentityGateway
-from infrastructure.streams import NOTIFICATION_STREAM
 from sqlalchemy import text
 
 IDENTITY_URL = "http://identity-api:8000"
@@ -476,9 +477,11 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
             "envelope_version": 1,
             "payload": {"job_id": str(finished.id), "task_id": str(uuid4())},
         }
-        await ProcessTaskResult(
-            SqlTaskResultStore(self.automation_db.sessions)
-        ).execute(str(uuid4()), "TaskCreated", json.dumps(result).encode())
+        await TaskResultConsumer(
+            RecordTaskResultCommandHandler(
+                SqlTaskResultStore(self.automation_db.sessions)
+            )
+        ).handle(str(uuid4()), "TaskCreated", json.dumps(result).encode())
         freed = await store.accept(*self.new_job(finished.author_id, LIMIT_AUTHORS, 99))
         self.assertIs(freed.outcome, AcceptOutcome.ACCEPTED)
         full = await store.accept(*self.new_job(finished.author_id, LIMIT_AUTHORS, 98))

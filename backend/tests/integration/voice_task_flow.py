@@ -36,7 +36,7 @@ from application.commands.accept_voice import (
     transcribe_outbox_id_for,
 )
 from application.commands.handle_bot_command import HandleBotCommandDto
-from application.commands.process_task_result import ProcessTaskResult
+from application.commands.record_task_result import RecordTaskResultCommandHandler
 from application.commands.transcribe_voice import FAILURES, TranscribeVoice
 from application.ports import (
     AcceptOutcome,
@@ -50,16 +50,12 @@ from application.ports import (
     Transcript,
     TranscriptionTimeout,
 )
-from kernel_platform.messaging import declare_task_topology
-from kernel_platform.resources import open_database, open_resources
-from kernel_platform.retry import RetryPolicy
-from kernel_platform.settings import Settings
-from kernel_platform.streams import RedisStream
 from domain.jobs import job_id_for, outbox_id_for
 from infrastructure.db.jobs import SqlJobStore
 from infrastructure.db.results import SqlTaskResultStore
 from infrastructure.db.voice import SqlVoiceStore
 from infrastructure.identity_gateway import HttpIdentityGateway
+from infrastructure.messaging.task_result_consumer import TaskResultConsumer
 from infrastructure.s3_audio import S3AudioStore
 from infrastructure.streams import (
     NOTIFICATION_STREAM,
@@ -68,6 +64,11 @@ from infrastructure.streams import (
     RedisVoiceQueue,
 )
 from infrastructure.stt.runner import ReadinessMarker, run_worker
+from kernel_platform.messaging import declare_task_topology
+from kernel_platform.resources import open_database, open_resources
+from kernel_platform.retry import RetryPolicy
+from kernel_platform.settings import Settings
+from kernel_platform.streams import RedisStream
 from sqlalchemy import text
 from text_task_flow import TelegramPort
 
@@ -804,9 +805,11 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
             "envelope_version": 1,
             "payload": {"job_id": str(first_job.id), "task_id": str(uuid4())},
         }
-        await ProcessTaskResult(
-            SqlTaskResultStore(self.automation_db.sessions)
-        ).execute(str(uuid4()), "TaskCreated", json.dumps(result).encode())
+        await TaskResultConsumer(
+            RecordTaskResultCommandHandler(
+                SqlTaskResultStore(self.automation_db.sessions)
+            )
+        ).handle(str(uuid4()), "TaskCreated", json.dumps(result).encode())
         freed = await self.store.accept_voice(
             *self.new_voice_job(author_id, telegram_id, 91)
         )
