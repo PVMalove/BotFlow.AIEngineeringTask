@@ -111,6 +111,26 @@ class NewJob:
 
 
 @dataclass(frozen=True, slots=True)
+class NewVoiceJob:
+    """A voice message: only Telegram's file identity is kept, never a file URL."""
+
+    id: UUID
+    bot_id: int
+    chat_id: int
+    message_id: int
+    author_id: UUID
+    author_telegram_id: int
+    author_name: str  # snapshot from Telegram, at most 64 characters
+    file_id: str
+    file_unique_id: str
+    duration_seconds: int
+    file_size_bytes: int | None  # Telegram may omit it
+    mime_type: str | None
+    message_date: datetime  # when Telegram says the author sent it
+    received_at: datetime  # when this process received the update
+
+
+@dataclass(frozen=True, slots=True)
 class OutboxMessage:
     """A message written in the business transaction and relayed to RabbitMQ."""
 
@@ -125,6 +145,7 @@ class AcceptOutcome(StrEnum):
     ACCEPTED = "accepted"
     DUPLICATE = "duplicate"  # the same bot/chat/message was already accepted
     LIMIT = "limit"  # too many unfinished jobs; nothing was stored
+    VOICE_LIMIT = "voice_limit"  # too many unfinished voice jobs; nothing was stored
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,6 +158,14 @@ class Accepted:
 class JobStore(Protocol):
     async def accept(self, job: NewJob, message: OutboxMessage) -> Accepted:
         """Duplicate check, limits, job and outbox row in ONE transaction."""
+        ...
+
+    async def mark_acked(self, job_id: UUID, at: datetime) -> None: ...
+
+
+class VoiceJobStore(Protocol):
+    async def accept_voice(self, job: NewVoiceJob, message: OutboxMessage) -> Accepted:
+        """The same path as `accept`: job, voice record and outbox row at once."""
         ...
 
     async def mark_acked(self, job_id: UUID, at: datetime) -> None: ...
