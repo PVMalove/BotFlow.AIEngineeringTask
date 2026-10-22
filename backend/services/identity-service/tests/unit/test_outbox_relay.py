@@ -8,7 +8,7 @@ from conftest import NOW, Clock, FakeUnitOfWork, Store
 
 from application.commands.access import DecideMember, DecideMemberCommand
 from application.commands.relay import RelayOutbox
-from domain.access import ACCESS_DECIDED, Action, OutboxEntry
+from domain.access import ACCESS_DECIDED, Action, OutboxEntry, VersionConflict
 from domain.entities.auth import Member, MemberStatus, Role
 
 
@@ -95,7 +95,7 @@ async def test_a_repeat_adds_no_second_intent(world: World) -> None:
 
 
 async def test_a_refused_decision_leaves_no_intent(world: World) -> None:
-    with pytest.raises(Exception, match=""):
+    with pytest.raises(VersionConflict):
         await world.act(Action.APPROVE, world.applicant, version=7)
 
     assert world.store.outbox == {}
