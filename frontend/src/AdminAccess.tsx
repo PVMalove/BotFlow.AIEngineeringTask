@@ -269,8 +269,26 @@ export function AdminAccess({
           >
             {messages.previousPage}
           </Button>
-          <Typography>
-            {messages.page} {new Intl.NumberFormat(locale).format(page + 1)}
+          <Typography
+            component="span"
+            aria-current="page"
+            aria-label={`${messages.page} ${page + 1}`}
+            sx={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minWidth: 36,
+              height: 36,
+              px: 1.25,
+              borderRadius: '10px',
+              backgroundColor: 'primary.main',
+              color: 'primary.contrastText',
+              fontWeight: 700,
+              fontSize: '0.95rem',
+              lineHeight: 1,
+            }}
+          >
+            {new Intl.NumberFormat(locale).format(page + 1)}
           </Typography>
           <Button
             color="secondary"
