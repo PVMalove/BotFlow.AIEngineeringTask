@@ -17,7 +17,7 @@ from application.ports import (
     Unauthenticated,
 )
 from application.queries.tasks import GetTask, ListTasks
-from domain.tasks import Task, TaskStatus
+from domain.tasks import Actor, Role, Task, TaskStatus
 
 BASE = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 COOKIES = {"botflow_session": "session-token"}
@@ -29,10 +29,11 @@ class Identity:
         self.tokens: list[str] = []
         self.failure: Exception | None = None
 
-    async def require_approved(self, token: str) -> None:
+    async def require_approved(self, token: str) -> Actor:
         self.tokens.append(token)
         if self.failure:
             raise self.failure
+        return Actor(AUTHOR, Role.USER)
 
 
 class Board:

@@ -12,8 +12,8 @@ from application.ports import (
     PageCursor,
     TaskNotFound,
     TaskReader,
-    Unauthenticated,
 )
+from application.session import authenticate
 from domain.tasks import Task, TaskStatus
 
 DEFAULT_LIMIT = 50
@@ -47,12 +47,6 @@ class TaskPage:
     has_more: bool
 
 
-async def _authenticate(auth: MemberAuthenticator, token: str | None) -> None:
-    if not token:
-        raise Unauthenticated
-    await auth.require_approved(token)  # on every request: access can be revoked
-
-
 class ListTasks:
     def __init__(self, auth: MemberAuthenticator, reader: TaskReader) -> None:
         self._auth = auth
@@ -66,7 +60,7 @@ class ListTasks:
         limit: int = DEFAULT_LIMIT,
         cursor: str | None = None,
     ) -> TaskPage:
-        await _authenticate(self._auth, token)
+        await authenticate(self._auth, token)
         after = decode_cursor(cursor) if cursor else None
         rows = await self._reader.list_page(status, after, limit + 1)
         items = rows[:limit]
@@ -85,7 +79,7 @@ class GetTask:
         self._reader = reader
 
     async def execute(self, token: str | None, task_id: UUID) -> Task:
-        await _authenticate(self._auth, token)
+        await authenticate(self._auth, token)
         task = await self._reader.get(task_id)
         if task is None:
             raise TaskNotFound
