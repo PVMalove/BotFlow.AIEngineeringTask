@@ -90,9 +90,15 @@ for (const input of ['mouse', 'keyboard'] as const) {
       await expect(completed.getByRole('listitem')).toHaveCount(0);
       const handle = card.getByRole('button', { name: /Перенести задачу/ });
       if (input === 'keyboard') {
+        // Keyboard navigation activates focus-visible after the pointer-driven login.
+        await page.keyboard.press('Tab');
         await handle.focus();
         await expect(handle).toHaveCSS('outline-style', 'solid');
         await page.keyboard.press('Space');
+        await expect(handle).toHaveAttribute('aria-pressed', 'true');
+        await expect(
+          page.locator('[role="status"][aria-live="assertive"]'),
+        ).toContainText('Целевая колонка: Ожидает');
         await page.keyboard.press('ArrowRight');
         await expect(
           page

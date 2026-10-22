@@ -46,8 +46,11 @@ test('moves to the adjacent empty column with one arrow and confirms with Space'
   page,
 }) => {
   const patches = await board(page);
+  await page.getByRole('button', { name: 'Русский', exact: true }).click();
+  await page.keyboard.press('Tab');
   const handle = page.getByRole('button', { name: /Перенести задачу/ });
   await handle.focus();
+  await expect(handle).toHaveCSS('outline-style', 'solid');
   await page.keyboard.press('Space');
   await expect(handle).toHaveAttribute('aria-pressed', 'true');
   await page.keyboard.press('ArrowRight');
