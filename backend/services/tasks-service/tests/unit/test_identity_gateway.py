@@ -4,9 +4,9 @@ from uuid import UUID
 
 import httpx
 import pytest
+from kernel_platform.security import Actor, ActorRole
 
-from application.ports import IdentityUnavailable, NotApproved, Unauthenticated
-from domain.tasks import Actor, Role
+from application.ports import IdentityUnavailable
 from infrastructure.identity_gateway import HttpIdentityGateway
 
 
@@ -43,36 +43,49 @@ async def test_the_session_cookie_is_forwarded_to_the_current_member_endpoint() 
 
 
 async def test_an_approved_member_passes_as_an_actor_with_id_and_role() -> None:
-    actor = await gateway(answer(200, APPROVED)).require_approved("tok")
+    result = await gateway(answer(200, APPROVED)).require_approved("tok")
 
-    assert actor == Actor(UUID(str(APPROVED["id"])), Role.USER)
+    assert result.value == Actor(UUID(str(APPROVED["id"])), ActorRole.USER)
 
 
 async def test_an_admin_is_reported_with_the_admin_role() -> None:
-    actor = await gateway(answer(200, {**APPROVED, "role": "admin"})).require_approved(
+    result = await gateway(answer(200, {**APPROVED, "role": "admin"})).require_approved(
         "tok"
     )
 
-    assert actor.role is Role.ADMIN
+    assert result.value.role is ActorRole.ADMIN
 
 
 @pytest.mark.parametrize(
-    "status, body, error",
+    "status, body, code",
     [
-        (401, {"detail": "unauthenticated"}, Unauthenticated),
-        (403, {"detail": "not_approved"}, NotApproved),
-        (200, {**APPROVED, "status": "blocked"}, NotApproved),
-        (500, None, IdentityUnavailable),
-        (429, None, IdentityUnavailable),
-        (200, {"unexpected": True}, IdentityUnavailable),
-        (200, {**APPROVED, "role": "owner"}, IdentityUnavailable),
-        (200, {**APPROVED, "id": "not-a-uuid"}, IdentityUnavailable),
+        (401, {"detail": "unauthenticated"}, "unauthenticated"),
+        (403, {"detail": "not_approved"}, "not_approved"),
+        (200, {**APPROVED, "status": "blocked"}, "not_approved"),
     ],
 )
-async def test_identitys_answers_map_to_domain_errors(
-    status: int, body: object, error: type[Exception]
+async def test_identitys_refusals_come_back_as_errors(
+    status: int, body: object, code: str
 ) -> None:
-    with pytest.raises(error):
+    result = await gateway(answer(status, body)).require_approved("tok")
+
+    assert result.is_err and result.error.code == code
+
+
+@pytest.mark.parametrize(
+    "status, body",
+    [
+        (500, None),
+        (429, None),
+        (200, {"unexpected": True}),
+        (200, {**APPROVED, "role": "owner"}),
+        (200, {**APPROVED, "id": "not-a-uuid"}),
+    ],
+)
+async def test_an_unusable_answer_is_identity_unavailable(
+    status: int, body: object
+) -> None:
+    with pytest.raises(IdentityUnavailable):
         await gateway(answer(status, body)).require_approved("tok")
 
 

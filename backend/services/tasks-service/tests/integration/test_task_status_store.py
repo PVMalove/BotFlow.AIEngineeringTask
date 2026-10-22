@@ -19,7 +19,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from application.ports import TaskNotFound, VersionConflict
 from domain.tasks import TaskStatus
 from infrastructure.db.tables import metadata, tasks
 from infrastructure.db.task_store import SqlTaskStatusStore
@@ -93,9 +92,11 @@ async def test_a_real_change_bumps_the_version_once_and_signals_after_commit(
 ) -> None:
     signal = Signal()
 
-    task = await SqlTaskStatusStore(sessions, signal).change(
-        task_id, TaskStatus.IN_PROGRESS, 1
-    )
+    task = (
+        await SqlTaskStatusStore(sessions, signal).change(
+            task_id, TaskStatus.IN_PROGRESS, 1
+        )
+    ).value
 
     assert (task.status, task.version) == (TaskStatus.IN_PROGRESS, 2)
     assert task.updated_at > CREATED
@@ -108,9 +109,11 @@ async def test_a_no_op_with_the_current_version_changes_nothing_and_stays_silent
 ) -> None:
     signal = Signal()
 
-    task = await SqlTaskStatusStore(sessions, signal).change(
-        task_id, TaskStatus.PENDING, 1
-    )
+    task = (
+        await SqlTaskStatusStore(sessions, signal).change(
+            task_id, TaskStatus.PENDING, 1
+        )
+    ).value
 
     assert (task.status, task.version, task.updated_at) == (
         TaskStatus.PENDING,
@@ -128,8 +131,8 @@ async def test_a_stale_version_conflicts_even_when_the_target_equals_the_status(
     await store.change(task_id, TaskStatus.COMPLETED, 1)
 
     for target in (TaskStatus.COMPLETED, TaskStatus.PENDING):
-        with pytest.raises(VersionConflict):
-            await store.change(task_id, target, 1)
+        result = await store.change(task_id, target, 1)
+        assert result.is_err and result.error.code == "version_conflict"
 
     assert (await stored(sessions, task_id))[:2] == ("completed", 2)
 
@@ -137,10 +140,11 @@ async def test_a_stale_version_conflicts_even_when_the_target_equals_the_status(
 async def test_a_missing_task_is_not_found(
     sessions: async_sessionmaker[AsyncSession],
 ) -> None:
-    with pytest.raises(TaskNotFound):
-        await SqlTaskStatusStore(sessions, Signal()).change(
-            uuid4(), TaskStatus.COMPLETED, 1
-        )
+    result = await SqlTaskStatusStore(sessions, Signal()).change(
+        uuid4(), TaskStatus.COMPLETED, 1
+    )
+
+    assert result.is_err and result.error.code == "task_not_found"
 
 
 async def test_two_concurrent_sessions_give_exactly_one_success(
@@ -154,13 +158,12 @@ async def test_two_concurrent_sessions_give_exactly_one_success(
             store.change(task_id, target, 1)
             for target in (TaskStatus.IN_PROGRESS, TaskStatus.COMPLETED)
         ),
-        return_exceptions=True,
     )
 
-    winners = [r for r in results if not isinstance(r, BaseException)]
-    losers = [r for r in results if isinstance(r, VersionConflict)]
+    winners = [r for r in results if r.is_ok]
+    losers = [r for r in results if r.is_err and r.error.code == "version_conflict"]
     assert len(winners) == 1 and len(losers) == 1
-    assert (await stored(sessions, task_id))[:2] == (winners[0].status.value, 2)
+    assert (await stored(sessions, task_id))[:2] == (winners[0].value.status.value, 2)
     assert signal.sent == [task_id]
 
 
@@ -171,16 +174,11 @@ async def test_many_concurrent_writers_with_one_version_leave_one_change(
 
     results = await asyncio.gather(
         *(store.change(task_id, TaskStatus.COMPLETED, 1) for _ in range(8)),
-        return_exceptions=True,
     )
 
     # Same target: one real change, the rest either lose the race (409) or are the
     # no-op of an already-moved task; the version is bumped exactly once.
-    assert not [
-        r
-        for r in results
-        if isinstance(r, Exception) and not isinstance(r, VersionConflict)
-    ]
+    assert not [r for r in results if r.is_err and r.error.code != "version_conflict"]
     assert (await stored(sessions, task_id))[:2] == ("completed", 2)
 
 

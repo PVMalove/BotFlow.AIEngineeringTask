@@ -34,6 +34,7 @@ class ErrorBody(BaseModel):
     code: str
     message: str
     details: list[ErrorDetail] | None = None
+    request_id: str | None = None
 
 
 class ErrorResponse(BaseModel):
@@ -70,9 +71,23 @@ class ApiError(Exception):
         code: str,
         message: str,
         details: list[ErrorDetail] | None = None,
+        headers: dict[str, str] | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
         self.details = details
+        self.headers = headers
+
+
+class ServiceUnavailableError(ApiError):
+    """A dependency (database, Identity) cannot answer; the caller may retry."""
+
+    def __init__(self, code: str = "service_unavailable") -> None:
+        super().__init__(
+            status_code=503,
+            code=code,
+            message="Сервис временно недоступен. Повторите позже.",
+            headers={"Retry-After": "5"},
+        )

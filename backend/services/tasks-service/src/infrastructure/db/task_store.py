@@ -3,6 +3,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
+from kernel_domain.result import Result
 from kernel_platform.outbox import enqueue, replay
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
@@ -12,9 +13,8 @@ from application.ports import (
     BoardSignal,
     NewTask,
     TaskCreatedMessage,
-    TaskNotFound,
-    VersionConflict,
 )
+from domain.errors import TaskErrors
 from domain.tasks import Task, TaskStatus
 from infrastructure.db.tables import inbox_messages, outbox, tasks
 from infrastructure.db.task_reader import to_task
@@ -79,7 +79,7 @@ class SqlTaskStatusStore:
 
     async def change(
         self, task_id: UUID, target: TaskStatus, expected_version: int
-    ) -> Task:
+    ) -> Result[Task]:
         async with self._sessions() as session:
             # The version comparison lives in the UPDATE's own WHERE, so a
             # concurrent writer can never slip between a check and the write. A
@@ -101,14 +101,11 @@ class SqlTaskStatusStore:
                     .returning(*tasks.c)
                 )
             ).one_or_none()
-            if changed is not None:
-                await session.commit()
-                task = to_task(changed)
-            else:
-                task = await self._unchanged(session, task_id, target, expected_version)
-        if changed is not None:
-            await self._signal.changed(task_id)  # only after the commit
-        return task
+            if changed is None:
+                return await self._unchanged(session, task_id, target, expected_version)
+            await session.commit()
+        await self._signal.changed(task_id)  # only after the commit
+        return Result[Task].ok(to_task(changed))
 
     async def _unchanged(
         self,
@@ -116,17 +113,17 @@ class SqlTaskStatusStore:
         task_id: UUID,
         target: TaskStatus,
         expected_version: int,
-    ) -> Task:
+    ) -> Result[Task]:
         """Classify a zero-row UPDATE: no task, a no-op, or a stale version."""
         row = (
             await session.execute(select(tasks).where(tasks.c.id == task_id))
         ).one_or_none()
         if row is None:
-            raise TaskNotFound
+            return Result[Task].fail(TaskErrors.not_found())
         task = to_task(row)
         if task.version == expected_version and task.status is target:
-            return task  # no-op: current version, already in the target status
-        raise VersionConflict
+            return Result[Task].ok(task)  # no-op: current version, already in target
+        return Result[Task].fail(TaskErrors.version_conflict())
 
 
 async def replay_task_created(

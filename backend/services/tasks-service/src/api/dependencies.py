@@ -1,10 +1,17 @@
-"""FastAPI dependency wiring for the tasks service."""
+"""FastAPI dependency wiring: services, authentication and use-case handlers."""
 
 from typing import Annotated
 
 from fastapi import Depends, Request
+from kernel_domain.result import Result
+from kernel_platform.http import unwrap
+from kernel_platform.security import Actor, AuthErrors
 
 from api.containers import Services
+from application.commands.change_task_status import ChangeTaskStatusCommandHandler
+from application.queries.get_task import GetTaskQueryHandler
+from application.queries.list_tasks import ListTasksQueryHandler
+from infrastructure.identity_gateway import SESSION_COOKIE
 
 
 async def get_services(request: Request) -> Services:
@@ -14,4 +21,33 @@ async def get_services(request: Request) -> Services:
 
 ServicesDI = Annotated[Services, Depends(get_services)]
 
-__all__ = ["ServicesDI", "get_services"]
+
+async def get_actor(request: Request, services: ServicesDI) -> Actor:
+    """The approved member of the session; checked on every request, because
+    access can be revoked."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return unwrap(Result[Actor].fail(AuthErrors.unauthenticated()))
+    return unwrap(await services.identity.require_approved(token))
+
+
+RequiredAuth = Annotated[Actor, Depends(get_actor)]
+
+
+def _list_tasks(services: ServicesDI) -> ListTasksQueryHandler:
+    return services.list_tasks
+
+
+def _get_task(services: ServicesDI) -> GetTaskQueryHandler:
+    return services.get_task
+
+
+def _change_task_status(services: ServicesDI) -> ChangeTaskStatusCommandHandler:
+    return services.change_task_status
+
+
+ListTasksDI = Annotated[ListTasksQueryHandler, Depends(_list_tasks)]
+GetTaskDI = Annotated[GetTaskQueryHandler, Depends(_get_task)]
+ChangeTaskStatusDI = Annotated[
+    ChangeTaskStatusCommandHandler, Depends(_change_task_status)
+]

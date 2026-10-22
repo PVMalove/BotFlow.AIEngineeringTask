@@ -1,17 +1,16 @@
-"""Board endpoints: list with keyset cursor, and one task card."""
+"""Board endpoints: thin adapters from HTTP to the task commands and queries."""
 
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, Response
-from kernel_platform.http import ApiResponse
+from fastapi import APIRouter, Depends, Query, Response
+from kernel_platform.http import ApiResponse, match_page, match_result
+from kernel_platform.security import require_same_origin
 
-from api.dependencies import ServicesDI
-from api.security import require_same_origin
-from application.queries.tasks import DEFAULT_LIMIT, MAX_LIMIT
-from contracts.views import ChangeStatusRequest, TaskView, task_view
-from domain.tasks import TaskStatus
-from infrastructure.identity_gateway import SESSION_COOKIE
+from api.dependencies import ChangeTaskStatusDI, GetTaskDI, ListTasksDI, RequiredAuth
+from api.schemas import ChangeStatusBody, TaskListRequest
+from application.queries.get_task import GetTaskQuery
+from contracts.task import TaskView
 
 router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 
@@ -26,21 +25,13 @@ router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
     ),
 )
 async def list_tasks(
-    request: Request,
+    request: Annotated[TaskListRequest, Query()],
     response: Response,
-    services: ServicesDI,
-    status: TaskStatus | None = None,
-    limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
-    cursor: str | None = None,
+    _: RequiredAuth,
+    handler: ListTasksDI,
 ) -> ApiResponse[list[TaskView]]:
-    page = await services.list_tasks.execute(
-        request.cookies.get(SESSION_COOKIE), status=status, limit=limit, cursor=cursor
-    )
     response.headers["Cache-Control"] = "no-store"
-    return ApiResponse(
-        data=[task_view(task) for task in page.items],
-        meta={"next_cursor": page.next_cursor, "has_more": page.has_more},
-    )
+    return match_page(await handler.execute(request.to_query()))
 
 
 @router.get(
@@ -49,11 +40,10 @@ async def list_tasks(
     summary="Карточка задачи",
 )
 async def get_task(
-    task_id: UUID, request: Request, response: Response, services: ServicesDI
+    task_id: UUID, response: Response, _: RequiredAuth, handler: GetTaskDI
 ) -> ApiResponse[TaskView]:
-    task = await services.get_task.execute(request.cookies.get(SESSION_COOKIE), task_id)
     response.headers["Cache-Control"] = "no-store"
-    return ApiResponse(data=task_view(task))
+    return match_result(await handler.execute(GetTaskQuery(task_id)))
 
 
 @router.patch(
@@ -70,16 +60,10 @@ async def get_task(
 )
 async def change_task_status(
     task_id: UUID,
-    body: ChangeStatusRequest,
-    request: Request,
+    body: ChangeStatusBody,
     response: Response,
-    services: ServicesDI,
+    actor: RequiredAuth,
+    handler: ChangeTaskStatusDI,
 ) -> ApiResponse[TaskView]:
-    task = await services.change_task_status.execute(
-        request.cookies.get(SESSION_COOKIE),
-        task_id,
-        body.status,
-        body.expected_version,
-    )
     response.headers["Cache-Control"] = "no-store"
-    return ApiResponse(data=task_view(task))
+    return match_result(await handler.execute(body.to_command(task_id, actor)))

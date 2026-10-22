@@ -22,6 +22,15 @@ def _raise_for_error[T](result: Result[T]) -> None:
         )
 
 
+def unwrap[T](result: Result[T]) -> T:
+    """The value of a successful `Result`; a failed one raises `ApiError`.
+
+    For FastAPI dependencies (authentication), where the value is needed before
+    the endpoint runs and there is no response envelope to build."""
+    _raise_for_error(result)
+    return result.value
+
+
 def match_result[T](result: Result[T]) -> ApiResponse[T]:
     """Успешный `Result` заворачивается в `ApiResponse`; неуспешный поднимает
     `ApiError`, перехватываемый `register_error_handlers` и превращаемый в

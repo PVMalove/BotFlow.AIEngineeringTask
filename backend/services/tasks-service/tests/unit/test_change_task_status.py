@@ -5,16 +5,16 @@ from itertools import permutations
 from uuid import UUID, uuid4
 
 import pytest
+from kernel_domain.errors import ErrorType
+from kernel_domain.result import Result
+from kernel_platform.security import Actor, ActorRole
 
-from application.commands.change_task_status import ChangeTaskStatus
-from application.ports import (
-    Forbidden,
-    NotApproved,
-    TaskNotFound,
-    Unauthenticated,
-    VersionConflict,
+from application.commands.change_task_status import (
+    ChangeTaskStatusCommand,
+    ChangeTaskStatusCommandHandler,
 )
-from domain.tasks import Actor, Role, Task, TaskStatus
+from domain.errors import TaskErrors
+from domain.tasks import Task, TaskStatus
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 AUTHOR = uuid4()
@@ -22,17 +22,6 @@ AUTHOR = uuid4()
 
 def task(status: TaskStatus = TaskStatus.PENDING, version: int = 1) -> Task:
     return Task(uuid4(), "text", status, version, AUTHOR, "Ann", NOW, NOW)
-
-
-class Identity:
-    def __init__(self, actor: Actor) -> None:
-        self.actor = actor
-        self.failure: Exception | None = None
-
-    async def require_approved(self, token: str) -> Actor:
-        if self.failure:
-            raise self.failure
-        return self.actor
 
 
 class Reader:
@@ -49,52 +38,63 @@ class Reader:
 class Store:
     def __init__(self) -> None:
         self.calls: list[tuple[UUID, TaskStatus, int]] = []
-        self.failure: Exception | None = None
+        self.conflict = False
 
     async def change(
         self, task_id: UUID, target: TaskStatus, expected_version: int
-    ) -> Task:
+    ) -> Result[Task]:
         self.calls.append((task_id, target, expected_version))
-        if self.failure:
-            raise self.failure
-        return task(target, expected_version + 1)
+        if self.conflict:
+            return Result[Task].fail(TaskErrors.version_conflict())
+        return Result[Task].ok(task(target, expected_version + 1))
 
 
-def use_case(actor: Actor, *tasks: Task) -> tuple[ChangeTaskStatus, Identity, Store]:
-    identity, store = Identity(actor), Store()
-    return ChangeTaskStatus(identity, Reader(*tasks), store), identity, store
+def handler(*tasks: Task) -> tuple[ChangeTaskStatusCommandHandler, Store]:
+    store = Store()
+    return ChangeTaskStatusCommandHandler(Reader(*tasks), store), store
+
+
+def command(
+    card_id: UUID, actor: Actor, target: TaskStatus = TaskStatus.COMPLETED
+) -> ChangeTaskStatusCommand:
+    return ChangeTaskStatusCommand(card_id, target, 1, actor)
 
 
 @pytest.mark.parametrize(
     "actor",
-    [Actor(AUTHOR, Role.USER), Actor(uuid4(), Role.ADMIN), Actor(AUTHOR, Role.ADMIN)],
+    [
+        Actor(AUTHOR, ActorRole.USER),
+        Actor(uuid4(), ActorRole.ADMIN),
+        Actor(AUTHOR, ActorRole.ADMIN),
+    ],
 )
 async def test_the_author_and_any_admin_may_change_the_status(actor: Actor) -> None:
     card = task()
-    sut, _, store = use_case(actor, card)
+    sut, store = handler(card)
 
-    result = await sut.execute("tok", card.id, TaskStatus.COMPLETED, 1)
+    result = await sut.execute(command(card.id, actor))
 
-    assert result.status is TaskStatus.COMPLETED
+    assert result.is_ok and result.value.status == "completed"
     assert store.calls == [(card.id, TaskStatus.COMPLETED, 1)]
 
 
 async def test_a_plain_user_cannot_change_a_foreign_task() -> None:
     card = task()
-    sut, _, store = use_case(Actor(uuid4(), Role.USER), card)
+    sut, store = handler(card)
 
-    with pytest.raises(Forbidden):
-        await sut.execute("tok", card.id, TaskStatus.COMPLETED, 1)
+    result = await sut.execute(command(card.id, Actor(uuid4(), ActorRole.USER)))
 
+    assert result.is_err and result.error.type is ErrorType.FORBIDDEN
+    assert result.error.code == "forbidden"
     assert store.calls == []  # the server, not the client, refuses
 
 
 async def test_a_missing_task_is_not_found_before_any_write() -> None:
-    sut, _, store = use_case(Actor(AUTHOR, Role.ADMIN))
+    sut, store = handler()
 
-    with pytest.raises(TaskNotFound):
-        await sut.execute("tok", uuid4(), TaskStatus.COMPLETED, 1)
+    result = await sut.execute(command(uuid4(), Actor(AUTHOR, ActorRole.ADMIN)))
 
+    assert result.is_err and result.error.type is ErrorType.NOT_FOUND
     assert store.calls == []
 
 
@@ -103,39 +103,19 @@ async def test_every_transition_between_the_three_statuses_is_allowed(
     source: TaskStatus, target: TaskStatus
 ) -> None:
     card = task(source)
-    sut, _, _ = use_case(Actor(AUTHOR, Role.USER), card)
+    sut, _ = handler(card)
 
-    result = await sut.execute("tok", card.id, target, 1)
+    result = await sut.execute(command(card.id, Actor(AUTHOR, ActorRole.USER), target))
 
-    assert result.status is target
+    assert result.is_ok and result.value.status == target.value
 
 
-async def test_a_version_conflict_from_the_store_propagates() -> None:
+async def test_a_version_conflict_from_the_store_is_returned() -> None:
     card = task()
-    sut, _, store = use_case(Actor(AUTHOR, Role.USER), card)
-    store.failure = VersionConflict()
+    sut, store = handler(card)
+    store.conflict = True
 
-    with pytest.raises(VersionConflict):
-        await sut.execute("tok", card.id, TaskStatus.COMPLETED, 1)
+    result = await sut.execute(command(card.id, Actor(AUTHOR, ActorRole.USER)))
 
-
-@pytest.mark.parametrize("token", [None, ""])
-async def test_a_missing_session_is_unauthenticated(token: str | None) -> None:
-    card = task()
-    sut, _, store = use_case(Actor(AUTHOR, Role.USER), card)
-
-    with pytest.raises(Unauthenticated):
-        await sut.execute(token, card.id, TaskStatus.COMPLETED, 1)
-
-    assert store.calls == []
-
-
-async def test_an_unapproved_member_changes_nothing() -> None:
-    card = task()
-    sut, identity, store = use_case(Actor(AUTHOR, Role.USER), card)
-    identity.failure = NotApproved()
-
-    with pytest.raises(NotApproved):
-        await sut.execute("tok", card.id, TaskStatus.COMPLETED, 1)
-
-    assert store.calls == []
+    assert result.is_err and result.error.type is ErrorType.CONFLICT
+    assert result.error.code == "version_conflict"

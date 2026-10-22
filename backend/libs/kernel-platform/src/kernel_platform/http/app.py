@@ -1,11 +1,14 @@
 """FastAPI application shell shared by BotFlow services."""
 
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from observability.formatters import configure_logging
+from observability.middleware import RequestContextMiddleware
 
 
 def create_app(service_name: str, container: Any = None) -> FastAPI:
@@ -21,7 +24,9 @@ def create_app(service_name: str, container: Any = None) -> FastAPI:
         finally:
             await container.shutdown_resources()
 
+    configure_logging(os.environ.get("APP_ENV", "prod"), service_name)
     app = FastAPI(title=f"BotFlow · {service_name}", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(RequestContextMiddleware)
 
     @app.get("/health/live", include_in_schema=False)
     def liveness() -> dict[str, str]:

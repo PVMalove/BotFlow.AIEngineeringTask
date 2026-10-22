@@ -17,19 +17,6 @@ class TaskStatus(StrEnum):
     COMPLETED = "completed"
 
 
-class Role(StrEnum):
-    ADMIN = "admin"
-    USER = "user"
-
-
-@dataclass(frozen=True, slots=True)
-class Actor:
-    """The authenticated member, as Identity currently reports it."""
-
-    id: UUID
-    role: Role
-
-
 @dataclass(frozen=True, slots=True)
 class Task:
     id: UUID
@@ -40,11 +27,6 @@ class Task:
     author_name: str  # snapshot taken when the task was created
     created_at: datetime
     updated_at: datetime
-
-
-def may_change_status(actor: Actor, task: Task) -> bool:
-    """The author and any admin may move a task between all three statuses."""
-    return actor.role is Role.ADMIN or actor.id == task.author_id
 
 
 def source_key(bot_id: int, chat_id: int, message_id: int) -> str:

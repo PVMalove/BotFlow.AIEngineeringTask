@@ -2,11 +2,11 @@
 
 from uuid import UUID
 
+from kernel_platform.pagination import Cursor
 from sqlalchemy import select, tuple_
 from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from application.ports import PageCursor
 from domain.tasks import Task, TaskStatus
 from infrastructure.db.tables import tasks
 
@@ -29,7 +29,7 @@ class SqlTaskReader:
         self._sessions = sessions
 
     async def list_page(
-        self, status: TaskStatus | None, after: PageCursor | None, limit: int
+        self, status: TaskStatus | None, after: Cursor | None, limit: int
     ) -> list[Task]:
         query = select(tasks).order_by(tasks.c.created_at.desc(), tasks.c.id.desc())
         if status is not None:

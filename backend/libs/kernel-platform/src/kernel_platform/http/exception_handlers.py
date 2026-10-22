@@ -14,9 +14,16 @@ from typing import Protocol, cast
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from observability.context import request_id_var
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from kernel_platform.http.errors import ApiError, ErrorBody, ErrorDetail, ErrorResponse
+from kernel_platform.http.errors import (
+    ApiError,
+    ErrorBody,
+    ErrorDetail,
+    ErrorResponse,
+    ServiceUnavailableError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +66,14 @@ def _error_response(
     details: list[ErrorDetail] | None = None,
     headers: Mapping[str, str] | None = None,
 ) -> JSONResponse:
-    body = ErrorResponse(error=ErrorBody(code=code, message=message, details=details))
+    body = ErrorResponse(
+        error=ErrorBody(
+            code=code,
+            message=message,
+            details=details,
+            request_id=request_id_var.get(),
+        )
+    )
     return JSONResponse(
         status_code=status_code,
         content=body.model_dump(exclude_none=True),
@@ -119,7 +133,12 @@ async def _structured_error_handler(_request: Request, exc: Exception) -> JSONRe
         code=structured.code,
         message=structured.message,
         details=getattr(exc, "details", None),
+        headers=getattr(exc, "headers", None),
     )
+
+
+async def _unavailable_handler(_request: Request, _exc: Exception) -> JSONResponse:
+    return await _structured_error_handler(_request, ServiceUnavailableError())
 
 
 def _make_unhandled_exception_handler(
@@ -151,7 +170,8 @@ def _make_unhandled_exception_handler(
 def register_error_handlers(
     app: FastAPI,
     *,
-    service_error_type: type[Exception],
+    service_error_type: type[Exception] | None = None,
+    unavailable_error_types: Sequence[type[Exception]] = (),
     on_unhandled_exception: Callable[[Exception], None] | None = None,
 ) -> None:
     """Регистрирует platform-owned exception handlers на FastAPI-приложении
@@ -166,7 +186,10 @@ def register_error_handlers(
     app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
     app.add_exception_handler(ApiError, _structured_error_handler)
-    app.add_exception_handler(service_error_type, _structured_error_handler)
+    if service_error_type is not None:
+        app.add_exception_handler(service_error_type, _structured_error_handler)
+    for unavailable_type in unavailable_error_types:
+        app.add_exception_handler(unavailable_type, _unavailable_handler)
     app.add_exception_handler(
         Exception, _make_unhandled_exception_handler(on_unhandled_exception)
     )

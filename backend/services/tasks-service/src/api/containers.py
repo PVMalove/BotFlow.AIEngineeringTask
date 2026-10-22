@@ -13,9 +13,10 @@ from kernel_platform.outbox import RelayOutbox, SqlOutboxTx, sql_transactions
 from kernel_platform.resources import Resources, open_resources
 from kernel_platform.settings import Settings
 
-from application.commands.change_task_status import ChangeTaskStatus
+from application.commands.change_task_status import ChangeTaskStatusCommandHandler
 from application.commands.create_task import CreateTaskFromCommand
-from application.queries.tasks import GetTask, ListTasks
+from application.queries.get_task import GetTaskQueryHandler
+from application.queries.list_tasks import ListTasksQueryHandler
 from infrastructure.board_signal import RedisBoardSignal
 from infrastructure.db.tables import outbox
 from infrastructure.db.task_reader import SqlTaskReader
@@ -51,9 +52,10 @@ def build_worker(resources: Resources) -> TaskWorker:
 class Services:
     """Use cases the HTTP layer needs, wired to the process resources."""
 
-    list_tasks: ListTasks
-    get_task: GetTask
-    change_task_status: ChangeTaskStatus
+    identity: HttpIdentityGateway
+    list_tasks: ListTasksQueryHandler
+    get_task: GetTaskQueryHandler
+    change_task_status: ChangeTaskStatusCommandHandler
 
 
 async def open_services(resources: Resources) -> AsyncIterator[Services]:
@@ -69,9 +71,10 @@ async def open_services(resources: Resources) -> AsyncIterator[Services]:
             resources.sessions, RedisBoardSignal(resources.redis)
         )
         yield Services(
-            list_tasks=ListTasks(identity, reader),
-            get_task=GetTask(identity, reader),
-            change_task_status=ChangeTaskStatus(identity, reader, store),
+            identity=identity,
+            list_tasks=ListTasksQueryHandler(reader),
+            get_task=GetTaskQueryHandler(reader),
+            change_task_status=ChangeTaskStatusCommandHandler(reader, store),
         )
 
 

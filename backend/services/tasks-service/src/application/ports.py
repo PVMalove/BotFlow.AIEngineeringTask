@@ -5,7 +5,11 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-from domain.tasks import Actor, Task, TaskStatus
+from kernel_domain.result import Result
+from kernel_platform.pagination import Cursor
+from kernel_platform.security import Actor
+
+from domain.tasks import Task, TaskStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,51 +47,20 @@ class TaskCommandStore(Protocol):
         ...
 
 
-class Unauthenticated(Exception):
-    """No valid session."""
-
-
-class NotApproved(Exception):
-    """The session's member is not an approved participant."""
-
-
 class IdentityUnavailable(Exception):
     """Identity cannot confirm the session; access is never assumed."""
 
 
-class InvalidCursor(Exception):
-    """The page cursor is not one this service issued."""
-
-
-class TaskNotFound(Exception):
-    pass
-
-
-class Forbidden(Exception):
-    """The member may not change this task."""
-
-
-class VersionConflict(Exception):
-    """The task changed since the caller read it."""
-
-
-@dataclass(frozen=True, slots=True)
-class PageCursor:
-    """Position after the last row of a page: ordering is (created_at, id) DESC."""
-
-    created_at: datetime
-    id: UUID
-
-
 class MemberAuthenticator(Protocol):
-    async def require_approved(self, token: str) -> Actor:
-        """Raise Unauthenticated, NotApproved or IdentityUnavailable."""
+    async def require_approved(self, token: str) -> Result[Actor]:
+        """Unauthenticated / not approved come back as errors; raises
+        IdentityUnavailable when Identity cannot answer."""
         ...
 
 
 class TaskReader(Protocol):
     async def list_page(
-        self, status: TaskStatus | None, after: PageCursor | None, limit: int
+        self, status: TaskStatus | None, after: Cursor | None, limit: int
     ) -> list[Task]:
         """Newest first, strictly after `after`."""
         ...
@@ -98,11 +71,11 @@ class TaskReader(Protocol):
 class TaskStatusStore(Protocol):
     async def change(
         self, task_id: UUID, target: TaskStatus, expected_version: int
-    ) -> Task:
+    ) -> Result[Task]:
         """Compare the version and update in one atomic step.
 
-        Returns the task as stored afterwards. Raises TaskNotFound, or VersionConflict
-        when `expected_version` is not the current one.
+        The task as stored afterwards; a not-found or version-conflict error
+        when there is no such task or `expected_version` is not the current one.
         """
         ...
 
