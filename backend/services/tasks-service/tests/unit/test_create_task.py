@@ -3,6 +3,7 @@
 import json
 from datetime import UTC, datetime
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
@@ -10,6 +11,7 @@ from botflow_platform.consumer import InvalidMessage
 
 from application.commands.create_task import CreateTaskFromCommand
 from application.ports import NewTask, TaskCreatedMessage
+from infrastructure.db.task_store import replay_task_created
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 JOB = uuid4()
@@ -153,3 +155,33 @@ async def test_a_storage_failure_propagates_so_the_message_is_requeued() -> None
 
     with pytest.raises(OSError):
         await use_case(store).execute("m-1", "CreateTask", command())
+
+
+async def test_replay_task_created_commits_when_outbox_row_replayed() -> None:
+    session = AsyncMock()
+    session.__aenter__.return_value = session
+    sessions = MagicMock(return_value=session)
+
+    with patch(
+        "infrastructure.db.task_store.replay", new_callable=AsyncMock
+    ) as mock_replay:
+        mock_replay.return_value = True
+        replayed = await replay_task_created(sessions, JOB)
+
+        assert replayed is True
+        session.commit.assert_awaited_once()
+
+
+async def test_replay_task_created_does_not_commit_when_nothing_replayed() -> None:
+    session = AsyncMock()
+    session.__aenter__.return_value = session
+    sessions = MagicMock(return_value=session)
+
+    with patch(
+        "infrastructure.db.task_store.replay", new_callable=AsyncMock
+    ) as mock_replay:
+        mock_replay.return_value = False
+        replayed = await replay_task_created(sessions, JOB)
+
+        assert replayed is False
+        session.commit.assert_not_awaited()
