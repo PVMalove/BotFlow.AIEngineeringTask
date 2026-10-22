@@ -254,6 +254,7 @@ def main() -> int:
                             "FAIL: access_flow.AccessFlow.",
                             "FAIL: auth_flow.AuthFlow.",
                             "FAIL: text_task_flow.TextTaskFlow.",
+                            "FAIL: voice_task_flow.VoiceTaskFlow.",
                             "Resource checks:",
                         )
                     ):
@@ -279,7 +280,7 @@ def main() -> int:
         if result == 0:
             print(
                 "Integration smoke PASS: join/access decisions and notifications, "
-                "bot login/Identity exchange, text message to task, REST and "
+                "bot login/Identity exchange, text and voice message to task, REST and "
                 "notification, real PG/RabbitMQ/Redis/MinIO and restart persistence."
             )
         return result
