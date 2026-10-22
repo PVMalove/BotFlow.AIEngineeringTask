@@ -293,7 +293,16 @@ export function SessionRoutes({
                     )
                   }
                 />
-                <Route path="*" element={<Board messages={messages} />} />
+                <Route
+                  path="*"
+                  element={
+                    <Board
+                      member={session.data}
+                      messages={messages}
+                      locale={locale}
+                    />
+                  }
+                />
               </Routes>
             </>
           ) : (

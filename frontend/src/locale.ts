@@ -5,6 +5,16 @@ export type Messages = (typeof messages)['ru'];
 
 const messages = {
   ru: {
+    taskPending: 'Ожидает',
+    taskInProgress: 'В работе',
+    taskCompleted: 'Завершено',
+    tasksLoading: 'Загружаем задачи…',
+    tasksEmpty: 'Задач пока нет.',
+    tasksLoadFailed:
+      'Не удалось загрузить задачи. Показанные данные могут быть устаревшими.',
+    tasksDenied: 'Нет доступа к задачам. Проверяем вашу сессию.',
+    refreshBoard: 'Обновить доску',
+    showMore: 'Показать ещё',
     adminTitle: 'Управление доступом',
     adminDescription:
       'Рассматривайте заявки и управляйте доступом участников к команде.',
@@ -81,6 +91,16 @@ const messages = {
     teamDescription: 'Общая картина работы для всей команды.',
   },
   hy: {
+    taskPending: 'Սպասում է',
+    taskInProgress: 'Ընթացքի մեջ',
+    taskCompleted: 'Ավարտված',
+    tasksLoading: 'Բեռնում ենք առաջադրանքները…',
+    tasksEmpty: 'Առաջադրանքներ դեռ չկան։',
+    tasksLoadFailed:
+      'Չհաջողվեց բեռնել առաջադրանքները։ Ցուցադրված տվյալները կարող են հնացած լինել։',
+    tasksDenied: 'Առաջադրանքները հասանելի չեն։ Ստուգում ենք ձեր մուտքը։',
+    refreshBoard: 'Թարմացնել վահանակը',
+    showMore: 'Ցույց տալ ավելին',
     adminTitle: 'Մուտքի կառավարում',
     adminDescription: 'Դիտարկեք հայտերը և կառավարեք մասնակիցների մուտքը թիմ։',
     joinRequests: 'Հայտեր',
