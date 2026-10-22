@@ -148,12 +148,12 @@ MinIO собирается из официального commit 9e49d5e7a648f00e
 обязательны перед рабочим использованием.
 
 Compose содержит постоянные тома, secret-файлы, инфраструктуру и HTTP-оболочки.
-Профиль `bootstrap` применяет миграции Identity и Automation; отдельная команда
-Identity идемпотентно создаёт первого admin. Профиль `bot` запускает long polling
-aiogram для `/start`, `/login` и `/join`. Команды бота не создают задач. Профиль
-`workers` запускает `identity-worker` (relay outbox) и `automation-worker`
-(доставка уведомлений о решениях); остальные worker/bootstrap Tasks ещё не
-реализованы. HTTP liveness не является
+Профиль `bootstrap` применяет миграции Identity, Tasks и Automation; отдельная команда
+Identity идемпотентно создаёт первого admin. Профиль `bot` запускает собственный
+long polling для `/start`, `/login`, `/join` и текстовых сообщений. Профиль
+`workers` запускает `identity-worker` (relay outbox), `tasks-worker` (создание
+задач) и `automation-worker` (relay CreateTask, результат задачи и уведомления).
+HTTP liveness не является
 бизнес-readiness; `/health/ready` возвращает 503. Локальная проверка Whisper
 описана отдельно; она не включается в обычный runtime приложения.
 
@@ -176,8 +176,9 @@ Telegram и RU/hy корпус; тестовые подмены не доказ�
 Вход проверяется через Telegram-порт, реальные HTTP Identity/nginx и PostgreSQL:
 обмен кода, срок действия, повтор, гонки, лимиты, cookie, текущий участник и logout.
 Telegram в CI заменён на порту отправки сообщений; реальный long polling
-требует отдельной проверки с токеном владельца. Задачи, фоновые задания и WS
-ещё не реализованы; зелёные проверки входа не подтверждают их готовность.
+требует отдельной проверки с токеном владельца. Текстовый путь задач описан в
+разделе #9; голос, изменение статуса и WS ещё не реализованы, и зелёные проверки
+текстового пути их готовность не подтверждают.
 
 Состояния workflow, envelope сообщений, конкретные timeout/lease/reclaim,
 rate limits, ключи/ротация, миграции и реальные тесты уточняются при реализации
@@ -328,3 +329,110 @@ admin, а не обход блокировки.
 путь outbox → RabbitMQ → intent → Redis Stream → тестовый Messenger, подавление
 устаревшего решения и финального уведомления блокированному автору, повторная
 доставка и «подставное» FSM-состояние в Redis.
+
+## Текстовый путь: сообщение, задача, REST и уведомление (#9)
+
+Обычное личное текстовое сообщение допущенного участника становится одной Pending-задачей
+общей доски; автор получает уведомление о результате. Голос, изменение статуса,
+редактирование и удаление в этот срез не входят.
+
+**Владение offset.** `start_polling` aiogram двигает offset и после ошибки
+обработчика (проверено запуском: `_process_update` проглатывает исключение), поэтому
+сообщение, которое не удалось сохранить, было бы потеряно. `TelegramPoller`
+(`infrastructure/polling.py`) сам вызывает `Bot.get_updates` и
+`Dispatcher.feed_update` и двигает offset только после возврата обработчика.
+Ошибки инфраструктуры (`DBAPIError`, `TimeoutError`, `OSError`) удерживают offset:
+тот же update приходит снова после паузы 5 с ±20 %. Любая другая ошибка пишется в
+лог фиксированным текстом (текст исключения может содержать токен) и update
+пропускается: «ядовитое» сообщение не блокирует очередь. Ошибка отправки ответа не
+пробрасывается: сообщение уже сохранено. На токен работает один poller.
+
+**Контракт входа** (`allowed_updates = message, edited_message`). Личное сообщение с
+текстом — задание. `/start`, `/login`, `/join` — как раньше. Неизвестная `/команда` и
+неподдерживаемое содержимое (голос, фото и т. д.) — короткий ответ без задания.
+`edited_message` и сообщения вне личного чата молча игнорируются: текст задачи
+неизменяем (ADR-0005). Автор без допуска получает отказ, при недоступном Identity —
+«временно недоступно»; задание в обоих случаях не создаётся.
+
+**Задание и лимиты.** `SqlJobStore.accept` — одна транзакция: `pg_advisory_xact_lock`,
+проверка дубля `UNIQUE(bot_id, chat_id, message_id)` (повтор не считается новой
+нагрузкой), счёт незавершённых заданий (`status = accepted`): всего < 100 и у автора
+< 10, затем `INSERT` задания и строки `outbox` с командой CreateTask. Исходы:
+`ACCEPTED`, `DUPLICATE`, `LIMIT` (ничего не записано). Положительный ответ (ACK)
+отправляется строго после commit, затем в `jobs.acked_at` пишется время; повтор
+сообщения повторяет ACK только пока `acked_at IS NULL`. Лимит отклоняется до ACK.
+Слот освобождается результатом задания (`completed`) или исчерпанием отправки
+(`failed`), но не доставкой уведомления. Глобальная advisory-блокировка —
+тот же приём, что и в ADR-0022; для одной команды она приемлема. Тот же текст с
+новым `message_id` — новое задание. Идентификаторы задания и строки outbox
+детерминированно выводятся из источника `bot_id:chat_id:message_id`.
+
+**Envelope и топология.** Тело JSON и зеркало в свойствах AMQP:
+`{envelope_version: 1, message_id, type, correlation_id, occurred_at, payload}`.
+`message_id` — id строки outbox, `correlation_id` — id задания. CreateTask
+(routing key `task.create`, очередь `botflow.tasks.commands`) несёт `job_id`, `bot_id`,
+`chat_id`, `message_id`, `author_id` (id участника Identity), `author_telegram_id`,
+`author_name` (снимок из Telegram, до 64 символов), `text` (1…4096). TaskCreated
+(`task.created`, очередь `botflow.automation.task-results`) несёт `job_id`, `task_id`,
+`source_key`. Exchange `botflow.tasks` — durable topic; обе стороны объявляют топологию
+идемпотентно, publisher использует confirms и `mandatory`.
+
+**Tasks.** Одна транзакция: `INSERT inbox ON CONFLICT DO NOTHING` (конфликт — только ack),
+`INSERT tasks ON CONFLICT DO NOTHING` (UNIQUE `source_key` и `correlation_id`), строка
+outbox TaskCreated. Идентификаторы задачи и результата — `uuid5` от источника, поэтому
+другой `message_id` с тем же источником не создаёт ни второй задачи, ни второго
+результата. Ack — только после commit.
+
+**Retry, ошибка, replay.** `RelayOutbox` (`botflow_platform.outbox`) берёт готовые строки
+`FOR UPDATE SKIP LOCKED`, публикует с confirm и пишет исход в той же транзакции:
+`attempts`, `next_attempt_at`, `last_error` (только имя класса исключения). До трёх
+попыток с паузами 5 и 30 с ±20 %. Недоступность брокера (ошибки соединения,
+таймаут confirm) попытку не расходует (ADR-0007). После третьей ошибки в той же
+транзакции `on_exhausted` помечает задание `failed` с сохранённой ошибкой: слот
+свободен. Оператор повторяет исходное задание командой
+`python scripts/worker.py replay <job_id>`: у той же строки outbox (прежний id) сбрасываются
+попытки, задание снова `accepted`. Поздний TaskCreated для `failed` задания допустим
+(`failed` → `completed`). Consumer (`QueueConsumer`) подтверждает сообщение только после
+commit; при временной ошибке пауза с jitter и `nack(requeue=True)` без busy loop;
+невалидное сообщение — `reject(requeue=False)` без DLX (ADR-0021).
+
+**Результат и уведомление.** Automation в одной транзакции пишет inbox, переводит
+задание в `completed` с `task_id` и сохраняет intent `task.result` с текстом
+«Задача создана: <до 100 символов>». Дальше работают прежние relay → Redis Stream →
+notifier; правило `delivery_verdict` подавляет итог заблокированному автору. Сбой
+уведомления меняет только статус intent, задание и задача не затрагиваются.
+
+**Tasks REST.** `GET /api/v1/tasks?status=pending|in_progress|completed&limit=&cursor=`
+возвращает `ApiResponse`: `data` — список `TaskView` (`id`, `text`, `status`, `version`,
+`author_id`, `author_name`, `created_at`, `updated_at`), `meta` — `next_cursor`, `has_more`.
+Порядок `created_at DESC, id DESC`, keyset-курсор (непрозрачный base64 JSON позиции),
+`limit` по умолчанию 50, максимум 100 (иначе 422), неверный курсор — 400
+`invalid_cursor`. `GET /api/v1/tasks/{id}` — карточка, 404 `task_not_found`. Любой
+допущенный участник видит все задачи доски. Авторизация без изменений Identity:
+Tasks пересылает cookie `botflow_session` на `GET /api/v1/users/me` при каждом запросе
+(401 → 401, не `approved` → 403, сеть/5xx → 503 `identity_unavailable`), ответы
+`Cache-Control: no-store`. `/health/ready` по-прежнему 503. Строка, созданная
+одновременно с чтением, может сместиться между страницами; это исправляется
+перечитыванием (ADR-0021).
+
+**Измерение ACK.** `jobs.message_date` — время отправки по Telegram, `received_at` —
+приход update в poller, `acked_at` — после отправки ACK. Живой замер:
+`SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY acked_at - received_at) FROM jobs
+WHERE acked_at IS NOT NULL`; цель ≤ 2 с — цель, а не результат измерения. В CI с
+подменой Telegram проверяется только `acked_at - received_at < 2 с`.
+
+**Принятые границы (ADR-0021).** Постоянно невалидный CreateTask на стороне Tasks
+(недостижим после валидации в Automation) отклоняется без ответа, задание остаётся
+`accepted` и занимает слот до ручного закрытия. В Compose два сервиса одного бота
+(`automation-bot`, `telegram-bot`): их одновременный запуск даёт два poller (409
+Telegram) — ограничение существовало ранее.
+
+**Проверки.** Юнит-тесты: retry-политика, `RelayOutbox`, `QueueConsumer`, топология,
+`CreateTaskFromCommand`, REST-контракт, адаптер Identity, `AcceptTextMessage`,
+`TelegramPoller`, маршруты, `ProcessTaskResult`. Настоящие PostgreSQL, RabbitMQ, Redis,
+ingress и `tasks-worker` в `make smoke` проверяет класс `TextTaskFlow`: текст → задание и
+outbox → ACK после commit → RabbitMQ → Tasks → TaskCreated → intent → Redis Stream →
+тестовый Messenger; повтор `message_id` и тот же текст дважды; конкурентные лимиты
+100/10; откат и недоступная БД; недоступный брокер без расхода попыток; расписание
+5/30 с, исчерпание и replay без второй задачи; сбой уведомления; REST список,
+карточка, курсор, фильтр и 401/403 через ingress с настоящей cookie.

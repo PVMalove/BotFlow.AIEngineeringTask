@@ -26,8 +26,8 @@ Commit должен быть явным; закрытие сессии отка�
 
 В корне каждого сервиса находятся `tests/{unit,integration,e2e,performance}/`,
 `k8s/`, `docs/`, `ci/`, `scripts/`. CLI-точки входа bootstrap, worker и Telegram
-bot находятся в `scripts/`; bootstrap Identity/Automation, login-бот,
-`identity-worker` и `automation-worker` (уведомления о решениях) работают,
+bot находятся в `scripts/`; bootstrap всех трёх сервисов, бот (login, заявки и
+текст), `identity-worker`, `tasks-worker` и `automation-worker` работают,
 остальные точки входа явно сообщают об отсутствии реализации. Каталоги для будущих артефактов не означают готовность Kubernetes,
 нагрузочных тестов или бизнес-функций.
 
@@ -139,8 +139,8 @@ docker compose up -d --wait identity-api
 docker compose --profile bot up -d automation-bot
 ```
 
-Обычный `make setup` пока включает неготовый Tasks bootstrap, поэтому для входа
-используйте команды выше. Повтор миграций и `make bootstrap-admin` безопасен:
+`make setup` применяет миграции всех трёх сервисов (Tasks bootstrap теперь рабочий,
+см. раздел #9). Для входа используйте команды выше. Повтор миграций и `make bootstrap-admin` безопасен:
 существующий участник сохраняет свой статус, в том числе блокировку.
 Для браузерного API нужен ingress (`docker compose up -d --wait frontend`).
 Отправьте боту `/start`, затем `/login` в личном чате. Полученный код можно один
@@ -174,3 +174,25 @@ ingress этого маршрута пока нет, поэтому до сре�
 только внутри сети Compose. `make smoke` запускает `identity-worker` для проверок
 доступа (`AccessFlow`); `automation-worker` там не стартует, потому что требует
 токен бота: его шаги работают внутри процесса проверки с тестовым Messenger-портом.
+
+## Текстовый путь и Tasks (#9)
+
+`tasks-bootstrap` применяет миграции Tasks (`scripts/bootstrap.py migrate`).
+`tasks-worker` (БД, RabbitMQ, Redis) принимает CreateTask и переносит TaskCreated в
+RabbitMQ; `automation-worker` дополнительно переносит CreateTask из outbox Automation,
+принимает результат и создаёт уведомление. `tasks-api` обращается к `identity-api`
+(`BOTFLOW_IDENTITY_URL`) для проверки сессии, поэтому зависит от него:
+
+```bash
+docker compose --profile bootstrap run --rm tasks-bootstrap
+docker compose --profile workers up -d identity-worker tasks-worker automation-worker
+docker compose --profile workers exec automation-worker python scripts/worker.py replay <job_id>
+```
+
+Список и карточки доступны через ingress: `GET /api/v1/tasks`, `GET /api/v1/tasks/{id}`
+(cookie `botflow_session` из `/login`). `make smoke` запускает `tasks-worker` для
+класса `TextTaskFlow`; Automation-шаги и тестовый Messenger работают внутри процесса
+проверки. Сбой брокера и Telegram, который нельзя вызвать из контейнера проверки,
+подменяется на портах publisher и Messenger поверх настоящих строк PostgreSQL.
+Живую задержку ACK и работу с токеном владельца смотрите по
+`jobs.received_at`/`acked_at` (запрос в `docs/architecture.md`).
