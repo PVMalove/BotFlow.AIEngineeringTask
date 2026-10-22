@@ -26,6 +26,7 @@ from api.containers import (
     build_voice_flow,
 )
 from infrastructure.db.results import replay_job
+from infrastructure.db.voice import replay_voice_job
 from infrastructure.identity_gateway import HttpIdentityGateway
 from infrastructure.telegram import TelegramMessenger
 
@@ -102,14 +103,20 @@ async def replay(job_id: UUID) -> None:
     container = Container()
     try:
         database = await container.database.async_()
-        replayed = await replay_job(database.sessions, job_id)
+        # A failed voice job runs again from its stored audio; any other job
+        # has its unpublished CreateTask made due again.
+        replayed = await replay_voice_job(
+            database.sessions, job_id
+        ) or await replay_job(database.sessions, job_id)
     finally:
         shutdown = container.shutdown_resources()
         if inspect.isawaitable(shutdown):
             await shutdown
     if not replayed:
-        raise SystemExit("Nothing to replay: no unpublished CreateTask for this job.")
-    print("CreateTask of the job is due again.")
+        raise SystemExit(
+            "Nothing to replay: no failed voice job or unpublished CreateTask."
+        )
+    print("The job is due again.")
 
 
 def _replay_job_id() -> UUID:

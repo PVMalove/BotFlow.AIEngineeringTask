@@ -112,6 +112,105 @@ class TransientIoError(Exception):
     """A network or storage failure worth retrying; carries no driver message."""
 
 
+class EmptyAudio(Exception):
+    """No speech was found in the audio."""
+
+
+class CorruptedAudio(Exception):
+    """The audio cannot be decoded."""
+
+
+class AudioTooLong(Exception):
+    """The audio is longer than a voice task may be."""
+
+
+class TranscriptionTimeout(Exception):
+    """Speech recognition did not finish in time."""
+
+
+@dataclass(frozen=True, slots=True)
+class Transcript:
+    text: str
+    language: str | None  # detected by the model, e.g. "ru" or "hy"
+
+
+class TelegramFiles(Protocol):
+    async def fetch(self, file_id: str) -> bytes:
+        """The whole file in memory; no URL or token leaves the adapter."""
+        ...
+
+
+class AudioStore(Protocol):
+    async def put(self, job_id: UUID, data: bytes, content_type: str | None) -> str:
+        """Store under a key derived from the job; the key is returned."""
+        ...
+
+    async def get(self, job_id: UUID) -> bytes: ...
+
+
+class SpeechToText(Protocol):
+    async def transcribe(self, audio: bytes) -> Transcript: ...
+
+
+@dataclass(frozen=True, slots=True)
+class VoiceWork:
+    """What the STT worker needs to process one voice job."""
+
+    job_id: UUID
+    bot_id: int
+    chat_id: int
+    message_id: int
+    author_id: UUID
+    author_telegram_id: int
+    author_name: str
+    received_at: datetime
+    file_id: str
+    mime_type: str | None
+    stage: str  # a VoiceStage value: queued or stored here
+    s3_key: str | None
+    attempts: int  # including this one
+
+
+class VoiceStore(Protocol):
+    """Every method is one short transaction; none is open during slow work."""
+
+    async def begin(
+        self, job_id: UUID, now: datetime, cold_start: bool
+    ) -> VoiceWork | None:
+        """Count this attempt; None for an unknown job or one already finished."""
+        ...
+
+    async def checkpoint(
+        self, job_id: UUID, key: str, audio_bytes: int, sha256: str, now: datetime
+    ) -> None:
+        """The audio is in the store: a restart resumes from it, not from Telegram."""
+        ...
+
+    async def complete(
+        self,
+        work: VoiceWork,
+        transcript: Transcript,
+        create_task: "OutboxMessage",
+        stt_started_at: datetime,
+        stt_finished_at: datetime,
+        now: datetime,
+    ) -> bool:
+        """Text, stage and the CreateTask outbox row in ONE transaction."""
+        ...
+
+    async def fail(
+        self,
+        work: VoiceWork,
+        error_code: str,
+        body: str,
+        now: datetime,
+        stt_started_at: datetime | None = None,
+        stt_finished_at: datetime | None = None,
+    ) -> bool:
+        """Job, voice record and author notice in ONE transaction; the slot is freed."""
+        ...
+
+
 @dataclass(frozen=True, slots=True)
 class QueuedVoice:
     entry_id: str

@@ -32,6 +32,7 @@ from infrastructure.db.inbox import SqlUpdateInbox
 from infrastructure.db.jobs import SqlJobStore, outbox
 from infrastructure.db.notifications import SqlIntentStore
 from infrastructure.db.results import SqlTaskResultStore, fail_job
+from infrastructure.db.voice import fail_voice_job
 from infrastructure.messaging import IdentityEventConsumer
 from infrastructure.streams import (
     NOTIFICATION_GROUP,
@@ -140,7 +141,7 @@ def build_voice_flow(resources: Resources, *, consumer_name: str) -> VoiceFlow:
         relay=RelayOutbox(
             sql_transactions(resources.sessions, outbox, routing_keys=("voice.*",)),
             RedisVoicePublisher(stream),
-            on_exhausted=fail_job,
+            on_exhausted=fail_voice_job,
         ),
         queue=RedisVoiceQueue(stream),
     )

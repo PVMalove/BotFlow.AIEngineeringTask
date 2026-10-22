@@ -3,11 +3,9 @@
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
-
-from botflow_platform.messaging import TASK_CREATE_ROUTING_KEY
 
 from application.commands.admission import Admission
+from application.commands.create_task_message import create_task_message
 from application.ports import (
     Accepted,
     AcceptOutcome,
@@ -17,10 +15,8 @@ from application.ports import (
     NewJob,
     OutboxMessage,
 )
-from domain.jobs import job_id_for, outbox_id_for
+from domain.jobs import job_id_for
 
-COMMAND_TYPE = "CreateTask"
-ENVELOPE_VERSION = 1
 ACK = "Принято. Создаю задачу, сообщу, когда она будет готова."
 LIMIT_REPLY = "Слишком много задач в обработке. Повторите отправку позже."
 
@@ -79,28 +75,14 @@ class AcceptTextMessage:
             await self._jobs.mark_acked(accepted.job_id, self._clock())
 
     def _create_task(self, job: NewJob) -> OutboxMessage:
-        message_id = outbox_id_for(job.id)
-        payload: dict[str, Any] = {
-            "job_id": str(job.id),
-            "bot_id": job.bot_id,
-            "chat_id": job.chat_id,
-            "message_id": job.message_id,
-            "author_id": str(job.author_id),
-            "author_telegram_id": job.author_telegram_id,
-            "author_name": job.author_name,
-            "text": job.text,
-        }
-        return OutboxMessage(
-            id=message_id,
-            correlation_id=job.id,
-            type=COMMAND_TYPE,
-            routing_key=TASK_CREATE_ROUTING_KEY,
-            payload={
-                "envelope_version": ENVELOPE_VERSION,
-                "message_id": str(message_id),
-                "type": COMMAND_TYPE,
-                "correlation_id": str(job.id),
-                "occurred_at": job.received_at.isoformat(),
-                "payload": payload,
-            },
+        return create_task_message(
+            job_id=job.id,
+            bot_id=job.bot_id,
+            chat_id=job.chat_id,
+            message_id=job.message_id,
+            author_id=job.author_id,
+            author_telegram_id=job.author_telegram_id,
+            author_name=job.author_name,
+            text=job.text,
+            received_at=job.received_at,
         )
