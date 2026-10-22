@@ -1,9 +1,10 @@
-"""Automation worker: task creation and notifications.
+"""Automation worker: task creation, voice hand-off and notifications.
 
 Jobs -> CreateTask outbox -> RabbitMQ; TaskCreated -> job result and intent
-(PostgreSQL); RabbitMQ consumer -> intents -> Redis Stream -> Telegram.
+(PostgreSQL); RabbitMQ consumer -> intents -> Redis Stream -> Telegram; voice jobs
+-> TranscribeVoice outbox -> Redis Stream (read by the STT worker).
 `replay <job_id>` re-sends the CreateTask of a failed job. Other worker commands
-(transcription, notifications) are not implemented yet.
+(transcription) are not implemented yet.
 """
 
 import asyncio
@@ -18,7 +19,12 @@ from uuid import UUID
 import httpx
 from aiogram import Bot
 
-from api.containers import Container, build_notifications, build_task_flow
+from api.containers import (
+    Container,
+    build_notifications,
+    build_task_flow,
+    build_voice_flow,
+)
 from infrastructure.db.results import replay_job
 from infrastructure.identity_gateway import HttpIdentityGateway
 from infrastructure.telegram import TelegramMessenger
@@ -66,6 +72,7 @@ async def main() -> None:
                 consumer_name=socket.gethostname(),
             )
             tasks = build_task_flow(resources)
+            voice = build_voice_flow(resources, consumer_name=socket.gethostname())
             await pipeline.queue.ensure_group()
             print("Automation worker started.", flush=True)
             async with asyncio.TaskGroup() as group:
@@ -74,6 +81,7 @@ async def main() -> None:
                 group.create_task(repeat(pipeline.notifier.execute))
                 group.create_task(_forever(tasks.results.run))
                 group.create_task(repeat(tasks.relay.execute))
+                group.create_task(repeat(voice.relay.execute))
     finally:
         shutdown = container.shutdown_resources()
         if inspect.isawaitable(shutdown):

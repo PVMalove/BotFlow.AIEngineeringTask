@@ -97,6 +97,24 @@ class NotificationQueue(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class QueuedVoice:
+    entry_id: str
+    job_id: UUID | None  # None for an entry that names no job
+
+
+class VoiceQueue(Protocol):
+    """Voice jobs waiting for the STT worker; one entry at a time."""
+
+    async def ensure_group(self) -> None: ...
+
+    async def claim_idle(self, count: int) -> list[QueuedVoice]: ...
+
+    async def read(self, count: int, block_ms: int) -> list[QueuedVoice]: ...
+
+    async def ack(self, entry_id: str) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
 class NewJob:
     id: UUID
     bot_id: int
