@@ -54,3 +54,19 @@ def test_the_volume_preserving_shutdown_also_stops_the_worker(
     steps = subcommands(recorded_compose_commands(monkeypatch))
 
     assert "--profile workers down --timeout 20" in steps
+
+
+def test_tasks_worker_runs_after_its_migrations_and_before_the_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    steps = subcommands(recorded_compose_commands(monkeypatch))
+
+    migrations = steps.index("run --rm --no-deps tasks-bootstrap")
+    worker = steps.index("up -d --no-deps --wait tasks-worker")
+    checks = [
+        i for i, step in enumerate(steps) if step.endswith("run --rm --no-deps smoke")
+    ]
+    assert migrations < worker < checks[0]
+    assert steps.count("up -d --no-deps --wait tasks-worker") == 1
+    # the repeated migrations after the restart keep the Tasks schema idempotent
+    assert steps.count("run --rm --no-deps tasks-bootstrap") == 2

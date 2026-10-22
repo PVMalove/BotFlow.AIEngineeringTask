@@ -16,6 +16,7 @@ ADMIN_TELEGRAM_ID = "4200000001"
 BOOTSTRAP = (
     ["run", "--rm", "--no-deps", "identity-bootstrap"],
     ["run", "--rm", "--no-deps", "automation-bootstrap"],
+    ["run", "--rm", "--no-deps", "tasks-bootstrap"],
     [
         "run",
         "--rm",
@@ -146,6 +147,13 @@ def main() -> int:
                     (["up", "-d", "--no-deps", "--wait", "identity-worker"],),
                     "before",
                 ),
+                # Consumes CreateTask and relays TaskCreated for the text-path checks.
+                # Like identity-worker it is absent after the restart.
+                (
+                    "tasks worker",
+                    (["up", "-d", "--no-deps", "--wait", "tasks-worker"],),
+                    "before",
+                ),
                 (
                     "resource and isolation checks",
                     (["run", "--rm", "--no-deps", "smoke"],),
@@ -245,6 +253,7 @@ def main() -> int:
                             "FAIL: __main__.InfrastructureSmoke.",
                             "FAIL: access_flow.AccessFlow.",
                             "FAIL: auth_flow.AuthFlow.",
+                            "FAIL: text_task_flow.TextTaskFlow.",
                             "Resource checks:",
                         )
                     ):
@@ -270,8 +279,8 @@ def main() -> int:
         if result == 0:
             print(
                 "Integration smoke PASS: join/access decisions and notifications, "
-                "bot login/Identity exchange, real PG/RabbitMQ/Redis/MinIO and "
-                "restart persistence."
+                "bot login/Identity exchange, text message to task, REST and "
+                "notification, real PG/RabbitMQ/Redis/MinIO and restart persistence."
             )
         return result
 

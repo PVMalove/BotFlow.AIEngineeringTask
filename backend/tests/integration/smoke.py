@@ -16,6 +16,7 @@ from botflow_platform.resources import open_database, open_resources
 from botflow_platform.settings import Settings
 from botocore.exceptions import ClientError
 from sqlalchemy import text
+from text_task_flow import TextTaskFlow
 
 RUN_ID = UUID(os.environ["BOTFLOW_SMOKE_ID"]).hex
 AFTER = os.environ["BOTFLOW_SMOKE_PHASE"] == "after"
@@ -197,6 +198,7 @@ if __name__ == "__main__":
         # invariants checked below (one member, empty inbox) see the initial state.
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(AccessFlow))
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(AuthFlow))
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(TextTaskFlow))
     suite.addTests(
         unittest.defaultTestLoader.loadTestsFromTestCase(InfrastructureSmoke)
     )
