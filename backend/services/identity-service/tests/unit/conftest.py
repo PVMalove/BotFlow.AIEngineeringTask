@@ -1,5 +1,6 @@
 """In-memory ports with transaction semantics: nothing is visible before commit."""
 
+from collections import Counter
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -7,14 +8,23 @@ from types import TracebackType
 from typing import Self
 from uuid import UUID
 
-from domain.entities.auth import Member
+from domain.entities.auth import AuthSession, LoginCode, Member
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
 
 @dataclass
+class CodeRow:
+    code: LoginCode
+    consumed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+
+
+@dataclass
 class Store:
     members: dict[UUID, Member] = field(default_factory=dict)
+    codes: dict[UUID, CodeRow] = field(default_factory=dict)
+    sessions: dict[UUID, AuthSession] = field(default_factory=dict)
 
 
 class FakeMembers:
@@ -30,6 +40,9 @@ class FakeMembers:
         self._data.members[member.id] = member
         return True
 
+    async def get(self, member_id: UUID) -> Member | None:
+        return self._data.members.get(member_id)
+
     async def get_by_telegram_id(
         self, telegram_id: int, *, lock: bool = False
     ) -> Member | None:
@@ -39,14 +52,55 @@ class FakeMembers:
         )
 
 
+class FakeLoginCodes:
+    def __init__(self, data: Store) -> None:
+        self._data = data
+
+    async def cancel_active(self, member_id: UUID, now: datetime) -> None:
+        for row in self._data.codes.values():
+            if (
+                row.code.member_id == member_id
+                and row.consumed_at is None
+                and row.cancelled_at is None
+            ):
+                row.cancelled_at = now
+
+    async def add(self, code: LoginCode) -> None:
+        self._data.codes[code.id] = CodeRow(code)
+
+    async def consume(self, code_hash: str, now: datetime) -> UUID | None:
+        for row in self._data.codes.values():
+            if (
+                row.code.code_hash == code_hash
+                and row.consumed_at is None
+                and row.cancelled_at is None
+                and row.code.expires_at > now
+            ):
+                row.consumed_at = now
+                return row.code.member_id
+        return None
+
+
+class FakeSessions:
+    def __init__(self, data: Store) -> None:
+        self._data = data
+
+    async def add(self, session: AuthSession) -> None:
+        self._data.sessions[session.id] = session
+
+
 class FakeUnitOfWork:
     def __init__(self, store: Store) -> None:
         self._store = store
         self._working = Store()
         self.members = FakeMembers(self._working)
+        self.login_codes = FakeLoginCodes(self._working)
+        self.sessions = FakeSessions(self._working)
 
     async def __aenter__(self) -> Self:
         self._working.members = deepcopy(self._store.members)
+        self._working.codes = deepcopy(self._store.codes)
+        self._working.sessions = deepcopy(self._store.sessions)
         return self
 
     async def __aexit__(
@@ -59,6 +113,19 @@ class FakeUnitOfWork:
 
     async def commit(self) -> None:
         self._store.members = deepcopy(self._working.members)
+        self._store.codes = deepcopy(self._working.codes)
+        self._store.sessions = deepcopy(self._working.sessions)
+
+
+class FakeRateLimiter:
+    """Fixed count per key; the real adapter owns window arithmetic."""
+
+    def __init__(self) -> None:
+        self.hits: Counter[str] = Counter()
+
+    async def allow(self, key: str, limit: int, window_seconds: int) -> bool:
+        self.hits[key] += 1
+        return self.hits[key] <= limit
 
 
 class Clock:

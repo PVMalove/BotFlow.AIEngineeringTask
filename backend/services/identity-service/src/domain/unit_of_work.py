@@ -3,12 +3,22 @@
 from types import TracebackType
 from typing import Protocol, Self
 
-from domain.repositories import MemberRepository
+from domain.repositories import (
+    LoginCodeRepository,
+    MemberRepository,
+    SessionRepository,
+)
 
 
 class UnitOfWork(Protocol):
     @property
     def members(self) -> MemberRepository: ...
+
+    @property
+    def login_codes(self) -> LoginCodeRepository: ...
+
+    @property
+    def sessions(self) -> SessionRepository: ...
 
     async def __aenter__(self) -> Self: ...
 
