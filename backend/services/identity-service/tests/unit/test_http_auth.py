@@ -11,7 +11,7 @@ import pytest
 from conftest import Clock, FakeRateLimiter, FakeUnitOfWork, Store
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, TimeoutError
 
 from api.containers import Services
 from api.main import create_identity_app
@@ -274,8 +274,9 @@ async def test_logout_from_a_foreign_origin_keeps_the_session(
     [
         OperationalError("SELECT 1", {}, OSError("connection refused")),
         ConnectionRefusedError(),
+        TimeoutError("connection pool exhausted"),
     ],
-    ids=["database", "network"],
+    ids=["database", "network", "pool-timeout"],
 )
 async def test_unavailable_storage_gives_503_not_access(
     env: Env, failure: Exception
@@ -287,12 +288,20 @@ async def test_unavailable_storage_gives_503_not_access(
         env.services,
         authenticate=unavailable,  # type: ignore[arg-type]
     )
-    async for client in client_for(env):
+    app = create_identity_app()
+    app.dependency_overrides[get_services] = lambda: env.services
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
         response = await client.get(
             "/api/v1/users/me", headers={"Cookie": "botflow_session=anything"}
         )
 
     assert response.status_code == 503
+    assert response.json() == {"detail": "identity_unavailable"}
+    assert response.headers["retry-after"] == "5"
+    assert "set-cookie" not in response.headers
 
 
 async def test_internal_lookup_returns_the_member_for_a_service_key(

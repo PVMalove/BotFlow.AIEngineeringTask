@@ -3,7 +3,7 @@ from typing import Any
 from botflow_platform.http import create_app
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import DBAPIError, TimeoutError
 
 from api.containers import Container
 from api.routes import router
@@ -45,6 +45,7 @@ def create_identity_app(container: Any = None) -> FastAPI:
     for error in _REJECTIONS:
         app.add_exception_handler(error, reject)
     app.add_exception_handler(DBAPIError, unavailable)
+    app.add_exception_handler(TimeoutError, unavailable)
     app.add_exception_handler(OSError, unavailable)
     return app
 
