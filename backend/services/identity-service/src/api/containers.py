@@ -7,9 +7,9 @@ from botflow_platform.resources import Resources, open_database, open_resources
 from botflow_platform.settings import Settings
 from dependency_injector import containers, providers
 
-from api.security import CookiePolicy
-from application.commands.auth import ExchangeLoginCode, Logout
-from application.queries.members import AuthenticateSession
+from api.security import CookiePolicy, Operation, ServiceKeys
+from application.commands.auth import ExchangeLoginCode, IssueLoginCode, Logout
+from application.queries.members import AuthenticateSession, FindMemberByTelegram
 from infrastructure.db.unit_of_work import SqlRateLimiter, SqlUnitOfWork
 from infrastructure.security.jwt import Rs256Tokens
 
@@ -25,6 +25,9 @@ class Services:
     logout: Logout
     authenticate: AuthenticateSession
     cookies: CookiePolicy
+    issue_code: IssueLoginCode
+    find_member: FindMemberByTelegram
+    service_keys: ServiceKeys
 
 
 def _utcnow() -> datetime:
@@ -45,6 +48,16 @@ async def build_services(settings: Settings, resources: Resources) -> Services:
         authenticate=AuthenticateSession(uow, tokens, _utcnow),
         cookies=CookiePolicy(
             secure=settings.environment not in _INSECURE_COOKIE_ENVIRONMENTS
+        ),
+        issue_code=IssueLoginCode(uow, limiter, _utcnow),
+        find_member=FindMemberByTelegram(uow),
+        service_keys=ServiceKeys(
+            {
+                settings.secret("automation_service_key").get_secret_value(): (
+                    "automation",
+                    frozenset({Operation.FIND_MEMBER, Operation.ISSUE_LOGIN_CODE}),
+                )
+            }
         ),
     )
 

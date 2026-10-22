@@ -1,6 +1,7 @@
 """Cookie session HTTP contract of the Identity API (public routes)."""
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -15,19 +16,20 @@ from sqlalchemy.exc import OperationalError
 from api.containers import Services
 from api.main import create_identity_app
 from api.routes import get_services
-from api.security import CookiePolicy
+from api.security import CookiePolicy, Operation, ServiceKeys
 from application.commands.auth import (
     EnsureInitialAdmin,
     ExchangeLoginCode,
     IssueLoginCode,
     Logout,
 )
-from application.queries.members import AuthenticateSession
+from application.queries.members import AuthenticateSession, FindMemberByTelegram
 from domain.entities.auth import MemberStatus
 from infrastructure.security.jwt import Rs256Tokens
 
 ADMIN = 4_200_000_001
 ORIGIN = {"Origin": "http://test"}
+SERVICE_KEY = {"X-Service-Key": "automation-key-for-tests"}
 
 
 class Env:
@@ -53,6 +55,17 @@ class Env:
             logout=Logout(uow, self.clock),
             authenticate=AuthenticateSession(uow, tokens, self.clock),
             cookies=CookiePolicy(secure=secure),
+            issue_code=self.issue,
+            find_member=FindMemberByTelegram(uow),
+            service_keys=ServiceKeys(
+                {
+                    "automation-key-for-tests": (
+                        "automation",
+                        frozenset(Operation),
+                    ),
+                    "key-without-operations": ("restricted", frozenset()),
+                }
+            ),
         )
 
     async def login_code(self) -> str:
@@ -270,15 +283,138 @@ async def test_unavailable_storage_gives_503_not_access(
     async def unavailable(token: str) -> Any:
         raise failure
 
-    env.services = Services(
-        exchange=env.services.exchange,
-        logout=env.services.logout,
+    env.services = replace(
+        env.services,
         authenticate=unavailable,  # type: ignore[arg-type]
-        cookies=env.services.cookies,
     )
     async for client in client_for(env):
         response = await client.get(
             "/api/v1/users/me", headers={"Cookie": "botflow_session=anything"}
+        )
+
+    assert response.status_code == 503
+
+
+async def test_internal_lookup_returns_the_member_for_a_service_key(
+    client: httpx.AsyncClient, env: Env
+) -> None:
+    await env.login_code()
+
+    response = await client.get(
+        f"/internal/v1/members/by-telegram/{ADMIN}", headers=SERVICE_KEY
+    )
+
+    assert response.status_code == 200
+    assert response.json()["role"] == "admin"
+    assert response.json()["status"] == "approved"
+
+
+async def test_internal_lookup_of_unknown_telegram_id_is_404(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.get(
+        "/internal/v1/members/by-telegram/7", headers=SERVICE_KEY
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("headers", "status"),
+    [
+        ({}, 401),
+        ({"X-Service-Key": "wrong"}, 401),
+        ({"X-Service-Key": "key-without-operations"}, 403),
+    ],
+    ids=["missing", "wrong", "operation-not-allowed"],
+)
+async def test_internal_routes_demand_a_key_that_allows_the_operation(
+    client: httpx.AsyncClient, env: Env, headers: dict[str, str], status: int
+) -> None:
+    await env.login_code()
+
+    lookup = await client.get(
+        f"/internal/v1/members/by-telegram/{ADMIN}", headers=headers
+    )
+    issue = await client.post(
+        "/internal/v1/login-codes", json={"telegram_id": ADMIN}, headers=headers
+    )
+
+    assert (lookup.status_code, issue.status_code) == (status, status)
+
+
+async def test_a_browser_session_does_not_open_internal_routes(
+    client: httpx.AsyncClient, env: Env
+) -> None:
+    await login(client, env)
+
+    response = await client.get(f"/internal/v1/members/by-telegram/{ADMIN}")
+
+    assert response.status_code == 401
+
+
+async def test_internal_issue_gives_a_code_the_browser_can_exchange(
+    client: httpx.AsyncClient, env: Env
+) -> None:
+    await env.login_code()
+
+    issued = await client.post(
+        "/internal/v1/login-codes", json={"telegram_id": ADMIN}, headers=SERVICE_KEY
+    )
+    exchanged = await client.post(
+        "/api/v1/auth/exchange", json={"code": issued.json()["code"]}, headers=ORIGIN
+    )
+
+    assert issued.status_code == 200
+    assert len(issued.json()["code"]) == 32
+    assert issued.headers["cache-control"] == "no-store"
+    assert exchanged.status_code == 200
+
+
+async def test_internal_issue_refuses_an_identity_without_approval(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/internal/v1/login-codes", json={"telegram_id": 99}, headers=SERVICE_KEY
+    )
+
+    assert response.status_code == 403
+
+
+async def test_internal_issue_is_rate_limited_with_429(
+    client: httpx.AsyncClient, env: Env
+) -> None:
+    await env.login_code()  # one issued directly, four more through HTTP
+    for _ in range(4):
+        await client.post(
+            "/internal/v1/login-codes", json={"telegram_id": ADMIN}, headers=SERVICE_KEY
+        )
+
+    response = await client.post(
+        "/internal/v1/login-codes", json={"telegram_id": ADMIN}, headers=SERVICE_KEY
+    )
+
+    assert response.status_code == 429
+
+
+async def test_internal_issue_rejects_a_malformed_body(
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/internal/v1/login-codes", json={"telegram_id": "abc"}, headers=SERVICE_KEY
+    )
+
+    assert response.status_code == 422
+
+
+async def test_internal_routes_report_unavailable_storage_as_503(env: Env) -> None:
+    async def unavailable(telegram_id: int) -> Any:
+        raise OperationalError("SELECT 1", {}, OSError("down"))
+
+    env.services = replace(env.services, find_member=unavailable)  # type: ignore[arg-type]
+    async for client in client_for(env):
+        response = await client.get(
+            f"/internal/v1/members/by-telegram/{ADMIN}", headers=SERVICE_KEY
         )
 
     assert response.status_code == 503

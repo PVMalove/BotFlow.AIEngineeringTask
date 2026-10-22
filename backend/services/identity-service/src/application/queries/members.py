@@ -48,3 +48,13 @@ class AuthenticateSession:
         if member is None or member.status is not MemberStatus.APPROVED:
             raise InvalidSession
         return CurrentSession(session_id=session.id, member=member)
+
+
+class FindMemberByTelegram:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    async def __call__(self, telegram_id: int) -> MemberView | None:
+        async with self._uow_factory() as uow:
+            member = await uow.members.get_by_telegram_id(telegram_id)
+        return member_view(member) if member else None

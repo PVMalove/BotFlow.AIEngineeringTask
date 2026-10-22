@@ -2,13 +2,14 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi.params import Depends as DependsParameter
 from pydantic import BaseModel, Field
 
 from api.containers import Services
-from api.security import SESSION_COOKIE, require_same_origin
+from api.security import SESSION_COOKIE, Operation, require_same_origin
 from application.queries.members import member_view
-from contracts.views import MemberView
+from contracts.views import LoginCodeView, MemberView
 from domain.entities.auth import InvalidSession
 
 router = APIRouter()
@@ -73,3 +74,46 @@ async def logout(
             await services.logout(current.session_id)
     services.cookies.clear(response)
     return response
+
+
+def service_operation(operation: Operation) -> DependsParameter:
+    async def authorize(
+        services: Annotated[Services, Depends(get_services)],
+        x_service_key: Annotated[str | None, Header()] = None,
+    ) -> None:
+        services.service_keys.authorize(x_service_key, operation)
+
+    return DependsParameter(authorize)
+
+
+class IssueCodeRequest(BaseModel):
+    telegram_id: int = Field(gt=0)
+
+
+@router.get(
+    "/internal/v1/members/by-telegram/{telegram_id}",
+    dependencies=[service_operation(Operation.FIND_MEMBER)],
+)
+async def find_member(
+    telegram_id: int,
+    response: Response,
+    services: Annotated[Services, Depends(get_services)],
+) -> MemberView:
+    member = await services.find_member(telegram_id)
+    if member is None:
+        raise HTTPException(status_code=404, detail="member_not_found")
+    response.headers["Cache-Control"] = "no-store"
+    return member
+
+
+@router.post(
+    "/internal/v1/login-codes",
+    dependencies=[service_operation(Operation.ISSUE_LOGIN_CODE)],
+)
+async def issue_login_code(
+    body: IssueCodeRequest,
+    response: Response,
+    services: Annotated[Services, Depends(get_services)],
+) -> LoginCodeView:
+    response.headers["Cache-Control"] = "no-store"
+    return await services.issue_code(body.telegram_id)
