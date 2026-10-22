@@ -42,6 +42,13 @@
 CLI (`voice_latency`, `whisper_validate`) находятся в `scripts/`, тесты разделены на `unit/`, `integration/`, `e2e/`,
 `performance/`. Рядом с `src/` предусмотрены `k8s/`, `docs/` и `ci/`.
 
+Агрегаты: tasks — `Task`; identity — `Member`; automation — `Job` (текст/голос, с частью
+`VoiceMessage`) и `NotificationIntent`. Репозиторий отдаёт и сохраняет агрегат и регистрирует его в
+UoW (`track`); при `commit` UoW забирает события (`pull_events`), в той же транзакции раскладывает
+их в outbox/намерения (`stage_*_event` в `infrastructure/db`), а после commit передаёт обработчикам
+(сигнал `board.changed`). Разбор сообщений брокера (`CreateTask`, `TaskCreated`, события Identity)
+выполняют consumers в `infrastructure/messaging`, команды получают уже готовый DTO.
+
 CQRS локальный, без отдельной read DB/универсального dispatcher. UoW коммитит
 бизнес-изменение и outbox/inbox вместе; репозитории не коммитят. Сессии БД
 изолированы по операции, rollback — по умолчанию. Длительный Whisper не держит
