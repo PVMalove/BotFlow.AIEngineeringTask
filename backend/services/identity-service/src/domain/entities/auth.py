@@ -45,6 +45,11 @@ class Member:
     role: Role
     status: MemberStatus
     created_at: datetime
+    display_name: str | None = None
+    # Bumped by every access change; stale decisions and notifications compare it.
+    access_version: int = 1
+    status_changed_at: datetime | None = None
+    decided_by: UUID | None = None
 
     def with_status(self, status: MemberStatus) -> "Member":
         return replace(self, status=status)

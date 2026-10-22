@@ -55,6 +55,7 @@ class Operation(StrEnum):
 
     FIND_MEMBER = "members:find"
     ISSUE_LOGIN_CODE = "login-codes:issue"
+    SUBMIT_JOIN_REQUEST = "join-requests:submit"
 
 
 class ServiceKeys:

@@ -41,7 +41,7 @@ class FakeMembers:
         self._data.members[member.id] = member
         return True
 
-    async def get(self, member_id: UUID) -> Member | None:
+    async def get(self, member_id: UUID, *, lock: bool = False) -> Member | None:
         return self._data.members.get(member_id)
 
     async def get_by_telegram_id(
@@ -51,6 +51,13 @@ class FakeMembers:
             (m for m in self._data.members.values() if m.telegram_id == telegram_id),
             None,
         )
+
+    async def update_access(self, member: Member, *, expected_version: int) -> bool:
+        stored = self._data.members.get(member.id)
+        if stored is None or stored.access_version != expected_version:
+            return False
+        self._data.members[member.id] = member
+        return True
 
 
 class FakeLoginCodes:

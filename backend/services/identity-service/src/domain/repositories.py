@@ -12,12 +12,16 @@ class MemberRepository(Protocol):
         """Insert unless the Telegram identity exists; True when inserted."""
         ...
 
-    async def get(self, member_id: UUID) -> Member | None: ...
+    async def get(self, member_id: UUID, *, lock: bool = False) -> Member | None: ...
 
     async def get_by_telegram_id(
         self, telegram_id: int, *, lock: bool = False
     ) -> Member | None:
         """`lock` serializes concurrent changes to the same member."""
+        ...
+
+    async def update_access(self, member: Member, *, expected_version: int) -> bool:
+        """Store the access fields if the stored version is still `expected_version`."""
         ...
 
 

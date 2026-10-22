@@ -14,6 +14,7 @@ def member_view(member: Member) -> MemberView:
         telegram_id=member.telegram_id,
         role=member.role.value,
         status=member.status.value,
+        access_version=member.access_version,
     )
 
 

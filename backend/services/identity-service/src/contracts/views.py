@@ -17,3 +17,10 @@ class MemberView:
     telegram_id: int
     role: str
     status: str
+    access_version: int
+
+
+@dataclass(frozen=True, slots=True)
+class JoinRequestView:
+    outcome: str
+    member: MemberView

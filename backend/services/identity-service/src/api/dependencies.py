@@ -12,6 +12,7 @@ from application.commands.auth import (
     IssueLoginCode,
     Logout,
 )
+from application.commands.join import SubmitJoinRequest
 from application.queries.members import (
     AuthenticateSession,
     FindMemberByTelegram,
@@ -63,6 +64,13 @@ def get_issue_code_handler(services: ServicesDI) -> IssueLoginCode:
 IssueLoginCodeDI = Annotated[IssueLoginCode, Depends(get_issue_code_handler)]
 
 
+def get_submit_join_handler(services: ServicesDI) -> SubmitJoinRequest:
+    return services.submit_join
+
+
+SubmitJoinRequestDI = Annotated[SubmitJoinRequest, Depends(get_submit_join_handler)]
+
+
 def service_operation(operation: Operation) -> DependsParameter:
     async def authorize(
         services: ServicesDI,
@@ -80,11 +88,13 @@ __all__ = [
     "IssueLoginCodeDI",
     "LogoutDI",
     "ServicesDI",
+    "SubmitJoinRequestDI",
     "get_authenticate_handler",
     "get_exchange_handler",
     "get_find_member_handler",
     "get_issue_code_handler",
     "get_logout_handler",
     "get_services",
+    "get_submit_join_handler",
     "service_operation",
 ]

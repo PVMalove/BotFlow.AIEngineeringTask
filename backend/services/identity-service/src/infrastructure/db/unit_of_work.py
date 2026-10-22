@@ -32,14 +32,20 @@ class SqlMembers:
                 role=member.role.value,
                 status=member.status.value,
                 created_at=member.created_at,
+                display_name=member.display_name,
+                access_version=member.access_version,
+                status_changed_at=member.status_changed_at,
+                decided_by=member.decided_by,
             )
             .on_conflict_do_nothing(index_elements=[members.c.telegram_id])
             .returning(members.c.id)
         )
         return result.scalar_one_or_none() is not None
 
-    async def get(self, member_id: UUID) -> Member | None:
+    async def get(self, member_id: UUID, *, lock: bool = False) -> Member | None:
         query = select(members).where(members.c.id == member_id)
+        if lock:
+            query = query.with_for_update()
         row = (await self._session.execute(query)).one_or_none()
         return _member(row) if row else None
 
@@ -52,6 +58,24 @@ class SqlMembers:
         row = (await self._session.execute(query)).one_or_none()
         return _member(row) if row else None
 
+    async def update_access(self, member: Member, *, expected_version: int) -> bool:
+        result = await self._session.execute(
+            update(members)
+            .where(
+                members.c.id == member.id,
+                members.c.access_version == expected_version,
+            )
+            .values(
+                status=member.status.value,
+                display_name=member.display_name,
+                access_version=member.access_version,
+                status_changed_at=member.status_changed_at,
+                decided_by=member.decided_by,
+            )
+            .returning(members.c.id)
+        )
+        return result.scalar_one_or_none() is not None
+
 
 def _member(row: Row[Any]) -> Member:
     return Member(
@@ -60,6 +84,10 @@ def _member(row: Row[Any]) -> Member:
         role=Role(row.role),
         status=MemberStatus(row.status),
         created_at=row.created_at,
+        display_name=row.display_name,
+        access_version=row.access_version,
+        status_changed_at=row.status_changed_at,
+        decided_by=row.decided_by,
     )
 
 

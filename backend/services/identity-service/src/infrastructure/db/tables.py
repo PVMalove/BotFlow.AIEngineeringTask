@@ -26,6 +26,10 @@ members = Table(
     Column("role", Text, nullable=False),
     Column("status", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("display_name", Text),
+    Column("access_version", Integer, nullable=False, server_default=text("1")),
+    Column("status_changed_at", DateTime(timezone=True)),
+    Column("decided_by", Uuid, ForeignKey("members.id")),
     CheckConstraint("role IN ('admin', 'user')", name="members_role_check"),
     CheckConstraint(
         "status IN ('pending', 'approved', 'rejected', 'blocked')",

@@ -9,6 +9,7 @@ from dependency_injector import containers, providers
 
 from api.security import CookiePolicy, Operation, ServiceKeys
 from application.commands.auth import ExchangeLoginCode, IssueLoginCode, Logout
+from application.commands.join import SubmitJoinRequest
 from application.queries.members import AuthenticateSession, FindMemberByTelegram
 from infrastructure.db.unit_of_work import SqlRateLimiter, SqlUnitOfWork
 from infrastructure.security.jwt import Rs256Tokens
@@ -27,6 +28,7 @@ class Services:
     cookies: CookiePolicy
     issue_code: IssueLoginCode
     find_member: FindMemberByTelegram
+    submit_join: SubmitJoinRequest
     service_keys: ServiceKeys
 
 
@@ -51,11 +53,18 @@ async def build_services(settings: Settings, resources: Resources) -> Services:
         ),
         issue_code=IssueLoginCode(uow, limiter, _utcnow),
         find_member=FindMemberByTelegram(uow),
+        submit_join=SubmitJoinRequest(uow, limiter, _utcnow),
         service_keys=ServiceKeys(
             {
                 settings.secret("automation_service_key").get_secret_value(): (
                     "automation",
-                    frozenset({Operation.FIND_MEMBER, Operation.ISSUE_LOGIN_CODE}),
+                    frozenset(
+                        {
+                            Operation.FIND_MEMBER,
+                            Operation.ISSUE_LOGIN_CODE,
+                            Operation.SUBMIT_JOIN_REQUEST,
+                        }
+                    ),
                 )
             }
         ),

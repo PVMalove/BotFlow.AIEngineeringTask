@@ -25,6 +25,7 @@ from application.commands.auth import (
     IssueLoginCodeCommand,
     Logout,
 )
+from application.commands.join import SubmitJoinRequest
 from application.queries.members import AuthenticateSession, FindMemberByTelegram
 from domain.entities.auth import MemberStatus
 from infrastructure.security.jwt import Rs256Tokens
@@ -59,6 +60,7 @@ class Env:
             cookies=CookiePolicy(secure=secure),
             issue_code=self.issue,
             find_member=FindMemberByTelegram(uow),
+            submit_join=SubmitJoinRequest(uow, limiter, self.clock),
             service_keys=ServiceKeys(
                 {
                     "automation-key-for-tests": (
@@ -435,3 +437,93 @@ async def test_internal_routes_report_unavailable_storage_as_503(env: Env) -> No
         )
 
     assert response.status_code == 503
+
+
+async def test_internal_join_creates_a_pending_member_without_access(
+    client: httpx.AsyncClient, env: Env
+) -> None:
+    response = await client.post(
+        "/internal/v1/join-requests",
+        json={"telegram_id": 7_000_000_001, "display_name": "  Ann  "},
+        headers=SERVICE_KEY,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["outcome"] == "submitted"
+    assert body["member"]["status"] == "pending"
+    assert body["member"]["role"] == "user"
+    assert body["member"]["access_version"] == 1
+    assert response.headers["cache-control"] == "no-store"
+    (member,) = env.store.members.values()
+    assert member.display_name == "Ann"
+    code = await client.post(
+        "/internal/v1/login-codes",
+        json={"telegram_id": 7_000_000_001},
+        headers=SERVICE_KEY,
+    )
+    assert code.status_code == 403  # pending is not approved
+
+
+async def test_internal_join_is_idempotent_and_never_unblocks(
+    client: httpx.AsyncClient, env: Env
+) -> None:
+    join = {"telegram_id": 7_000_000_001}
+    await client.post("/internal/v1/join-requests", json=join, headers=SERVICE_KEY)
+    again = await client.post(
+        "/internal/v1/join-requests", json=join, headers=SERVICE_KEY
+    )
+    (member,) = env.store.members.values()
+    env.store.members[member.id] = replace(member, status=MemberStatus.BLOCKED)
+    blocked = await client.post(
+        "/internal/v1/join-requests", json=join, headers=SERVICE_KEY
+    )
+
+    assert again.json()["outcome"] == "already_pending"
+    assert blocked.json()["outcome"] == "blocked"
+    assert blocked.json()["member"]["status"] == "blocked"
+
+
+async def test_internal_join_demands_its_own_operation(
+    client: httpx.AsyncClient,
+) -> None:
+    body = {"telegram_id": 7_000_000_001}
+    no_key = await client.post("/internal/v1/join-requests", json=body)
+    restricted = await client.post(
+        "/internal/v1/join-requests",
+        json=body,
+        headers={"X-Service-Key": "key-without-operations"},
+    )
+
+    assert no_key.status_code == 401
+    assert restricted.status_code == 403
+
+
+async def test_internal_join_is_rate_limited_with_429(
+    client: httpx.AsyncClient,
+) -> None:
+    statuses = [
+        (
+            await client.post(
+                "/internal/v1/join-requests",
+                json={"telegram_id": 7_000_000_001},
+                headers=SERVICE_KEY,
+            )
+        ).status_code
+        for _ in range(6)
+    ]
+
+    assert statuses == [200] * 5 + [429]
+
+
+@pytest.mark.parametrize(
+    "body", [{"telegram_id": 0}, {"telegram_id": 1, "display_name": "x" * 65}]
+)
+async def test_internal_join_rejects_a_malformed_body(
+    client: httpx.AsyncClient, body: dict[str, Any]
+) -> None:
+    response = await client.post(
+        "/internal/v1/join-requests", json=body, headers=SERVICE_KEY
+    )
+
+    assert response.status_code == 422
