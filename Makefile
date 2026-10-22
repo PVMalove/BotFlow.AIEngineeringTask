@@ -14,7 +14,10 @@ UV ?= uv
 	frontend-check frontend-test frontend-format frontend-build e2e \
 	_require-frontend-files _require-frontend-env _require-compose
 
-.PHONY: smoke scripts-check scripts-test
+.PHONY: smoke scripts-check scripts-test whisper-build whisper-prepare whisper-verify whisper-corpus-check whisper-bench
+
+WHISPER_MODEL ?= turbo
+export WHISPER_MODEL
 
 help: ## Показать команды разработки BotFlow
 	@$(PYTHON) -c "import pathlib,re; text=pathlib.Path(r'$(ROOT_DIR)/Makefile').read_text(); print('\n'.join(f'{m[1]:<20} {m[2]}' for m in re.finditer(r'^([a-zA-Z0-9_-]+):.*?## (.+)$$',text,re.M)))"
@@ -76,6 +79,21 @@ test: backend-test frontend-test scripts-test ## Запустить backend/fron
 
 smoke: ## Настоящие ресурсы/DI/S3 и down/up в отдельном Compose-проекте; удаляет только свои тестовые тома
 	$(PYTHON) scripts/integration-smoke.py
+
+whisper-build: ## Собрать образ stt-runtime для локальной проверки Whisper; скачивает пакеты
+	$(PYTHON) scripts/whisper-validation.py build
+
+whisper-prepare: ## Скачать и проверить веса в постоянный том (единственный шаг с сетью): WHISPER_MODEL, WHISPER_MODELS_VOLUME
+	$(PYTHON) scripts/whisper-validation.py prepare
+
+whisper-verify: ## Проверить SHA-256 и загрузить модель в память без сети; том read-only
+	$(PYTHON) scripts/whisper-validation.py verify
+
+whisper-corpus-check: ## Проверить корпус из .local/whisper/corpus (read-only, без сети)
+	$(PYTHON) scripts/whisper-validation.py corpus-check
+
+whisper-bench: ## Cold/warm прогон корпуса без сети; результат в .local/whisper/results.json
+	$(PYTHON) scripts/whisper-validation.py bench
 
 qa: ## Полная последовательность проверок, сборки образов и Playwright
 	$(MAKE) check

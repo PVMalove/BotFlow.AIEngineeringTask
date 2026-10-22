@@ -6,6 +6,7 @@
 *.pem
 *.key
 backups/
+/.local/whisper/
 
 # Python and build outputs
 .venv/
