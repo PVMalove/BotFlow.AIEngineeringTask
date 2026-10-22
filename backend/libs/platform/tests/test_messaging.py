@@ -58,9 +58,13 @@ class FakeConnection:
     def __init__(self) -> None:
         self.log: list[Any] = []
         self.channels: list[FakeChannel] = []
+        self.on_return_raises: list[bool] = []
 
-    async def channel(self, *, publisher_confirms: bool) -> FakeChannel:
+    async def channel(
+        self, *, publisher_confirms: bool, on_return_raises: bool = False
+    ) -> FakeChannel:
         assert publisher_confirms
+        self.on_return_raises.append(on_return_raises)
         self.channels.append(FakeChannel(self.log))
         return self.channels[-1]
 
@@ -91,6 +95,16 @@ async def test_messages_are_persistent_mandatory_and_identified() -> None:
     assert (message.message_id, message.type) == ("e1", "t")
     assert message.content_type == "application/json"
     assert (routing_key, mandatory) == (ACCESS_DECIDED_ROUTING_KEY, True)
+
+
+async def test_an_unroutable_message_is_a_publish_error_not_a_silent_loss() -> None:
+    connection = FakeConnection()
+    sut = ConfirmedPublisher(connection)  # type: ignore[arg-type]
+
+    await sut.publish(ACCESS_DECIDED_ROUTING_KEY, b"{}", message_id="e1", type="t")
+
+    # aio-pika only raises for a returned (mandatory) message when asked to.
+    assert connection.on_return_raises == [True]
 
 
 async def test_a_failed_publish_raises_and_reopens_the_channel_next_time() -> None:

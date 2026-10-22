@@ -75,7 +75,10 @@ class ConfirmedPublisher:
     ) -> None:
         try:
             if self._exchange is None:
-                channel = await self._connection.channel(publisher_confirms=True)
+                # Without on_return_raises aio-pika swallows a returned message.
+                channel = await self._connection.channel(
+                    publisher_confirms=True, on_return_raises=True
+                )
                 self._exchange = (await self._declare(channel))[0]
             await self._exchange.publish(
                 Message(
