@@ -10,7 +10,7 @@ import httpx
 from aio_pika import DeliveryMode, Message
 from api.containers import Container as AutomationContainer
 from botflow_platform.http import create_app
-from botflow_platform.resources import open_resources
+from botflow_platform.resources import open_database, open_resources
 from botflow_platform.settings import Settings
 from botocore.exceptions import ClientError
 from sqlalchemy import text
@@ -20,6 +20,7 @@ AFTER = os.environ["BOTFLOW_SMOKE_PHASE"] == "after"
 TABLE = "botflow_smoke_" + RUN_ID
 BUCKET = "botflow-smoke-" + RUN_ID
 QUEUE = "botflow.smoke." + RUN_ID
+ADMIN_TELEGRAM_ID = int(os.environ["INITIAL_ADMIN_TELEGRAM_ID"])
 REDIS_KEY = "botflow:automation:smoke:" + RUN_ID
 logging.disable(logging.CRITICAL)
 
@@ -69,6 +70,35 @@ class InfrastructureSmoke(unittest.IsolatedAsyncioTestCase):
                         await third.commit()
             self.assertTrue(resources.closed)
             self.assertTrue(resources.rabbitmq.is_closed)
+
+    async def test_migrations_and_admin_bootstrap_survive_repeat(self) -> None:
+        for service, table in (
+            ("identity", "members"),
+            ("automation", "telegram_updates"),
+        ):
+            async with open_database(Settings(service=service)) as database:
+                async with database.sessions() as session:
+                    self.assertEqual(
+                        await session.scalar(text(f"SELECT count(*) FROM {table}")),
+                        1 if service == "identity" else 0,
+                    )
+        async with open_database(Settings(service="identity")) as database:
+            async with database.sessions() as session:
+                row = (
+                    await session.execute(
+                        text(
+                            "SELECT role, status FROM members WHERE telegram_id = :id"
+                        ),
+                        {"id": ADMIN_TELEGRAM_ID},
+                    )
+                ).one()
+                if not AFTER:
+                    self.assertEqual(tuple(row), ("admin", "approved"))
+                    await session.execute(text("UPDATE members SET status = 'blocked'"))
+                    await session.commit()
+                else:
+                    # The repeated bootstrap after restart must not restore access.
+                    self.assertEqual(tuple(row), ("admin", "blocked"))
 
     async def test_rabbitmq_durable_message_survives_restart(self) -> None:
         container = AutomationContainer()

@@ -202,6 +202,14 @@ services:
     command:
       - "python"
       - "scripts/bootstrap.py"
+      - "migrate"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+    secrets:
+      - "automation_db_password"
+    depends_on:
+      automation-db:
+        condition: "service_healthy"
     networks:
       - "backend"
   automation-worker:

@@ -11,6 +11,21 @@ from pathlib import Path
 
 from compose_build import build_images
 
+ADMIN_TELEGRAM_ID = "4200000001"
+BOOTSTRAP = (
+    ["run", "--rm", "--no-deps", "identity-bootstrap"],
+    ["run", "--rm", "--no-deps", "automation-bootstrap"],
+    [
+        "run",
+        "--rm",
+        "--no-deps",
+        "identity-bootstrap",
+        "python",
+        "scripts/bootstrap.py",
+        "admin",
+    ],
+)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -36,6 +51,7 @@ def main() -> int:
             "BOTFLOW_HTTP_PORT": "8080",
             "BOTFLOW_IMAGE_TAG": project,
             "BOTFLOW_SMOKE_ID": run_id,
+            "INITIAL_ADMIN_TELEGRAM_ID": ADMIN_TELEGRAM_ID,
             "BOTFLOW_SECRETS_DIR": str(secret_directory),
         }
         compose = [
@@ -82,33 +98,48 @@ def main() -> int:
                 check=True,
                 capture_output=True,
             )
-            for stage, command_args, phase in (
-                ("Compose validation", ["config", "--quiet"], "before"),
-                ("image build", ["build"], "before"),
+            for stage, commands, phase in (
+                ("Compose validation", (["config", "--quiet"],), "before"),
+                ("image build", (["build"],), "before"),
                 (
                     "initial startup",
-                    ["up", "-d", "--wait", "--wait-timeout", "180"],
+                    (["up", "-d", "--wait", "--wait-timeout", "180"],),
+                    "before",
+                ),
+                ("migrations and initial admin", BOOTSTRAP, "before"),
+                (
+                    "resource and isolation checks",
+                    (["run", "--rm", "--no-deps", "smoke"],),
                     "before",
                 ),
                 (
-                    "resource and isolation checks",
-                    ["run", "--rm", "--no-deps", "smoke"],
+                    "volume-preserving shutdown",
+                    (["down", "--timeout", "20"],),
                     "before",
                 ),
-                ("volume-preserving shutdown", ["down", "--timeout", "20"], "before"),
-                ("restart", ["up", "-d", "--wait", "--wait-timeout", "180"], "after"),
-                ("persistence checks", ["run", "--rm", "--no-deps", "smoke"], "after"),
+                (
+                    "restart",
+                    (["up", "-d", "--wait", "--wait-timeout", "180"],),
+                    "after",
+                ),
+                ("repeated migrations and initial admin", BOOTSTRAP, "after"),
+                (
+                    "persistence checks",
+                    (["run", "--rm", "--no-deps", "smoke"],),
+                    "after",
+                ),
             ):
                 print(f"Integration smoke: {stage}", flush=True)
                 if stage == "image build":
                     build_images(compose, env, root)
                     continue
-                subprocess.run(
-                    [*compose, *command_args],
-                    env={**env, "BOTFLOW_SMOKE_PHASE": phase},
-                    check=True,
-                    capture_output=True,
-                )
+                for command_args in commands:
+                    subprocess.run(
+                        [*compose, *command_args],
+                        env={**env, "BOTFLOW_SMOKE_PHASE": phase},
+                        check=True,
+                        capture_output=True,
+                    )
                 if stage == "resource and isolation checks" and options.browser:
                     stage = "isolated browser checks"
                     address = subprocess.run(

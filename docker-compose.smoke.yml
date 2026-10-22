@@ -8,6 +8,7 @@ services:
     environment:
       BOTFLOW_SMOKE_ID: "${BOTFLOW_SMOKE_ID:?isolated smoke ID required}"
       BOTFLOW_SMOKE_PHASE: "${BOTFLOW_SMOKE_PHASE:-before}"
+      INITIAL_ADMIN_TELEGRAM_ID: "${INITIAL_ADMIN_TELEGRAM_ID:?isolated admin ID required}"
     command: ["python", "/workspace/backend/tests/integration/smoke.py"]
     volumes:
       - "./backend/tests/integration:/workspace/backend/tests/integration:ro"
