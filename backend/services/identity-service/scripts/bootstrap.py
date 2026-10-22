@@ -1,11 +1,53 @@
-"""Explicit bootstrap entry point; no silent success before migrations exist."""
+"""Bootstrap commands: `migrate` applies the schema, `admin` ensures the first admin."""
+
+import argparse
+import asyncio
+import os
+from datetime import UTC, datetime
+from pathlib import Path
+
+from botflow_platform.migrations import run_migrations
+
+import infrastructure.db as db_package
+from api.containers import Container
+from application.commands.auth import EnsureInitialAdmin
+from infrastructure.db.unit_of_work import SqlUnitOfWork
+
+ALEMBIC_INI = Path(db_package.__file__).parent / "alembic.ini"
 
 
-def main() -> None:
-    raise SystemExit(
-        "Bootstrap is not implemented: add migrations and resource wiring."
-    )
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+async def migrate(container: Container) -> None:
+    await run_migrations(container.settings(), ALEMBIC_INI)
+    print("Identity migrations applied.")
+
+
+async def admin(container: Container) -> None:
+    raw = os.environ.get("INITIAL_ADMIN_TELEGRAM_ID", "").strip()
+    if not raw.isdigit() or int(raw) == 0:
+        raise SystemExit("INITIAL_ADMIN_TELEGRAM_ID must be a positive Telegram ID.")
+    database = await container.database.async_()
+    ensure_admin = EnsureInitialAdmin(lambda: SqlUnitOfWork(database.sessions), _utcnow)
+    if await ensure_admin(int(raw)):
+        print("Initial admin created.")
+    else:
+        print("Initial admin already exists; access decisions are unchanged.")
+
+
+async def main(command: str) -> None:
+    container = Container()
+    try:
+        await {"migrate": migrate, "admin": admin}[command](container)
+    finally:
+        closing = container.shutdown_resources()
+        if closing is not None:
+            await closing
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=["migrate", "admin"])
+    asyncio.run(main(parser.parse_args().command))

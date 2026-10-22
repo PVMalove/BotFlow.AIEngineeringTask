@@ -54,6 +54,15 @@ services:
     command:
       - "python"
       - "scripts/bootstrap.py"
+      - "migrate"
+    environment:
+      BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
+      INITIAL_ADMIN_TELEGRAM_ID: "${INITIAL_ADMIN_TELEGRAM_ID:-}"
+    secrets:
+      - "identity_db_password"
+    depends_on:
+      identity-db:
+        condition: "service_healthy"
     networks:
       - "backend"
   identity-worker:

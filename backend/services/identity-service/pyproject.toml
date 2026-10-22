@@ -12,6 +12,7 @@ dependencies = [
     "asyncpg==0.32.0",
     "aio-pika==10.1.1",
     "httpx==0.28.1",
+    "PyJWT[crypto]==2.15.1",
 ]
 
 [tool.uv.sources]
@@ -26,7 +27,7 @@ extend = "../../pyproject.toml"
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = "src"
+mypy_path = "src:tests/unit"
 explicit_package_bases = true
 
 [tool.pytest.ini_options]
