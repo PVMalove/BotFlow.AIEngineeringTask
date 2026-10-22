@@ -5,11 +5,13 @@ from fastapi import APIRouter, HTTPException, Response
 from api.dependencies import (
     FindMemberDI,
     IssueLoginCodeDI,
+    SubmitJoinRequestDI,
     service_operation,
 )
-from api.schemas import FindMemberRequest, IssueCodeRequest
+from api.schemas import FindMemberRequest, IssueCodeRequest, JoinRequestBody
 from api.security import Operation
-from contracts.views import LoginCodeView, MemberView
+from application.queries.members import member_view
+from contracts.views import JoinRequestView, LoginCodeView, MemberView
 
 router = APIRouter(tags=["internal"])
 
@@ -56,6 +58,29 @@ async def issue_login_code(
     """Выпустить одноразовый код для входа в веб-панель."""
     response.headers["Cache-Control"] = "no-store"
     return await handler.execute(body.to_command())
+
+
+@router.post(
+    "/internal/v1/join-requests",
+    response_model=JoinRequestView,
+    summary="Заявка на доступ из Telegram",
+    description=(
+        "Служебный эндпоинт для Telegram-бота: создаёт заявку (ожидающего участника), "
+        "повторяет её после отказа и не обходит блокировку."
+    ),
+    dependencies=[service_operation(Operation.SUBMIT_JOIN_REQUEST)],
+)
+async def submit_join_request(
+    body: JoinRequestBody,
+    response: Response,
+    handler: SubmitJoinRequestDI,
+) -> JoinRequestView:
+    """Принять заявку на доступ; решение о допуске принимает только Identity."""
+    result = await handler.execute(body.to_command())
+    response.headers["Cache-Control"] = "no-store"
+    return JoinRequestView(
+        outcome=result.outcome.value, member=member_view(result.member)
+    )
 
 
 __all__ = ["router"]

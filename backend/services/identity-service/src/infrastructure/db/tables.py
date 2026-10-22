@@ -15,6 +15,7 @@ from sqlalchemy import (
     Uuid,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 
 metadata = MetaData()
 
@@ -26,6 +27,10 @@ members = Table(
     Column("role", Text, nullable=False),
     Column("status", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("display_name", Text),
+    Column("access_version", Integer, nullable=False, server_default=text("1")),
+    Column("status_changed_at", DateTime(timezone=True)),
+    Column("decided_by", Uuid, ForeignKey("members.id")),
     CheckConstraint("role IN ('admin', 'user')", name="members_role_check"),
     CheckConstraint(
         "status IN ('pending', 'approved', 'rejected', 'blocked')",
@@ -70,4 +75,22 @@ rate_limits = Table(
     Column("window_start", DateTime(timezone=True), nullable=False),
     Column("count", Integer, nullable=False),
     PrimaryKeyConstraint("key", "window_start"),
+)
+
+outbox = Table(
+    "outbox",
+    metadata,
+    Column("id", Uuid, primary_key=True),
+    Column("type", Text, nullable=False),
+    Column("payload", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("attempts", Integer, nullable=False, server_default=text("0")),
+    # NULL on an unpublished row means the retries are exhausted.
+    Column("next_attempt_at", DateTime(timezone=True)),
+    Column("published_at", DateTime(timezone=True)),
+    Index(
+        "outbox_unpublished",
+        "next_attempt_at",
+        postgresql_where=text("published_at IS NULL"),
+    ),
 )

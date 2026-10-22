@@ -7,6 +7,7 @@ import unittest
 from uuid import UUID
 
 import httpx
+from access_flow import AccessFlow
 from aio_pika import DeliveryMode, Message
 from api.containers import Container as AutomationContainer
 from auth_flow import AuthFlow
@@ -192,6 +193,9 @@ class InfrastructureSmoke(unittest.IsolatedAsyncioTestCase):
 if __name__ == "__main__":
     suite = unittest.TestSuite()
     if not AFTER:
+        # AccessFlow cleans up after itself; it runs first so that the shared
+        # invariants checked below (one member, empty inbox) see the initial state.
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(AccessFlow))
         suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(AuthFlow))
     suite.addTests(
         unittest.defaultTestLoader.loadTestsFromTestCase(InfrastructureSmoke)

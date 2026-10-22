@@ -6,6 +6,7 @@ from typing import Protocol, Self
 from domain.repositories import (
     LoginCodeRepository,
     MemberRepository,
+    OutboxRepository,
     SessionRepository,
 )
 
@@ -19,6 +20,9 @@ class UnitOfWork(Protocol):
 
     @property
     def sessions(self) -> SessionRepository: ...
+
+    @property
+    def outbox(self) -> OutboxRepository: ...
 
     async def __aenter__(self) -> Self: ...
 

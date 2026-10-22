@@ -37,4 +37,8 @@ def test_private_key_is_mounted_only_in_identity_api() -> None:
         }
 
     assert mounted("identity_jwt_private_key") == {"identity-api"}
-    assert mounted("automation_service_key") == {"identity-api", "telegram-bot"}
+    assert mounted("automation_service_key") == {
+        "identity-api",
+        "telegram-bot",
+        "automation-worker",
+    }

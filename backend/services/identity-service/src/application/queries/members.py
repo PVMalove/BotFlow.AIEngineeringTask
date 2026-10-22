@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from application.ports import Clock, TokenService, UnitOfWorkFactory
-from contracts.views import MemberView
+from contracts.views import AdminMemberView, MemberView
 from domain.entities.auth import InvalidSession, Member, MemberStatus
 
 
@@ -14,6 +14,20 @@ def member_view(member: Member) -> MemberView:
         telegram_id=member.telegram_id,
         role=member.role.value,
         status=member.status.value,
+        access_version=member.access_version,
+    )
+
+
+def admin_member_view(member: Member) -> AdminMemberView:
+    return AdminMemberView(
+        id=member.id,
+        telegram_id=member.telegram_id,
+        display_name=member.display_name,
+        role=member.role.value,
+        status=member.status.value,
+        access_version=member.access_version,
+        created_at=member.created_at,
+        status_changed_at=member.status_changed_at,
     )
 
 
@@ -80,7 +94,31 @@ class FindMemberByTelegram:
         return member_view(member) if member else None
 
 
+@dataclass(frozen=True, slots=True)
+class ListMembersQuery:
+    """Страница участников или заявок с отбором по статусам."""
+
+    statuses: tuple[MemberStatus, ...]
+    limit: int = 50
+    offset: int = 0
+
+
+class ListMembers:
+    def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
+        self._uow_factory = uow_factory
+
+    async def execute(self, query: ListMembersQuery) -> list[AdminMemberView]:
+        async with self._uow_factory() as uow:
+            found = await uow.members.list_by_status(
+                query.statuses, limit=query.limit, offset=query.offset
+            )
+        return [admin_member_view(member) for member in found]
+
+
 __all__ = [
+    "ListMembers",
+    "ListMembersQuery",
+    "admin_member_view",
     "AuthenticateSession",
     "AuthenticateSessionQuery",
     "CurrentSession",

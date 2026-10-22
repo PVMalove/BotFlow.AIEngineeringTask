@@ -26,7 +26,8 @@ Commit должен быть явным; закрытие сессии отка�
 
 В корне каждого сервиса находятся `tests/{unit,integration,e2e,performance}/`,
 `k8s/`, `docs/`, `ci/`, `scripts/`. CLI-точки входа bootstrap, worker и Telegram
-bot находятся в `scripts/`; bootstrap Identity/Automation и login-бот работают,
+bot находятся в `scripts/`; bootstrap Identity/Automation, login-бот,
+`identity-worker` и `automation-worker` (уведомления о решениях) работают,
 остальные точки входа явно сообщают об отсутствии реализации. Каталоги для будущих артефактов не означают готовность Kubernetes,
 нагрузочных тестов или бизнес-функций.
 
@@ -155,3 +156,21 @@ HTTP-клиент, Identity, nginx, SQL и транзакции PostgreSQL. Пр
 Приватный RSA-ключ отсутствует в Automation/smoke; ключ Automation не открывает
 внутренние маршруты через ingress. Тесты не требуют настоящего Telegram token.
 Живой long polling с токеном владельца остаётся отдельной ручной приёмкой.
+
+## Заявки и воркеры уведомлений (#7)
+
+Воркеры лежат в профиле `workers` и не стартуют по умолчанию. `identity-worker`
+(секреты БД и RabbitMQ) переносит outbox решений в RabbitMQ; `automation-worker`
+(БД, RabbitMQ, Redis, MinIO, ключ Automation и токен бота) принимает события,
+создаёт notification intents и доставляет их через Redis Stream в Telegram.
+Для рассылки решений нужны оба воркера, `identity-api` и миграции обеих БД:
+
+```bash
+docker compose --profile workers up -d identity-worker automation-worker
+```
+
+Администратор решает заявки через `identity-api` (`/api/v1/admin/`). В frontend
+ingress этого маршрута пока нет, поэтому до среза админ-панели API доступен
+только внутри сети Compose. `make smoke` запускает `identity-worker` для проверок
+доступа (`AccessFlow`); `automation-worker` там не стартует, потому что требует
+токен бота: его шаги работают внутри процесса проверки с тестовым Messenger-портом.

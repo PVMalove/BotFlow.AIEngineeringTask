@@ -4,7 +4,8 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from domain.entities.auth import AuthSession, LoginCode, Member
+from domain.access import OutboxEntry
+from domain.entities.auth import AuthSession, LoginCode, Member, MemberStatus
 
 
 class MemberRepository(Protocol):
@@ -12,12 +13,34 @@ class MemberRepository(Protocol):
         """Insert unless the Telegram identity exists; True when inserted."""
         ...
 
-    async def get(self, member_id: UUID) -> Member | None: ...
+    async def get(self, member_id: UUID, *, lock: bool = False) -> Member | None: ...
 
     async def get_by_telegram_id(
         self, telegram_id: int, *, lock: bool = False
     ) -> Member | None:
         """`lock` serializes concurrent changes to the same member."""
+        ...
+
+    async def get_by_login_code(
+        self, code_hash: str, *, lock: bool = False
+    ) -> Member | None:
+        """The code's member, locked before the code row is touched."""
+        ...
+
+    async def lock_decisions(self) -> None:
+        """Serialize access decisions until the transaction ends."""
+        ...
+
+    async def count_approved_admins(self) -> int: ...
+
+    async def list_by_status(
+        self, statuses: tuple[MemberStatus, ...], *, limit: int, offset: int
+    ) -> list[Member]:
+        """Ordered by created_at, then id, so pages are stable."""
+        ...
+
+    async def update_access(self, member: Member, *, expected_version: int) -> bool:
+        """Store the access fields if the stored version is still `expected_version`."""
         ...
 
 
@@ -37,3 +60,21 @@ class SessionRepository(Protocol):
     async def get(self, session_id: UUID) -> AuthSession | None: ...
 
     async def revoke(self, session_id: UUID, now: datetime) -> None: ...
+
+    async def revoke_all(self, member_id: UUID, now: datetime) -> None: ...
+
+
+class OutboxRepository(Protocol):
+    async def add(self, entry: OutboxEntry) -> None: ...
+
+    async def claim_due(self, now: datetime, limit: int) -> list[OutboxEntry]:
+        """Unpublished entries whose next attempt is due, locked for this relay."""
+        ...
+
+    async def mark_published(self, entry_id: UUID, now: datetime) -> None: ...
+
+    async def reschedule(
+        self, entry_id: UUID, attempts: int, next_attempt_at: datetime | None
+    ) -> None:
+        """Record a failed attempt; `None` stops retrying and keeps the row visible."""
+        ...

@@ -150,8 +150,10 @@ MinIO собирается из официального commit 9e49d5e7a648f00e
 Compose содержит постоянные тома, secret-файлы, инфраструктуру и HTTP-оболочки.
 Профиль `bootstrap` применяет миграции Identity и Automation; отдельная команда
 Identity идемпотентно создаёт первого admin. Профиль `bot` запускает long polling
-aiogram для `/start` и `/login`. Команды бота не создают задач. Остальные
-worker/bootstrap Tasks ещё не реализованы. HTTP liveness не является
+aiogram для `/start`, `/login` и `/join`. Команды бота не создают задач. Профиль
+`workers` запускает `identity-worker` (relay outbox) и `automation-worker`
+(доставка уведомлений о решениях); остальные worker/bootstrap Tasks ещё не
+реализованы. HTTP liveness не является
 бизнес-readiness; `/health/ready` возвращает 503. Локальная проверка Whisper
 описана отдельно; она не включается в обычный runtime приложения.
 
@@ -234,3 +236,95 @@ Playwright через изолированный Compose проверяет ре
 и удаляются вместе с ним; в отчёт попадают счётчики, место сбоя и краткая ошибка
 с маскированием кода/JWT. Отдельные UI-тесты проверяют ошибки и адаптивность на
 HTTP-подменах; они не заменяют настоящий E2E.
+
+## Заявки и управление доступом (#7)
+
+**Состояния.** Заявка — это строка `members` со статусом `pending`: уникальность
+`telegram_id` делает обход блокировки структурным, а отдельной таблицы заявок нет.
+`/join` создаёт `pending`; `approve` → `approved`, `reject` → `rejected`; `block`
+допустим из `pending`, `rejected` и `approved`; `unblock` возвращает `blocked` →
+`approved` с прежней ролью. Из `rejected` в `pending` участник возвращается только
+через `/join` (версия растёт); `blocked` покидается только через `unblock`.
+Каждая смена доступа увеличивает `access_version` и пишет `status_changed_at` и
+`decided_by`; прежние отказы не хранятся (остаётся последнее решение).
+
+**`/join`.** Бот в личном чате вызывает `POST /internal/v1/join-requests` (отдельная
+операция ключа Automation) и отвечает по исходу `submitted` / `already_pending` /
+`already_member` / `blocked`. Лимит — 5 запросов в минуту на Telegram ID (429 с
+`Retry-After: 60`). У `pending` нет ни кода входа, ни сессии: выдача кода, обмен
+и проверка сессии требуют `approved`. Допуск решает только Identity; FSM-состояние
+бота (`botflow:fsm:*`) не читается ни одним путём доступа.
+
+**Решение.** `DecideMember` выполняет одну транзакцию: `pg_advisory_xact_lock`
+решений, блокировка строк цели и актёра `FOR UPDATE`, подсчёт `approved` admin
+внутри блокировки, применение, commit. Порядок проверок: (1) статус уже равен
+результату действия → 200 `changed=false` без роста версии, outbox и работы с
+сессиями (повтор, в том числе от другого admin); (2) `access_version` не равна
+`expected_version` → 409 `version_conflict`; (3) недопустимый переход → 409
+`invalid_transition`; (4) защиты `cannot_block_self` и `last_admin` → 409;
+(5) актёр, потерявший доступ в параллельном решении, получает 401, admin-роль
+перепроверяется (403). Защиты стоят до проверки актёра намеренно: admin, которого
+только что заблокировали, не может снять последнего admin. Условный
+`UPDATE ... WHERE access_version = :expected` остаётся второй линией защиты.
+`block` в той же транзакции отзывает все сессии и отменяет живые коды; `unblock`
+не очищает отзыв и не выдаёт код — нужен новый `/login`. `ExchangeLoginCode`
+сначала блокирует строку участника (порядок «участник → код», как у `block` и
+выдачи кода), чтобы сессия не пережила параллельный `block` и не оживала после
+`unblock`. Глобальная блокировка сериализует решения — для одной команды это
+приемлемо.
+
+**Admin API** (`identity-api`, cookie-сессия admin, POST — ещё `Origin`):
+`GET /api/v1/admin/join-requests?status=pending|rejected` и
+`GET /api/v1/admin/members?status=` (по умолчанию `approved` и `blocked`; `limit`
+1–100, `offset`, порядок `created_at, id`); `POST /api/v1/admin/members/{id}/
+approve|reject|block|unblock` с `{"expected_version": n}` → `{member, changed}`.
+Ошибки: 401 `unauthenticated`, 403 `admin_required` / `origin_not_allowed`, 404
+`member_not_found`, 409 `version_conflict` / `invalid_transition` /
+`cannot_block_self` / `last_admin`, 422. **Маршрут `/api/v1/admin/` в
+`frontend/nginx.conf` пока не добавлен** (папка frontend вне этого среза): API
+проверяется напрямую на `identity-api`, ingress-маршрут добавит срез админ-панели.
+
+**Уведомление о решении.** В транзакции `approve` / `reject` / `unblock` Identity
+пишет одну строку `outbox` (`member.access-decided`: `member_id`, `telegram_id`,
+`decision`, `access_version`, `decided_at`); `block` события не пишет, повтор тоже.
+`identity-worker` читает due-строки `FOR UPDATE SKIP LOCKED`, публикует
+persistent mandatory-сообщение в durable topic exchange `botflow.identity` с
+подтверждением брокера (`message_id` = id события) и только после этого ставит
+`published_at`; при сбое `attempts` и `next_attempt_at` хранятся в PG (3 попытки,
+паузы 5 с и 30 с, затем строка остаётся видимой без `next_attempt_at`). Обе стороны
+идемпотентно объявляют exchange, очередь `botflow.automation.identity-events` и
+привязку, поэтому событие маршрутизируемо до старта потребителя.
+Automation: потребитель в **одной** транзакции пишет `inbox_messages` и
+`notification_intents` (`id` = id события), затем делает ack; повторная доставка —
+только ack. Relay переносит `pending` в `enqueued` и добавляет id в Redis Stream
+`botflow:automation:notifications` (группа `notifier`). Notifier читает через
+`XREADGROUP`, подбирает зависшие записи через `XAUTOCLAIM`, делает `XACK` только
+после записи статуса в PG. Перед отправкой он запрашивает у Identity текущего
+участника: решение отправляется только если `intent.access_version` равна текущей
+и политика разрешает, иначе статус `suppressed_stale` / `suppressed_blocked`.
+Сбой Telegram или Identity — до трёх попыток, затем `failed` (виден в PG). Редкий
+дубль сообщения допустим (ADR-0021).
+
+**Принятые границы (ADR-0021).** Строка `outbox` после трёх неудачных публикаций остаётся
+без `next_attempt_at`: простой RabbitMQ дольше ~35 с теряет уведомление о решении (сам
+доступ не затронут), инструмента повторной постановки нет. Событие с
+невалидным телом отклоняется без requeue и без DLX/DLQ; источник сообщений только
+собственный Identity, поэтому на практике это недостижимо. Неклассифицированная ошибка
+записи в БД повторяется с паузой 1 с, пока хранилище недоступно. `unblock` ранее
+заблокированного `pending`/`rejected` участника даёт `approved` — это явное решение
+admin, а не обход блокировки.
+
+**Заблокированный автор (правило для следующих срезов).** Identity не владеет
+задачами, поэтому `block` меняет только членство и сессии и не отменяет принятые
+задания — они завершаются. Финальное уведомление автору задачи (виды `task.result`,
+`transcription.result`) подавляется, если автор не `approved` (`delivery_verdict`
+в `domain/notifications.py`). Срезы Tasks/Automation обязаны отправлять такие
+уведомления через `DeliverNotification`, а не напрямую в Telegram.
+
+**Проверки.** Юнит-тесты закрывают таблицу переходов, DecideMember, HTTP-контракт и
+адаптеры. Настоящие PostgreSQL, RabbitMQ и Redis в `make smoke` проверяет класс
+`AccessFlow`: join → approve → login, reject и повторная заявка, обход блокировки,
+лимит `/join`, 401/403/Origin, конкурентные approve и взаимные block, отзыв сессий,
+путь outbox → RabbitMQ → intent → Redis Stream → тестовый Messenger, подавление
+устаревшего решения и финального уведомления блокированному автору, повторная
+доставка и «подставное» FSM-состояние в Redis.

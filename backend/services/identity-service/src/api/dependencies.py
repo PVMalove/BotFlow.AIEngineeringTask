@@ -2,20 +2,26 @@
 
 from typing import Annotated
 
-from fastapi import Depends, Header, Request
+from fastapi import Depends, Header, HTTPException, Request
 from fastapi.params import Depends as DependsParameter
 
 from api.containers import Services
-from api.security import Operation
+from api.security import SESSION_COOKIE, Operation
+from application.commands.access import DecideMember
 from application.commands.auth import (
     ExchangeLoginCode,
     IssueLoginCode,
     Logout,
 )
+from application.commands.join import SubmitJoinRequest
 from application.queries.members import (
     AuthenticateSession,
+    AuthenticateSessionQuery,
+    CurrentSession,
     FindMemberByTelegram,
+    ListMembers,
 )
+from domain.entities.auth import InvalidSession, Role
 
 
 async def get_services(request: Request) -> Services:
@@ -63,6 +69,43 @@ def get_issue_code_handler(services: ServicesDI) -> IssueLoginCode:
 IssueLoginCodeDI = Annotated[IssueLoginCode, Depends(get_issue_code_handler)]
 
 
+def get_submit_join_handler(services: ServicesDI) -> SubmitJoinRequest:
+    return services.submit_join
+
+
+SubmitJoinRequestDI = Annotated[SubmitJoinRequest, Depends(get_submit_join_handler)]
+
+
+def get_decide_handler(services: ServicesDI) -> DecideMember:
+    return services.decide
+
+
+DecideMemberDI = Annotated[DecideMember, Depends(get_decide_handler)]
+
+
+def get_list_members_handler(services: ServicesDI) -> ListMembers:
+    return services.list_members
+
+
+ListMembersDI = Annotated[ListMembers, Depends(get_list_members_handler)]
+
+
+async def require_admin(
+    request: Request, handler: AuthenticateSessionDI
+) -> CurrentSession:
+    """Cookie session of an approved admin; access is re-read on every request."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        raise InvalidSession
+    current = await handler.execute(AuthenticateSessionQuery(token=token))
+    if current.member.role is not Role.ADMIN:
+        raise HTTPException(status_code=403, detail="admin_required")
+    return current
+
+
+AdminDI = Annotated[CurrentSession, Depends(require_admin)]
+
+
 def service_operation(operation: Operation) -> DependsParameter:
     async def authorize(
         services: ServicesDI,
@@ -74,17 +117,23 @@ def service_operation(operation: Operation) -> DependsParameter:
 
 
 __all__ = [
+    "AdminDI",
     "AuthenticateSessionDI",
+    "DecideMemberDI",
+    "ListMembersDI",
     "ExchangeLoginCodeDI",
     "FindMemberDI",
     "IssueLoginCodeDI",
     "LogoutDI",
     "ServicesDI",
+    "SubmitJoinRequestDI",
     "get_authenticate_handler",
     "get_exchange_handler",
     "get_find_member_handler",
     "get_issue_code_handler",
     "get_logout_handler",
     "get_services",
+    "require_admin",
+    "get_submit_join_handler",
     "service_operation",
 ]

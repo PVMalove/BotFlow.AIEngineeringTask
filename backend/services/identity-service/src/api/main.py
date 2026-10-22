@@ -6,9 +6,17 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError, TimeoutError
 
 from api.containers import Container
+from api.endpoints.admin import router as admin_router
 from api.endpoints.auth import router as auth_router
 from api.endpoints.members import router as members_router
 from api.endpoints.users import router as users_router
+from domain.access import (
+    CannotBlockSelf,
+    InvalidTransition,
+    LastAdmin,
+    MemberNotFound,
+    VersionConflict,
+)
 from domain.entities.auth import (
     InvalidLoginCode,
     InvalidSession,
@@ -22,6 +30,11 @@ _REJECTIONS: dict[type[Exception], tuple[int, str]] = {
     InvalidSession: (401, "unauthenticated"),
     MemberNotApproved: (403, "not_approved"),
     RateLimited: (429, "rate_limited"),
+    MemberNotFound: (404, "member_not_found"),
+    VersionConflict: (409, "version_conflict"),
+    InvalidTransition: (409, "invalid_transition"),
+    CannotBlockSelf: (409, "cannot_block_self"),
+    LastAdmin: (409, "last_admin"),
 }
 
 
@@ -46,6 +59,7 @@ def create_identity_app(container: Any = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(users_router)
     app.include_router(members_router)
+    app.include_router(admin_router)
     for error in _REJECTIONS:
         app.add_exception_handler(error, reject)
     app.add_exception_handler(DBAPIError, unavailable)

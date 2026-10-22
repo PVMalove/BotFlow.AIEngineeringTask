@@ -6,17 +6,22 @@ from types import TracebackType
 from typing import Any, Self
 from uuid import UUID
 
-from sqlalchemy import Row, delete, select, update
+from sqlalchemy import Row, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from domain.access import OutboxEntry
 from domain.entities.auth import AuthSession, LoginCode, Member, MemberStatus, Role
 from infrastructure.db.tables import (
     auth_sessions,
     login_codes,
     members,
+    outbox,
     rate_limits,
 )
+
+# Serializes access decisions; migrations use their own key (7_204_121).
+_DECISION_LOCK_KEY = 7_204_122
 
 
 class SqlMembers:
@@ -32,14 +37,20 @@ class SqlMembers:
                 role=member.role.value,
                 status=member.status.value,
                 created_at=member.created_at,
+                display_name=member.display_name,
+                access_version=member.access_version,
+                status_changed_at=member.status_changed_at,
+                decided_by=member.decided_by,
             )
             .on_conflict_do_nothing(index_elements=[members.c.telegram_id])
             .returning(members.c.id)
         )
         return result.scalar_one_or_none() is not None
 
-    async def get(self, member_id: UUID) -> Member | None:
+    async def get(self, member_id: UUID, *, lock: bool = False) -> Member | None:
         query = select(members).where(members.c.id == member_id)
+        if lock:
+            query = query.with_for_update()
         row = (await self._session.execute(query)).one_or_none()
         return _member(row) if row else None
 
@@ -52,6 +63,65 @@ class SqlMembers:
         row = (await self._session.execute(query)).one_or_none()
         return _member(row) if row else None
 
+    async def get_by_login_code(
+        self, code_hash: str, *, lock: bool = False
+    ) -> Member | None:
+        query = (
+            select(members)
+            .join(login_codes, login_codes.c.member_id == members.c.id)
+            .where(login_codes.c.code_hash == code_hash)
+        )
+        if lock:
+            query = query.with_for_update(of=members)
+        row = (await self._session.execute(query)).one_or_none()
+        return _member(row) if row else None
+
+    async def lock_decisions(self) -> None:
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": _DECISION_LOCK_KEY}
+        )
+
+    async def count_approved_admins(self) -> int:
+        count = await self._session.scalar(
+            select(func.count())
+            .select_from(members)
+            .where(
+                members.c.role == Role.ADMIN.value,
+                members.c.status == MemberStatus.APPROVED.value,
+            )
+        )
+        return int(count or 0)
+
+    async def list_by_status(
+        self, statuses: tuple[MemberStatus, ...], *, limit: int, offset: int
+    ) -> list[Member]:
+        rows = await self._session.execute(
+            select(members)
+            .where(members.c.status.in_([status.value for status in statuses]))
+            .order_by(members.c.created_at, members.c.id)
+            .limit(limit)
+            .offset(offset)
+        )
+        return [_member(row) for row in rows]
+
+    async def update_access(self, member: Member, *, expected_version: int) -> bool:
+        result = await self._session.execute(
+            update(members)
+            .where(
+                members.c.id == member.id,
+                members.c.access_version == expected_version,
+            )
+            .values(
+                status=member.status.value,
+                display_name=member.display_name,
+                access_version=member.access_version,
+                status_changed_at=member.status_changed_at,
+                decided_by=member.decided_by,
+            )
+            .returning(members.c.id)
+        )
+        return result.scalar_one_or_none() is not None
+
 
 def _member(row: Row[Any]) -> Member:
     return Member(
@@ -60,6 +130,10 @@ def _member(row: Row[Any]) -> Member:
         role=Role(row.role),
         status=MemberStatus(row.status),
         created_at=row.created_at,
+        display_name=row.display_name,
+        access_version=row.access_version,
+        status_changed_at=row.status_changed_at,
+        decided_by=row.decided_by,
     )
 
 
@@ -146,6 +220,69 @@ class SqlSessions:
             .values(revoked_at=now)
         )
 
+    async def revoke_all(self, member_id: UUID, now: datetime) -> None:
+        await self._session.execute(
+            update(auth_sessions)
+            .where(
+                auth_sessions.c.member_id == member_id,
+                auth_sessions.c.revoked_at.is_(None),
+            )
+            .values(revoked_at=now)
+        )
+
+
+class SqlOutbox:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def add(self, entry: OutboxEntry) -> None:
+        await self._session.execute(
+            outbox.insert().values(
+                id=entry.id,
+                type=entry.type,
+                payload=entry.payload,
+                created_at=entry.created_at,
+                attempts=entry.attempts,
+                next_attempt_at=entry.next_attempt_at,
+            )
+        )
+
+    async def claim_due(self, now: datetime, limit: int) -> list[OutboxEntry]:
+        # SKIP LOCKED lets several relays run without publishing a row twice.
+        rows = await self._session.execute(
+            select(outbox)
+            .where(outbox.c.published_at.is_(None), outbox.c.next_attempt_at <= now)
+            .order_by(outbox.c.created_at, outbox.c.id)
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        return [
+            OutboxEntry(
+                id=row.id,
+                type=row.type,
+                payload=row.payload,
+                created_at=row.created_at,
+                attempts=row.attempts,
+                next_attempt_at=row.next_attempt_at,
+                published_at=row.published_at,
+            )
+            for row in rows
+        ]
+
+    async def mark_published(self, entry_id: UUID, now: datetime) -> None:
+        await self._session.execute(
+            update(outbox).where(outbox.c.id == entry_id).values(published_at=now)
+        )
+
+    async def reschedule(
+        self, entry_id: UUID, attempts: int, next_attempt_at: datetime | None
+    ) -> None:
+        await self._session.execute(
+            update(outbox)
+            .where(outbox.c.id == entry_id)
+            .values(attempts=attempts, next_attempt_at=next_attempt_at)
+        )
+
 
 class SqlUnitOfWork:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
@@ -157,6 +294,7 @@ class SqlUnitOfWork:
         self.members = SqlMembers(self._session)
         self.login_codes = SqlLoginCodes(self._session)
         self.sessions = SqlSessions(self._session)
+        self.outbox = SqlOutbox(self._session)
         return self
 
     async def __aexit__(
