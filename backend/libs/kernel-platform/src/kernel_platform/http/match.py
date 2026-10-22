@@ -12,20 +12,6 @@ from kernel_platform.http.errors import (
 from kernel_platform.pagination import Page, PageInfo
 
 
-def _raise_for_error[T](result: Result[T]) -> None:
-    if result.is_err:
-        error = result.error
-        raise ApiError(
-            status_code=status_code_for_error_type(error.type),
-            code=error.code,
-            message=error.description,
-            details=details_for_error(error),
-            headers=(
-                {"Retry-After": "60"} if error.type is ErrorType.RATE_LIMITED else None
-            ),
-        )
-
-
 def unwrap[T](result: Result[T]) -> T:
     """The value of a successful `Result`; a failed one raises `ApiError`.
 
@@ -49,15 +35,6 @@ def match_created[T](result: Result[T]) -> ApiResponse[T]:
     return match_result(result)
 
 
-def _page_meta(page_info: PageInfo) -> dict[str, object]:
-    return {
-        "next_cursor": page_info.next_cursor,
-        "prev_cursor": page_info.prev_cursor,
-        "has_more": page_info.has_more,
-        "has_prev": page_info.has_prev,
-    }
-
-
 def match_page[T](result: Result[Page[T]]) -> ApiResponse[list[T]]:
     """Семантический вариант `match_result` для keyset-пагинированных
     list-эндпоинтов: `Page.items` уходит в `data`, `Page.page_info` — в
@@ -65,3 +42,26 @@ def match_page[T](result: Result[Page[T]]) -> ApiResponse[list[T]]:
     _raise_for_error(result)
     page = result.value
     return ApiResponse(data=page.items, meta=_page_meta(page.page_info))
+
+
+def _raise_for_error[T](result: Result[T]) -> None:
+    if result.is_err:
+        error = result.error
+        raise ApiError(
+            status_code=status_code_for_error_type(error.type),
+            code=error.code,
+            message=error.description,
+            details=details_for_error(error),
+            headers=(
+                {"Retry-After": "60"} if error.type is ErrorType.RATE_LIMITED else None
+            ),
+        )
+
+
+def _page_meta(page_info: PageInfo) -> dict[str, object]:
+    return {
+        "next_cursor": page_info.next_cursor,
+        "prev_cursor": page_info.prev_cursor,
+        "has_more": page_info.has_more,
+        "has_prev": page_info.has_prev,
+    }

@@ -106,16 +106,16 @@ class AcceptVoiceMessage:
             await self._jobs.mark_acked(accepted.job_id, self._clock())
 
 
+def transcribe_outbox_id_for(job_id: UUID) -> UUID:
+    return uuid5(_TRANSCRIBE_NAMESPACE, str(job_id))
+
+
 def _invalid(command: AcceptVoiceDto) -> str | None:
     if command.duration_seconds > MAX_DURATION_SECONDS:
         return TOO_LONG
     if command.file_size_bytes is not None and command.file_size_bytes > MAX_FILE_BYTES:
         return TOO_LARGE
     return None
-
-
-def transcribe_outbox_id_for(job_id: UUID) -> UUID:
-    return uuid5(_TRANSCRIBE_NAMESPACE, str(job_id))
 
 
 def _transcribe(job: NewVoiceJob) -> OutboxMessage:

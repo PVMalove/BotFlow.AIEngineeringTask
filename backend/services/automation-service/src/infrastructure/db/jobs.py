@@ -122,6 +122,15 @@ class SqlJobStore:
     async def accept_voice(self, job: NewVoiceJob, message: OutboxMessage) -> Accepted:
         return await self._accept(job, message, text=None, voice=job)
 
+    async def mark_acked(self, job_id: UUID, at: datetime) -> None:
+        async with self._sessions() as session:
+            await session.execute(
+                update(jobs)
+                .where(jobs.c.id == job_id, jobs.c.acked_at.is_(None))
+                .values(acked_at=at)
+            )
+            await session.commit()
+
     async def _accept(
         self,
         job: NewJob | NewVoiceJob,
@@ -219,12 +228,3 @@ class SqlJobStore:
         ):
             return AcceptOutcome.VOICE_LIMIT
         return None
-
-    async def mark_acked(self, job_id: UUID, at: datetime) -> None:
-        async with self._sessions() as session:
-            await session.execute(
-                update(jobs)
-                .where(jobs.c.id == job_id, jobs.c.acked_at.is_(None))
-                .values(acked_at=at)
-            )
-            await session.commit()

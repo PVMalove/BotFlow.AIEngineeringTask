@@ -16,14 +16,6 @@ from kernel_platform.settings import Settings
 _MIGRATION_LOCK_KEY = 7_204_121
 
 
-def _upgrade(connection: Connection, config: Config) -> None:
-    connection.execute(
-        text("SELECT pg_advisory_xact_lock(:key)"), {"key": _MIGRATION_LOCK_KEY}
-    )
-    config.attributes["connection"] = connection
-    command.upgrade(config, "head")
-
-
 async def run_migrations(settings: Settings, alembic_ini: Path) -> None:
     """Upgrade the service database to head in one locked transaction."""
     config = Config(str(alembic_ini))
@@ -50,6 +42,14 @@ def configure_environment(metadata: MetaData, settings: Settings) -> None:
             await engine.dispose()
 
     asyncio.run(standalone())
+
+
+def _upgrade(connection: Connection, config: Config) -> None:
+    connection.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": _MIGRATION_LOCK_KEY}
+    )
+    config.attributes["connection"] = connection
+    command.upgrade(config, "head")
 
 
 def _migrate(connection: Connection, metadata: MetaData) -> None:

@@ -152,21 +152,6 @@ class SqlOutboxTx:
         self._table = table
         self._routing_keys = routing_keys
 
-    def _routed(self) -> list[ColumnElement[bool]]:
-        if self._routing_keys is None:
-            return []
-        column = self._table.c.routing_key
-        return [
-            or_(
-                *(
-                    column.startswith(key[:-1], autoescape=True)
-                    if key.endswith(".*")
-                    else column == key
-                    for key in self._routing_keys
-                )
-            )
-        ]
-
     async def claim_due(self, now: datetime, limit: int) -> list[OutboxRow]:
         t = self._table
         rows = await self.session.execute(
@@ -215,6 +200,21 @@ class SqlOutboxTx:
                 attempts=attempts, next_attempt_at=next_attempt_at, last_error=error
             )
         )
+
+    def _routed(self) -> list[ColumnElement[bool]]:
+        if self._routing_keys is None:
+            return []
+        column = self._table.c.routing_key
+        return [
+            or_(
+                *(
+                    column.startswith(key[:-1], autoescape=True)
+                    if key.endswith(".*")
+                    else column == key
+                    for key in self._routing_keys
+                )
+            )
+        ]
 
 
 def sql_transactions(

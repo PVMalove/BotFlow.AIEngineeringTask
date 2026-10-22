@@ -37,15 +37,6 @@ class Database:
     sessions: async_sessionmaker[AsyncSession]
 
 
-def _create_engine(settings: Settings) -> AsyncEngine:
-    return create_async_engine(
-        settings.database_url(),
-        pool_pre_ping=True,
-        connect_args={"timeout": 10},
-        hide_parameters=True,
-    )
-
-
 @asynccontextmanager
 async def open_database(settings: Settings) -> AsyncIterator[Database]:
     """Own database only, for CLI processes that need no broker or cache."""
@@ -63,11 +54,6 @@ async def open_database(settings: Settings) -> AsyncIterator[Database]:
         yield Database(engine, async_sessionmaker(engine, expire_on_commit=False))
     finally:
         await engine.dispose()
-
-
-def _failed(settings: Settings) -> RuntimeError:
-    # Driver and SDK exceptions can contain credential-bearing connection arguments.
-    return RuntimeError(f"Infrastructure initialization failed for {settings.service}")
 
 
 @asynccontextmanager
@@ -152,3 +138,17 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
             yield resources
         finally:
             resources.closed = True
+
+
+def _create_engine(settings: Settings) -> AsyncEngine:
+    return create_async_engine(
+        settings.database_url(),
+        pool_pre_ping=True,
+        connect_args={"timeout": 10},
+        hide_parameters=True,
+    )
+
+
+def _failed(settings: Settings) -> RuntimeError:
+    # Driver and SDK exceptions can contain credential-bearing connection arguments.
+    return RuntimeError(f"Infrastructure initialization failed for {settings.service}")

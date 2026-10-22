@@ -19,13 +19,6 @@ VOICE_GROUP = "stt"
 VOICE_STUCK_AFTER_MS = 180_000
 
 
-def _queued(entry: StreamEntry) -> QueuedIntent:
-    try:
-        return QueuedIntent(entry.id, UUID(entry.fields["intent_id"]))
-    except (KeyError, ValueError):
-        return QueuedIntent(entry.id, None)
-
-
 class RedisNotificationQueue:
     def __init__(
         self, stream: RedisStream, stuck_after_ms: int = STUCK_AFTER_MS
@@ -71,13 +64,6 @@ class RedisVoicePublisher:
             raise ConnectionError("Redis is unavailable.") from None
 
 
-def _queued_voice(entry: StreamEntry) -> QueuedVoice:
-    try:
-        return QueuedVoice(entry.id, UUID(entry.fields["job_id"]))
-    except (KeyError, ValueError):
-        return QueuedVoice(entry.id, None)
-
-
 class RedisVoiceQueue:
     def __init__(
         self, stream: RedisStream, stuck_after_ms: int = VOICE_STUCK_AFTER_MS
@@ -100,3 +86,17 @@ class RedisVoiceQueue:
 
     async def ack(self, entry_id: str) -> None:
         await self._stream.ack(entry_id)
+
+
+def _queued(entry: StreamEntry) -> QueuedIntent:
+    try:
+        return QueuedIntent(entry.id, UUID(entry.fields["intent_id"]))
+    except (KeyError, ValueError):
+        return QueuedIntent(entry.id, None)
+
+
+def _queued_voice(entry: StreamEntry) -> QueuedVoice:
+    try:
+        return QueuedVoice(entry.id, UUID(entry.fields["job_id"]))
+    except (KeyError, ValueError):
+        return QueuedVoice(entry.id, None)

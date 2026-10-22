@@ -15,10 +15,6 @@ IDLE_SECONDS = 1.0
 FAILURE_SECONDS = 5.0
 
 
-def _utcnow() -> datetime:
-    return datetime.now(UTC)
-
-
 async def main() -> None:
     container = Container()
     try:
@@ -54,3 +50,7 @@ if __name__ == "__main__":
         raise SystemExit(
             "Identity worker unavailable; verify its secrets and services."
         ) from None
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)

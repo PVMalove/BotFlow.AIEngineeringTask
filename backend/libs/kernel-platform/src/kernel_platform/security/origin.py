@@ -9,11 +9,6 @@ from fastapi import Request
 from kernel_platform.http.errors import ApiError
 
 
-def _expected_origin(request: Request) -> str:
-    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-    return f"{scheme}://{request.headers.get('host', '')}".lower()
-
-
 async def require_same_origin(request: Request) -> None:
     origin = request.headers.get("origin", "").lower()
     if origin != _expected_origin(request):
@@ -22,3 +17,8 @@ async def require_same_origin(request: Request) -> None:
             code="origin_not_allowed",
             message="Запрос отправлен с другого источника.",
         )
+
+
+def _expected_origin(request: Request) -> str:
+    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
+    return f"{scheme}://{request.headers.get('host', '')}".lower()

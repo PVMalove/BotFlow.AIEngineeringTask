@@ -39,10 +39,6 @@ class Services:
     service_keys: ServiceKeys
 
 
-def _utcnow() -> datetime:
-    return datetime.now(UTC)
-
-
 async def build_services(settings: Settings, resources: Resources) -> Services:
     sessions = resources.sessions
     tokens = Rs256Tokens(settings.secret("identity_jwt_private_key").get_secret_value())
@@ -88,3 +84,7 @@ class Container(containers.DeclarativeContainer):
     services = providers.Resource(
         build_services, settings=settings, resources=resources
     )
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)

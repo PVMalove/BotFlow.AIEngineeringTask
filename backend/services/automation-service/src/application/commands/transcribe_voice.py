@@ -107,13 +107,6 @@ class TranscribeResult:
         return self.error_code == "timeout"
 
 
-def _code_of(error: Exception) -> str:
-    for kind, code in _FINAL_ERRORS:
-        if isinstance(error, kind):
-            return code
-    raise error
-
-
 class TranscribeVoice:
     def __init__(
         self,
@@ -243,3 +236,10 @@ class TranscribeVoice:
         if not failed:
             return TranscribeResult(TranscribeOutcome.SKIPPED)
         return TranscribeResult(TranscribeOutcome.FAILED, code)
+
+
+def _code_of(error: Exception) -> str:
+    for kind, code in _FINAL_ERRORS:
+        if isinstance(error, kind):
+            return code
+    raise error

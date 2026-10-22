@@ -15,12 +15,6 @@ KIND = "task.result"
 _PREVIEW = 100
 
 
-def _result_text(text: str | None) -> str:
-    content = text or ""
-    preview = content if len(content) <= _PREVIEW else f"{content[:_PREVIEW]}…"
-    return f"Задача создана: {preview}" if preview else "Задача создана"
-
-
 class ProcessTaskResult:
     def __init__(self, store: TaskResultStore) -> None:
         self._store = store
@@ -53,6 +47,12 @@ class ProcessTaskResult:
             return UUID(payload["job_id"]), UUID(payload["task_id"])
         except (ValueError, KeyError, TypeError, AttributeError):
             raise InvalidMessage from None
+
+
+def _result_text(text: str | None) -> str:
+    content = text or ""
+    preview = content if len(content) <= _PREVIEW else f"{content[:_PREVIEW]}…"
+    return f"Задача создана: {preview}" if preview else "Задача создана"
 
 
 def _intent_for(job: JobSummary) -> NotificationIntent:

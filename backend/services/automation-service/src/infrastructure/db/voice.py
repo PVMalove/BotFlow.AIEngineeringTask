@@ -24,60 +24,6 @@ KIND = "transcription.result"
 _UNFINISHED = (VoiceStage.QUEUED.value, VoiceStage.STORED.value)
 
 
-async def _author_notice(
-    session: AsyncSession,
-    job_id: UUID,
-    chat_id: int,
-    author_id: UUID,
-    body: str,
-    now: datetime,
-) -> None:
-    await session.execute(
-        insert(notification_intents)
-        .values(
-            id=result_intent_id_for(job_id),
-            chat_id=chat_id,  # a private chat id equals the Telegram user id
-            member_id=author_id,
-            kind=KIND,
-            access_version=0,  # a result is not tied to an access decision
-            status="pending",
-            attempts=0,
-            body=body,
-            created_at=now,
-            updated_at=now,
-        )
-        .on_conflict_do_nothing(index_elements=[notification_intents.c.id])
-    )
-
-
-async def _fail(
-    session: AsyncSession,
-    job_id: UUID,
-    chat_id: int,
-    author_id: UUID,
-    code: str,
-    body: str,
-    now: datetime,
-    marks: dict[str, Any],
-) -> bool:
-    """Voice record, job (slot freed) and author notice; False if already finished."""
-    ended = await session.execute(
-        update(voice_jobs)
-        .where(voice_jobs.c.job_id == job_id, voice_jobs.c.stage.in_(_UNFINISHED))
-        .values(stage=VoiceStage.FAILED.value, error_code=code, **marks)
-        .returning(voice_jobs.c.job_id)
-    )
-    if ended.first() is None:
-        return False
-    await session.execute(
-        update(jobs)
-        .where(jobs.c.id == job_id, jobs.c.status == JobStatus.ACCEPTED.value)
-        .values(status=JobStatus.FAILED.value, last_error=code, updated_at=now)
-    )
-    await _author_notice(session, job_id, chat_id, author_id, body, now)
-    return True
-
-
 class SqlVoiceStore:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:
         self._sessions = sessions
@@ -323,4 +269,58 @@ async def replay_voice_job(
             .values(published_at=None, attempts=0, next_attempt_at=now, last_error=None)
         )
         await session.commit()
+    return True
+
+
+async def _author_notice(
+    session: AsyncSession,
+    job_id: UUID,
+    chat_id: int,
+    author_id: UUID,
+    body: str,
+    now: datetime,
+) -> None:
+    await session.execute(
+        insert(notification_intents)
+        .values(
+            id=result_intent_id_for(job_id),
+            chat_id=chat_id,  # a private chat id equals the Telegram user id
+            member_id=author_id,
+            kind=KIND,
+            access_version=0,  # a result is not tied to an access decision
+            status="pending",
+            attempts=0,
+            body=body,
+            created_at=now,
+            updated_at=now,
+        )
+        .on_conflict_do_nothing(index_elements=[notification_intents.c.id])
+    )
+
+
+async def _fail(
+    session: AsyncSession,
+    job_id: UUID,
+    chat_id: int,
+    author_id: UUID,
+    code: str,
+    body: str,
+    now: datetime,
+    marks: dict[str, Any],
+) -> bool:
+    """Voice record, job (slot freed) and author notice; False if already finished."""
+    ended = await session.execute(
+        update(voice_jobs)
+        .where(voice_jobs.c.job_id == job_id, voice_jobs.c.stage.in_(_UNFINISHED))
+        .values(stage=VoiceStage.FAILED.value, error_code=code, **marks)
+        .returning(voice_jobs.c.job_id)
+    )
+    if ended.first() is None:
+        return False
+    await session.execute(
+        update(jobs)
+        .where(jobs.c.id == job_id, jobs.c.status == JobStatus.ACCEPTED.value)
+        .values(status=JobStatus.FAILED.value, last_error=code, updated_at=now)
+    )
+    await _author_notice(session, job_id, chat_id, author_id, body, now)
     return True

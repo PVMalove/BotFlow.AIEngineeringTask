@@ -40,13 +40,32 @@ _CANONICAL_CODE_OVERRIDES: dict[int, str] = {
 _LOC_TRANSPORT_PREFIXES = {"body", "query", "path", "header", "cookie"}
 
 
-class _StructuredError(Protocol):
-    """Структурная форма, которую должно предоставлять ожидаемое
-    service-исключение — код, безопасное сообщение и HTTP-статус."""
+def register_error_handlers(
+    app: FastAPI,
+    *,
+    service_error_type: type[Exception] | None = None,
+    unavailable_error_types: Sequence[type[Exception]] = (),
+    on_unhandled_exception: Callable[[Exception], None] | None = None,
+) -> None:
+    """Регистрирует platform-owned exception handlers на FastAPI-приложении
+    сервиса. `service_error_type` — базовый класс ожидаемых application-
+    исключений самого сервиса (например, catalog `ApplicationError`);
+    kernel_platform его не импортирует, только принимает здесь.
 
-    code: str
-    message: str
-    status_code: int
+    `on_unhandled_exception` — опциональный best-effort хук (например,
+    метрика "exceptions by type" из `observability.metrics`) на действительно
+    неожиданные (500) исключения; kernel_platform не тянет зависимость на
+    observability/prometheus, только принимает готовый колбэк."""
+    app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
+    app.add_exception_handler(RequestValidationError, _validation_error_handler)
+    app.add_exception_handler(ApiError, _structured_error_handler)
+    if service_error_type is not None:
+        app.add_exception_handler(service_error_type, _structured_error_handler)
+    for unavailable_type in unavailable_error_types:
+        app.add_exception_handler(unavailable_type, _unavailable_handler)
+    app.add_exception_handler(
+        Exception, _make_unhandled_exception_handler(on_unhandled_exception)
+    )
 
 
 def _canonical_code(status_code: int) -> str:
@@ -167,29 +186,10 @@ def _make_unhandled_exception_handler(
     return _unhandled_exception_handler
 
 
-def register_error_handlers(
-    app: FastAPI,
-    *,
-    service_error_type: type[Exception] | None = None,
-    unavailable_error_types: Sequence[type[Exception]] = (),
-    on_unhandled_exception: Callable[[Exception], None] | None = None,
-) -> None:
-    """Регистрирует platform-owned exception handlers на FastAPI-приложении
-    сервиса. `service_error_type` — базовый класс ожидаемых application-
-    исключений самого сервиса (например, catalog `ApplicationError`);
-    kernel_platform его не импортирует, только принимает здесь.
+class _StructuredError(Protocol):
+    """Структурная форма, которую должно предоставлять ожидаемое
+    service-исключение — код, безопасное сообщение и HTTP-статус."""
 
-    `on_unhandled_exception` — опциональный best-effort хук (например,
-    метрика "exceptions by type" из `observability.metrics`) на действительно
-    неожиданные (500) исключения; kernel_platform не тянет зависимость на
-    observability/prometheus, только принимает готовый колбэк."""
-    app.add_exception_handler(StarletteHTTPException, _http_exception_handler)
-    app.add_exception_handler(RequestValidationError, _validation_error_handler)
-    app.add_exception_handler(ApiError, _structured_error_handler)
-    if service_error_type is not None:
-        app.add_exception_handler(service_error_type, _structured_error_handler)
-    for unavailable_type in unavailable_error_types:
-        app.add_exception_handler(unavailable_type, _unavailable_handler)
-    app.add_exception_handler(
-        Exception, _make_unhandled_exception_handler(on_unhandled_exception)
-    )
+    code: str
+    message: str
+    status_code: int

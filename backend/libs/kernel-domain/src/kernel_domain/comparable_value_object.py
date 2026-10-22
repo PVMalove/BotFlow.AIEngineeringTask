@@ -12,27 +12,6 @@ class ComparableValueObject(ValueObject):
     покомпонентно по `_comparable_equality_components()`, до первой
     различающейся пары; разные типы упорядочены по имени типа."""
 
-    @abstractmethod
-    def _comparable_equality_components(self) -> tuple[Any, ...]:
-        """Возвращает кортеж компонентов для покомпонентного сравнения на больше/меньше.
-
-        Под капотом используется для лексикографического сравнения двух инстансов value-объектов.
-        Каждый элемент кортежа должен поддерживать операторы сравнения.
-
-        Returns:
-            tuple[Any, ...]: Кортеж значимых полей для определения порядка."""
-        ...
-
-    def _equality_components(self) -> tuple[Any, ...]:
-        """Проксирует вызов к `_comparable_equality_components` для проверки равенства.
-
-        Переиспользует логику из comparable-компонентов, чтобы не дублировать код возврата
-        кортежа полей для базового класса ValueObject.
-
-        Returns:
-            tuple[Any, ...]: Тот же кортеж компонентов, что и для сравнения на больше/меньше."""
-        return self._comparable_equality_components()
-
     def __lt__(self, other: object) -> bool:
         """Магический метод для оператора меньше (`<`).
 
@@ -59,3 +38,24 @@ class ComparableValueObject(ValueObject):
             if left != right:
                 return bool(left < right)
         return False
+
+    @abstractmethod
+    def _comparable_equality_components(self) -> tuple[Any, ...]:
+        """Возвращает кортеж компонентов для покомпонентного сравнения на больше/меньше.
+
+        Под капотом используется для лексикографического сравнения двух инстансов value-объектов.
+        Каждый элемент кортежа должен поддерживать операторы сравнения.
+
+        Returns:
+            tuple[Any, ...]: Кортеж значимых полей для определения порядка."""
+        ...
+
+    def _equality_components(self) -> tuple[Any, ...]:
+        """Проксирует вызов к `_comparable_equality_components` для проверки равенства.
+
+        Переиспользует логику из comparable-компонентов, чтобы не дублировать код возврата
+        кортежа полей для базового класса ValueObject.
+
+        Returns:
+            tuple[Any, ...]: Тот же кортеж компонентов, что и для сравнения на больше/меньше."""
+        return self._comparable_equality_components()

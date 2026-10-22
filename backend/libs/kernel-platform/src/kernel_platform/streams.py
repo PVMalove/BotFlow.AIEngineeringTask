@@ -13,17 +13,6 @@ class StreamEntry:
     fields: dict[str, str]
 
 
-def _text(value: bytes | str) -> str:
-    return value.decode() if isinstance(value, bytes) else value
-
-
-def _entries(raw: Any) -> list[StreamEntry]:
-    return [
-        StreamEntry(_text(entry_id), {_text(k): _text(v) for k, v in fields.items()})
-        for entry_id, fields in raw
-    ]
-
-
 class RedisStream:
     """One stream and one consumer group; `consumer` names this process."""
 
@@ -70,3 +59,14 @@ class RedisStream:
 
     async def ack(self, entry_id: str) -> None:
         await self._redis.xack(self._key, self._group, entry_id)
+
+
+def _text(value: bytes | str) -> str:
+    return value.decode() if isinstance(value, bytes) else value
+
+
+def _entries(raw: Any) -> list[StreamEntry]:
+    return [
+        StreamEntry(_text(entry_id), {_text(k): _text(v) for k, v in fields.items()})
+        for entry_id, fields in raw
+    ]

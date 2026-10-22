@@ -16,10 +16,6 @@ from infrastructure.db.unit_of_work import SqlUnitOfWork
 ALEMBIC_INI = Path(db_package.__file__).parent / "alembic.ini"
 
 
-def _utcnow() -> datetime:
-    return datetime.now(UTC)
-
-
 async def migrate(container: Container) -> None:
     await run_migrations(container.settings(), ALEMBIC_INI)
     print("Identity migrations applied.")
@@ -51,3 +47,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["migrate", "admin"])
     asyncio.run(main(parser.parse_args().command))
+
+
+def _utcnow() -> datetime:
+    return datetime.now(UTC)

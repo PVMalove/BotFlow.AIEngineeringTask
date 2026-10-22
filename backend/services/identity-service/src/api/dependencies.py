@@ -31,46 +31,48 @@ async def get_services(request: Request) -> Services:
 ServicesDI = Annotated[Services, Depends(get_services)]
 
 
-def _exchange(services: ServicesDI) -> ExchangeLoginCode:
+def get_exchange_handler(services: ServicesDI) -> ExchangeLoginCode:
     return services.exchange
 
 
-def _logout(services: ServicesDI) -> Logout:
+def get_logout_handler(services: ServicesDI) -> Logout:
     return services.logout
 
 
-def _authenticate(services: ServicesDI) -> AuthenticateSession:
+def get_authenticate_handler(services: ServicesDI) -> AuthenticateSession:
     return services.authenticate
 
 
-def _find_member(services: ServicesDI) -> FindMemberByTelegram:
+def get_find_member_handler(services: ServicesDI) -> FindMemberByTelegram:
     return services.find_member
 
 
-def _issue_code(services: ServicesDI) -> IssueLoginCode:
+def get_issue_code_handler(services: ServicesDI) -> IssueLoginCode:
     return services.issue_code
 
 
-def _submit_join(services: ServicesDI) -> SubmitJoinRequest:
+def get_submit_join_handler(services: ServicesDI) -> SubmitJoinRequest:
     return services.submit_join
 
 
-def _decide(services: ServicesDI) -> DecideMember:
+def get_decide_handler(services: ServicesDI) -> DecideMember:
     return services.decide
 
 
-def _list_members(services: ServicesDI) -> ListMembers:
+def get_list_members_handler(services: ServicesDI) -> ListMembers:
     return services.list_members
 
 
-ExchangeLoginCodeDI = Annotated[ExchangeLoginCode, Depends(_exchange)]
-LogoutDI = Annotated[Logout, Depends(_logout)]
-AuthenticateSessionDI = Annotated[AuthenticateSession, Depends(_authenticate)]
-FindMemberDI = Annotated[FindMemberByTelegram, Depends(_find_member)]
-IssueLoginCodeDI = Annotated[IssueLoginCode, Depends(_issue_code)]
-SubmitJoinRequestDI = Annotated[SubmitJoinRequest, Depends(_submit_join)]
-DecideMemberDI = Annotated[DecideMember, Depends(_decide)]
-ListMembersDI = Annotated[ListMembers, Depends(_list_members)]
+ExchangeLoginCodeDI = Annotated[ExchangeLoginCode, Depends(get_exchange_handler)]
+LogoutDI = Annotated[Logout, Depends(get_logout_handler)]
+AuthenticateSessionDI = Annotated[
+    AuthenticateSession, Depends(get_authenticate_handler)
+]
+FindMemberDI = Annotated[FindMemberByTelegram, Depends(get_find_member_handler)]
+IssueLoginCodeDI = Annotated[IssueLoginCode, Depends(get_issue_code_handler)]
+SubmitJoinRequestDI = Annotated[SubmitJoinRequest, Depends(get_submit_join_handler)]
+DecideMemberDI = Annotated[DecideMember, Depends(get_decide_handler)]
+ListMembersDI = Annotated[ListMembers, Depends(get_list_members_handler)]
 
 
 async def get_session(

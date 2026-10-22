@@ -35,20 +35,22 @@ async def get_actor(request: Request, services: ServicesDI) -> Actor:
 RequiredAuth = Annotated[Actor, Depends(get_actor)]
 
 
-def _list_tasks(services: ServicesDI) -> ListTasksQueryHandler:
+def get_list_tasks_handler(services: ServicesDI) -> ListTasksQueryHandler:
     return services.list_tasks
 
 
-def _get_task(services: ServicesDI) -> GetTaskQueryHandler:
+def get_task_handler(services: ServicesDI) -> GetTaskQueryHandler:
     return services.get_task
 
 
-def _change_task_status(services: ServicesDI) -> ChangeTaskStatusCommandHandler:
+def get_change_task_status_handler(
+    services: ServicesDI,
+) -> ChangeTaskStatusCommandHandler:
     return services.change_task_status
 
 
-ListTasksDI = Annotated[ListTasksQueryHandler, Depends(_list_tasks)]
-GetTaskDI = Annotated[GetTaskQueryHandler, Depends(_get_task)]
+ListTasksDI = Annotated[ListTasksQueryHandler, Depends(get_list_tasks_handler)]
+GetTaskDI = Annotated[GetTaskQueryHandler, Depends(get_task_handler)]
 ChangeTaskStatusDI = Annotated[
-    ChangeTaskStatusCommandHandler, Depends(_change_task_status)
+    ChangeTaskStatusCommandHandler, Depends(get_change_task_status_handler)
 ]

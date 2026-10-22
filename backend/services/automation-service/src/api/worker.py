@@ -100,16 +100,6 @@ async def main() -> None:
             await shutdown
 
 
-async def _forever(run: Callable[[], Awaitable[None]]) -> None:
-    """Restart the consumer after a broker failure."""
-    while True:
-        try:
-            await run()
-        except Exception:
-            print("Worker consumer failed; retrying.", flush=True)
-            await asyncio.sleep(FAILURE_SECONDS)
-
-
 async def transcription() -> None:
     """The only process that loads Whisper; ingress, AMQP and text never wait on it."""
     container = Container()
@@ -209,3 +199,13 @@ if __name__ == "__main__":
             raise SystemExit(
                 "Automation worker unavailable; verify its secrets and services."
             ) from None
+
+
+async def _forever(run: Callable[[], Awaitable[None]]) -> None:
+    """Restart the consumer after a broker failure."""
+    while True:
+        try:
+            await run()
+        except Exception:
+            print("Worker consumer failed; retrying.", flush=True)
+            await asyncio.sleep(FAILURE_SECONDS)
