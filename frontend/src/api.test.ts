@@ -12,7 +12,15 @@ const member = {
 afterEach(() => vi.unstubAllGlobals());
 
 test('reads a status page of 50 tasks and passes the opaque cursor unchanged', async () => {
-  const page = { data: [], meta: { next_cursor: null, has_more: false } };
+  const page = {
+    data: [],
+    meta: {
+      next_cursor: null,
+      prev_cursor: null,
+      has_more: false,
+      has_prev: false,
+    },
+  };
   const fetchBoundary = vi.fn().mockResolvedValue(Response.json(page));
   vi.stubGlobal('fetch', fetchBoundary);
 
@@ -24,7 +32,9 @@ test('reads a status page of 50 tasks and passes the opaque cursor unchanged', a
 });
 
 test('sends a login code only as JSON with same-origin cookies and no caching', async () => {
-  const fetchBoundary = vi.fn().mockResolvedValue(Response.json(member));
+  const fetchBoundary = vi
+    .fn()
+    .mockResolvedValue(Response.json({ data: member, meta: {} }));
   vi.stubGlobal('fetch', fetchBoundary);
 
   const result = await exchangeCode('a'.repeat(32));
@@ -40,7 +50,9 @@ test('sends a login code only as JSON with same-origin cookies and no caching', 
 });
 
 test('loads the current member using cookies without browser HTTP caching', async () => {
-  const fetchBoundary = vi.fn().mockResolvedValue(Response.json(member));
+  const fetchBoundary = vi
+    .fn()
+    .mockResolvedValue(Response.json({ data: member, meta: {} }));
   vi.stubGlobal('fetch', fetchBoundary);
 
   expect(await getCurrentMember()).toEqual(member);
@@ -68,7 +80,10 @@ test('keeps server and transport diagnostics out of public errors', async () => 
   const fetchBoundary = vi
     .fn()
     .mockResolvedValueOnce(
-      Response.json({ detail: 'private-server-detail' }, { status: 429 }),
+      Response.json(
+        { error: { code: 'private-server-detail', message: 'private' } },
+        { status: 429 },
+      ),
     )
     .mockRejectedValueOnce(new Error('private-transport-detail'));
   vi.stubGlobal('fetch', fetchBoundary);

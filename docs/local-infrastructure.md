@@ -25,8 +25,8 @@ Commit должен быть явным; закрытие сессии отка�
 `infrastructure/`. Сущности и порты будут заполнены бизнес-задачами.
 
 В корне каждого сервиса находятся `tests/{unit,integration,e2e,performance}/`,
-`k8s/`, `docs/`, `ci/`, `scripts/`. CLI-точки входа bootstrap, worker и Telegram
-bot находятся в `scripts/`; bootstrap всех трёх сервисов, бот (login, заявки и
+`k8s/`, `docs/`, `ci/`, `scripts/`. Процессы bootstrap, worker и Telegram
+bot находятся в слое `api` (`python -m api.bootstrap`, `api.worker`, `api.bot`); bootstrap всех трёх сервисов, бот (login, заявки и
 текст), `identity-worker`, `tasks-worker` и `automation-worker` работают,
 остальные точки входа явно сообщают об отсутствии реализации. Каталоги для будущих артефактов не означают готовность Kubernetes,
 нагрузочных тестов или бизнес-функций.

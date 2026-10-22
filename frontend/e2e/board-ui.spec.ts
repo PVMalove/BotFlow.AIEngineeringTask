@@ -21,7 +21,7 @@ test('shows loading, independent errors, empty columns and localized retry witho
   page,
 }) => {
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ json: member }),
+    route.fulfill({ json: { data: member, meta: {} } }),
   );
   let fail = true;
   let release: () => void = () => {};
@@ -86,7 +86,7 @@ test('retries only the failed next page and keeps earlier cards', async ({
   page,
 }) => {
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ json: member }),
+    route.fulfill({ json: { data: member, meta: {} } }),
   );
   let fail = true;
   const cursors: (string | null)[] = [];

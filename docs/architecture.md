@@ -23,24 +23,39 @@
 
 ## Внутренние слои
 
-- `domain`: сущности, значения и инварианты, без ORM/HTTP/DI импортов.
-- `application`: команды/запросы и порты; зависимости передаются конструкторами.
-- `infrastructure`: репозитории, UoW, outbox/inbox, брокеры, S3 и Telegram/STT адаптеры.
-- `api`: HTTP-маршруты и схемы; `scripts/`: точки входа bot, worker и bootstrap.
+- `domain`: агрегаты (`Entity[Id]` с `create`/`reconstitute`), value objects, доменные события
+  (`DomainEvent`), реестр ошибок `domain/errors.py` и порты репозиториев/UoW; без ORM/HTTP/DI импортов.
+  Ожидаемые отказы возвращаются как `Result`, не исключениями; события копятся в агрегате (`pull_events`).
+- `application`: команды/запросы и их handlers (возвращают `Result[View]`), порты; зависимости
+  передаются конструкторами.
+- `infrastructure`: репозитории, UoW, staging событий в outbox, брокеры, S3 и Telegram/STT адаптеры.
+- `api`: входящие адаптеры — HTTP-маршруты и схемы запросов (`.to_command()`/`.to_query()`),
+  а также процессы `worker`, `bot`, `bootstrap` (`python -m api.worker`); endpoint тонкий:
+  зависимость аутентификации, handler, `match_result`/`match_page`.
 - `api/containers.py`: composition root сервиса, lifecycle ресурсов.
 - `contracts`: независимые от фреймворка View на frozen dataclasses для BFF.
 - `core`: кросс-срезная политика сервиса; `common`: локальные утилиты.
 
 Слои лежат прямо в `backend/services/<service>/src/`, без промежуточного
 пакета с именем сервиса. Каждый сервис запускается с собственным `src` в пути
-импортов; исходники других сервисов в этот процесс не подключаются. CLI-точки
-входа находятся в `scripts/`, тесты разделены на `unit/`, `integration/`, `e2e/`,
+импортов; исходники других сервисов в этот процесс не подключаются. Служебные
+CLI (`voice_latency`, `whisper_validate`) находятся в `scripts/`, тесты разделены на `unit/`, `integration/`, `e2e/`,
 `performance/`. Рядом с `src/` предусмотрены `k8s/`, `docs/` и `ci/`.
 
 CQRS локальный, без отдельной read DB/универсального dispatcher. UoW коммитит
 бизнес-изменение и outbox/inbox вместе; репозитории не коммитят. Сессии БД
 изолированы по операции, rollback — по умолчанию. Длительный Whisper не держит
 DB-транзакцию и не блокирует ingress, уведомления или heartbeat брокера.
+
+Общие библиотеки — `backend/libs`: `kernel-domain` (`Result`, `Error`, `Entity`,
+`DomainEvent`), `kernel-platform` (HTTP-конверт и обработчики ошибок, пагинация, `Actor`,
+`SqlAlchemyUnitOfWork` с outbox-staging и обработчиками событий после commit, outbox, messaging),
+`observability` (request id, JSON-логи, access-log), `test-support` (фикстуры тестов).
+
+HTTP-контракт: успех — `{data, meta}`; ошибка — `{error: {code, message, details?, request_id?}}`
+(`code` — стабильный snake_case из `domain/errors.py`; статус выводится из типа `Error`:
+validation 400, unauthorized 401, forbidden 403, not_found 404, conflict 409, rate_limited 429
+с `Retry-After`; недоступность БД/Identity — 503 `service_unavailable`).
 
 Референс — [ProductsFlow](https://github.com/PVMalove/ProductsFlow). Подходы
 адаптированы к контекстам BotFlow; наличие workers само по себе не определяет
@@ -101,13 +116,14 @@ expected_version; сравнение и UPDATE атомарны. Stale всег�
 (требует `Origin`, совпадающий с адресом ingress, иначе 403 `origin_not_allowed`):
 обычный участник чужой задачи получает 403 `forbidden`, устаревшая версия —
 409 `version_conflict`; все ошибки tasks-service (401/403/404/400/409/503) имеют вид
-`{detail, message, request_id}` и заголовок `X-Request-ID` (принятый корректный id возвращается, иначе выдаётся
-новый). При 409 клиент перечитывает карточку. UPDATE содержит условия
-`version = expected AND status <> target`; ноль строк разбирается чтением:
-нет задачи — 404, версия актуальна и статус уже целевой — 200 без изменений,
-иначе 409. Сигнал `board.changed` отправляется после commit и только при
-реальном изменении, публикация ограничена таймаутом 1 с; её потеря не отменяет
-изменение.
+`{error: {code, message, request_id}}` и заголовок `X-Request-ID` (принятый корректный id
+возвращается, иначе выдаётся новый). При 409 клиент перечитывает карточку. Агрегат
+`Task.change_status(target, expected_version)` сравнивает версию с загруженной: устаревшая — 409
+даже при совпадающем статусе, актуальная версия и статус уже целевой — 200 без изменений и без
+события. Реальное изменение повышает версию, добавляет `TaskStatusChanged`, а репозиторий пишет
+`UPDATE … WHERE version = :loaded` (ноль строк — 409, конкурентный писатель проиграл).
+Сигнал `board.changed` — обработчик `TaskStatusChanged` после commit; публикация ограничена
+таймаутом 1 с, её потеря не отменяет изменение.
 
 ## Панель и realtime
 

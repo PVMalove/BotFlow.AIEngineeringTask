@@ -2,7 +2,10 @@ import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ status: 401, json: { detail: 'unauthenticated' } }),
+    route.fulfill({
+      status: 401,
+      json: { error: { code: 'unauthenticated', message: 'unauthenticated' } },
+    }),
   );
 });
 
