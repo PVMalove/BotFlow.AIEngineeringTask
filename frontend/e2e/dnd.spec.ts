@@ -75,53 +75,59 @@ async function read(page: Page, id: string) {
   return (await response.json()).data;
 }
 
-for (const input of ['mouse', 'keyboard'] as const) {
-  test(
-    'moves into a real empty column using ' +
-      input +
-      ' with exactly one versioned PATCH',
-    async ({ page }) => {
-      test.setTimeout(90_000);
-      const { id, card, patches } = await prepare(page);
-      const completed = page.getByRole('region', {
-        name: 'Завершено',
-        exact: true,
-      });
-      await expect(completed.getByRole('listitem')).toHaveCount(0);
-      const handle = card.getByRole('button', { name: /Перенести задачу/ });
-      if (input === 'keyboard') {
-        // Keyboard navigation activates focus-visible after the pointer-driven login.
-        await page.keyboard.press('Tab');
-        await handle.focus();
-        await expect(handle).toHaveCSS('outline-style', 'solid');
-        await page.keyboard.press('Space');
-        await expect(handle).toHaveAttribute('aria-pressed', 'true');
-        await expect(
-          page.locator('[role="status"][aria-live="assertive"]'),
-        ).toContainText('Целевая колонка: Ожидает');
-        await page.keyboard.press('ArrowRight');
-        await expect(
-          page
-            .getByRole('region', { name: 'В работе', exact: true })
-            .getByText('Перенести сюда'),
-        ).toBeVisible();
-        await page.keyboard.press('ArrowRight');
-        await expect(completed.getByText('Перенести сюда')).toBeVisible();
-        await page.keyboard.press('Space');
-      } else await drag(page, handle, completed);
-      await expect(
-        completed.locator('[data-task-id="' + id + '"]'),
-      ).toBeVisible();
-      await expect(page.locator('[data-task-id="' + id + '"]')).toHaveCount(1);
-      await expect(page.getByRole('dialog')).toHaveCount(0);
-      expect(patches).toEqual([{ status: 'completed', expected_version: 1 }]);
-      expect(await read(page, id)).toMatchObject({
-        status: 'completed',
-        version: 2,
-      });
-    },
+test('moves into a real empty column using mouse with exactly one versioned PATCH', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const { id, card, patches } = await prepare(page);
+  const completed = page.getByRole('region', {
+    name: 'Завершено',
+    exact: true,
+  });
+  await expect(completed.getByRole('listitem')).toHaveCount(0);
+  await drag(
+    page,
+    card.getByRole('button', { name: /Перенести задачу/ }),
+    completed,
   );
-}
+  await expect(completed.locator('[data-task-id="' + id + '"]')).toBeVisible();
+  await expect(page.locator('[data-task-id="' + id + '"]')).toHaveCount(1);
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(patches).toEqual([{ status: 'completed', expected_version: 1 }]);
+  expect(await read(page, id)).toMatchObject({
+    status: 'completed',
+    version: 2,
+  });
+});
+
+test('changes real task status with the keyboard through its dialog', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const { id, card, patches } = await prepare(page);
+  await card.getByRole('button').first().focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByLabel('Статус').focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(dialog.getByLabel('Статус')).toHaveValue('in_progress');
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByRole('button', { name: 'Сохранить' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('region', { name: 'В работе', exact: true })
+      .locator('[data-task-id="' + id + '"]'),
+  ).toBeVisible();
+  expect(patches).toEqual([{ status: 'in_progress', expected_version: 1 }]);
+  expect(await read(page, id)).toMatchObject({
+    status: 'in_progress',
+    version: 2,
+  });
+});
 
 test('cancels with Escape and ignores same-column and invalid drops against the real API', async ({
   page,
@@ -129,15 +135,28 @@ test('cancels with Escape and ignores same-column and invalid drops against the 
   test.setTimeout(90_000);
   const { id, card, patches } = await prepare(page);
   const handle = card.getByRole('button', { name: /Перенести задачу/ });
-  await handle.focus();
-  await page.keyboard.press('Space');
+  await handle.scrollIntoViewIfNeeded();
+  const initial = await handle.boundingBox();
+  if (!initial) throw new Error('Expected a visible handle');
+  await page.mouse.move(
+    initial.x + initial.width / 2,
+    initial.y + initial.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(initial.x - 12, initial.y, { steps: 3 });
   await expect(handle).toHaveAttribute('aria-pressed', 'true');
-  await expect(
-    page.locator('[role="status"][aria-live="assertive"]'),
-  ).toContainText('Целевая колонка: Ожидает');
-  await page.keyboard.press('ArrowRight');
+  const target = page.getByRole('region', { name: 'В работе', exact: true });
+  await target.scrollIntoViewIfNeeded();
+  const destination = await target.boundingBox();
+  if (!destination) throw new Error('Expected a visible target');
+  await page.mouse.move(
+    destination.x + destination.width / 2,
+    destination.y + destination.height / 2,
+    { steps: 12 },
+  );
   await expect(page.getByText('Перенести сюда')).toBeVisible();
   await page.keyboard.press('Escape');
+  await page.mouse.up();
   await expect(page.getByText('Перенести сюда')).toHaveCount(0);
   await drag(
     page,

@@ -42,31 +42,11 @@ async function board(page: Page) {
   return patches;
 }
 
-test('moves to the adjacent empty column with one arrow and confirms with Space', async ({
-  page,
-}) => {
-  const patches = await board(page);
-  await page.getByRole('button', { name: 'Русский', exact: true }).click();
-  await page.keyboard.press('Tab');
-  const handle = page.getByRole('button', { name: /Перенести задачу/ });
-  await handle.focus();
-  await expect(handle).toHaveCSS('outline-style', 'solid');
-  await page.keyboard.press('Space');
-  await expect(handle).toHaveAttribute('aria-pressed', 'true');
-  await page.keyboard.press('ArrowRight');
-  await expect(page.getByText('Перенести сюда', { exact: true })).toBeVisible();
-  expect(patches).toEqual([]);
-  await page.keyboard.press('Space');
-  await expect(
-    page
-      .getByRole('region', { name: 'В работе', exact: true })
-      .getByRole('listitem'),
-  ).toHaveCount(1);
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  expect(patches).toEqual([{ status: 'in_progress', expected_version: 1 }]);
-});
-
-async function pointerDrop(page: Page, label: string) {
+async function pointerDrop(
+  page: Page,
+  label: string,
+  duringDrag?: () => Promise<void>,
+) {
   const handle = page.getByRole('button', { name: /Перенести задачу/ });
   const start = await handle.boundingBox();
   const target = await page
@@ -85,6 +65,7 @@ async function pointerDrop(page: Page, label: string) {
     target.y + target.height / 2,
     { steps: 10 },
   );
+  if (duringDrag) await duringDrag();
   await page.mouse.up();
 }
 
@@ -208,42 +189,73 @@ test('keeps the version observed at drag start when REST refreshes the same card
     }
     return route.fulfill({ json: { data: { ...initial, version: 3 } } });
   });
-  const handle = page.getByRole('button', { name: /Перенести задачу/ });
-  await handle.focus();
-  await page.keyboard.press('Space');
-  version = 3;
-  await page.clock.runFor(31_000);
-  await page.keyboard.press('ArrowRight');
-  await expect(page.getByText('Перенести сюда')).toBeVisible();
-  await page.keyboard.press('Space');
+  await pointerDrop(page, 'В работе', async () => {
+    version = 3;
+    await page.clock.runFor(31_000);
+  });
   await expect(page.getByRole('alert')).toContainText('Задача изменилась');
   expect(patches).toEqual([{ status: 'in_progress', expected_version: 1 }]);
 });
 
-test('localizes drag instructions and cancellation in Armenian without translating the task', async ({
+test('localizes pointer drag instructions and cancellation without translating the task', async ({
   page,
 }) => {
   const patches = await board(page);
   await page.getByRole('button', { name: 'Հայերեն', exact: true }).click();
   const handle = page.getByRole('button', { name: /Տեղափոխել առաջադրանքը/ });
-  await handle.focus();
   const instructionsId = await handle.getAttribute('aria-describedby');
-  if (!instructionsId) throw new Error('Expected keyboard instructions');
+  if (!instructionsId) throw new Error('Expected drag instructions');
   await expect(page.locator('[id="' + instructionsId + '"]')).toContainText(
-    'Բացատը',
+    'մկնիկով',
   );
-  await page.keyboard.press('Space');
-  await expect(handle).toHaveAttribute('aria-pressed', 'true');
-  await expect(
-    page.locator('[role="status"][aria-live="assertive"]'),
-  ).toContainText('Նպատակային սյունակ: Սպասում է');
-  await page.keyboard.press('ArrowRight');
+  const start = await handle.boundingBox();
+  const target = await page
+    .getByRole('region', { name: 'Ընթացքի մեջ', exact: true })
+    .boundingBox();
+  if (!start || !target) throw new Error('Expected drag surfaces');
+  await page.mouse.move(start.x + 20, start.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(start.x + 5, start.y + 20, { steps: 3 });
+  await page.mouse.move(
+    target.x + target.width / 2,
+    target.y + target.height / 2,
+    { steps: 12 },
+  );
   await expect(page.getByText('Տեղափոխել այստեղ')).toBeVisible();
   await page.keyboard.press('Escape');
+  await page.mouse.up();
   await expect(page.getByText('Տեղափոխել այստեղ')).toHaveCount(0);
   await expect(page.getByRole('listitem')).toContainText(initial.text);
   await expect(
     page.locator('[role="status"][aria-live="assertive"]'),
   ).toContainText('Տեղափոխումը չեղարկված է');
   expect(patches).toEqual([]);
+});
+
+test('changes status with the keyboard through the task dialog', async ({
+  page,
+}) => {
+  const patches = await board(page);
+  const card = page.getByRole('button', { name: initial.text, exact: true });
+  await card.focus();
+  await page.keyboard.press('Enter');
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Статус', { exact: true }).focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(dialog.getByLabel('Статус', { exact: true })).toHaveValue(
+    'in_progress',
+  );
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  await expect(
+    dialog.getByRole('button', { name: 'Сохранить', exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('region', { name: 'В работе', exact: true })
+      .getByRole('listitem'),
+  ).toHaveCount(1);
+  expect(patches).toEqual([{ status: 'in_progress', expected_version: 1 }]);
 });

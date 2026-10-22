@@ -1,9 +1,7 @@
 import {
   DndContext,
-  KeyboardSensor,
   PointerSensor,
   pointerWithin,
-  rectIntersection,
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
@@ -26,7 +24,6 @@ import type { Locale, Messages } from './locale';
 import { boardTasks } from './tasks';
 import { TaskCard, TaskColumn } from './TaskCard';
 import { TaskDialog } from './TaskDialog';
-import { columnKeyboardCoordinates } from './boardDrag';
 
 function useTaskColumn(memberId: string, status: TaskStatus) {
   return useInfiniteQuery({
@@ -86,10 +83,6 @@ export function Board({
   const suppressClick = useRef(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: columnKeyboardCoordinates,
-      scrollBehavior: 'auto',
-    }),
   );
   const mayEdit = (task: Task) =>
     member.role === 'admin' || member.id === task.author_id;
@@ -229,7 +222,7 @@ export function Board({
   function endDrag(event: DragEndEvent) {
     setDragged(null);
     setOver(null);
-    // Reset only on the next pointer/keyboard activation; the trailing click stays suppressed.
+    // Reset only on the next user activation; the trailing click stays suppressed.
     suppressClick.current = true;
     const task = dragged;
     const target = columns.find(
@@ -275,11 +268,7 @@ export function Board({
       {!denied && (
         <DndContext
           sensors={sensors}
-          collisionDetection={(args) =>
-            args.pointerCoordinates
-              ? pointerWithin(args)
-              : rectIntersection(args)
-          }
+          collisionDetection={pointerWithin}
           accessibility={{
             screenReaderInstructions: { draggable: messages.dragInstructions },
             announcements: {

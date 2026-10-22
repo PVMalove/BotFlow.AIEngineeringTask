@@ -97,6 +97,7 @@ export function TaskCard({
           {...attributes}
           {...listeners}
           ref={setActivatorNodeRef}
+          tabIndex={-1}
           aria-label={messages.taskMove + ': ' + task.text}
           disabled={busy}
           sx={{
