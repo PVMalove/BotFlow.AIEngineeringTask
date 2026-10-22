@@ -3,17 +3,21 @@
 import hashlib
 import re
 from datetime import timedelta
+from uuid import uuid4
 
 import pytest
-from conftest import Clock, FakeRateLimiter, FakeUnitOfWork, Store
+from conftest import Clock, FakeRateLimiter, FakeTokens, FakeUnitOfWork, Store
 
 from application.commands.auth import (
     EnsureInitialAdmin,
     ExchangeLoginCode,
     IssueLoginCode,
+    Logout,
 )
+from application.queries.members import AuthenticateSession
 from domain.entities.auth import (
     InvalidLoginCode,
+    InvalidSession,
     MemberNotApproved,
     MemberStatus,
     RateLimited,
@@ -49,8 +53,25 @@ def issue(store: Store, clock: Clock, limiter: FakeRateLimiter) -> IssueLoginCod
 
 
 @pytest.fixture
-def exchange(store: Store, clock: Clock, limiter: FakeRateLimiter) -> ExchangeLoginCode:
-    return ExchangeLoginCode(lambda: FakeUnitOfWork(store), limiter, clock)
+def tokens() -> FakeTokens:
+    return FakeTokens()
+
+
+@pytest.fixture
+def exchange(
+    store: Store, clock: Clock, limiter: FakeRateLimiter, tokens: FakeTokens
+) -> ExchangeLoginCode:
+    return ExchangeLoginCode(lambda: FakeUnitOfWork(store), limiter, clock, tokens)
+
+
+@pytest.fixture
+def logout(store: Store, clock: Clock) -> Logout:
+    return Logout(lambda: FakeUnitOfWork(store), clock)
+
+
+@pytest.fixture
+def authenticate(store: Store, clock: Clock, tokens: FakeTokens) -> AuthenticateSession:
+    return AuthenticateSession(lambda: FakeUnitOfWork(store), tokens, clock)
 
 
 @pytest.fixture
@@ -197,7 +218,7 @@ async def test_code_issue_is_rate_limited_per_member(
 async def test_exchange_attempts_are_rate_limited_per_client(
     exchange: ExchangeLoginCode, admin: int
 ) -> None:
-    for _ in range(10):
+    for _ in range(30):
         with pytest.raises(InvalidLoginCode):
             await exchange("x" * 32, client="203.0.113.5")
 
@@ -205,3 +226,61 @@ async def test_exchange_attempts_are_rate_limited_per_client(
         await exchange("x" * 32, client="203.0.113.5")
     with pytest.raises(InvalidLoginCode):
         await exchange("x" * 32, client="198.51.100.7")
+
+
+async def test_session_authenticates_until_logout_revokes_it(
+    issue: IssueLoginCode,
+    exchange: ExchangeLoginCode,
+    authenticate: AuthenticateSession,
+    logout: Logout,
+    admin: int,
+) -> None:
+    grant = await exchange((await issue(admin)).code, client="c")
+
+    current = await authenticate(grant.token)
+    await logout(current.session_id)
+
+    assert current.member.telegram_id == admin
+    with pytest.raises(InvalidSession):
+        await authenticate(grant.token)
+
+
+async def test_session_stops_working_after_8_hours(
+    issue: IssueLoginCode,
+    exchange: ExchangeLoginCode,
+    authenticate: AuthenticateSession,
+    clock: Clock,
+    admin: int,
+) -> None:
+    grant = await exchange((await issue(admin)).code, client="c")
+    clock.advance(hours=7, minutes=59)
+    await authenticate(grant.token)
+
+    clock.advance(minutes=1)
+
+    with pytest.raises(InvalidSession):
+        await authenticate(grant.token)
+
+
+async def test_valid_token_does_not_outlive_membership_approval(
+    issue: IssueLoginCode,
+    exchange: ExchangeLoginCode,
+    authenticate: AuthenticateSession,
+    store: Store,
+    admin: int,
+) -> None:
+    grant = await exchange((await issue(admin)).code, client="c")
+    (member,) = store.members.values()
+    store.members[member.id] = member.with_status(MemberStatus.BLOCKED)
+
+    with pytest.raises(InvalidSession):
+        await authenticate(grant.token)
+
+
+async def test_unknown_token_is_rejected(authenticate: AuthenticateSession) -> None:
+    with pytest.raises(InvalidSession):
+        await authenticate("not-issued")
+
+
+async def test_logout_of_unknown_session_is_harmless(logout: Logout) -> None:
+    await logout(uuid4())

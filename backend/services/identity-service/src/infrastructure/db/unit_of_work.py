@@ -120,6 +120,32 @@ class SqlSessions:
             )
         )
 
+    async def get(self, session_id: UUID) -> AuthSession | None:
+        row = (
+            await self._session.execute(
+                select(auth_sessions).where(auth_sessions.c.id == session_id)
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return AuthSession(
+            id=row.id,
+            member_id=row.member_id,
+            created_at=row.created_at,
+            expires_at=row.expires_at,
+            revoked_at=row.revoked_at,
+        )
+
+    async def revoke(self, session_id: UUID, now: datetime) -> None:
+        await self._session.execute(
+            update(auth_sessions)
+            .where(
+                auth_sessions.c.id == session_id,
+                auth_sessions.c.revoked_at.is_(None),
+            )
+            .values(revoked_at=now)
+        )
+
 
 class SqlUnitOfWork:
     def __init__(self, sessions: async_sessionmaker[AsyncSession]) -> None:

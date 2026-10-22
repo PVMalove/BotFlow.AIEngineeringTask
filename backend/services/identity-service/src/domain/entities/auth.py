@@ -26,6 +26,10 @@ class InvalidLoginCode(AuthError):
     """Unknown, malformed, expired, cancelled or already used code."""
 
 
+class InvalidSession(AuthError):
+    """Missing, forged, expired or revoked session, or a member who lost access."""
+
+
 class MemberNotApproved(AuthError):
     """The Telegram identity has no approved membership."""
 
@@ -63,3 +67,4 @@ class AuthSession:
     member_id: UUID
     created_at: datetime
     expires_at: datetime
+    revoked_at: datetime | None = None

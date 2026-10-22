@@ -1,9 +1,12 @@
 """Ports of the application layer."""
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
+from uuid import UUID
 
+from domain.entities.auth import AuthSession
 from domain.unit_of_work import UnitOfWork
 
 Clock = Callable[[], datetime]
@@ -16,4 +19,18 @@ class RateLimiter(Protocol):
 
         The attempt stays counted even if the caller's own transaction rolls back.
         """
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class TokenClaims:
+    session_id: UUID
+    member_id: UUID
+
+
+class TokenService(Protocol):
+    def issue(self, session: AuthSession) -> str: ...
+
+    def verify(self, token: str) -> TokenClaims:
+        """Check signature, issuer, audience and lifetime; else InvalidSession."""
         ...

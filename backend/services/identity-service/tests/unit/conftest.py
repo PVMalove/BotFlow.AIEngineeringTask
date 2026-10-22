@@ -2,13 +2,14 @@
 
 from collections import Counter
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
 from typing import Self
 from uuid import UUID
 
-from domain.entities.auth import AuthSession, LoginCode, Member
+from application.ports import TokenClaims
+from domain.entities.auth import AuthSession, InvalidSession, LoginCode, Member
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 
@@ -88,6 +89,14 @@ class FakeSessions:
     async def add(self, session: AuthSession) -> None:
         self._data.sessions[session.id] = session
 
+    async def get(self, session_id: UUID) -> AuthSession | None:
+        return self._data.sessions.get(session_id)
+
+    async def revoke(self, session_id: UUID, now: datetime) -> None:
+        session = self._data.sessions.get(session_id)
+        if session is not None and session.revoked_at is None:
+            self._data.sessions[session_id] = replace(session, revoked_at=now)
+
 
 class FakeUnitOfWork:
     def __init__(self, store: Store) -> None:
@@ -126,6 +135,24 @@ class FakeRateLimiter:
     async def allow(self, key: str, limit: int, window_seconds: int) -> bool:
         self.hits[key] += 1
         return self.hits[key] <= limit
+
+
+class FakeTokens:
+    """Opaque tokens; the real RS256 adapter has its own tests."""
+
+    def __init__(self) -> None:
+        self.issued: dict[str, TokenClaims] = {}
+
+    def issue(self, session: AuthSession) -> str:
+        token = f"token-{session.id}"
+        self.issued[token] = TokenClaims(session.id, session.member_id)
+        return token
+
+    def verify(self, token: str) -> TokenClaims:
+        try:
+            return self.issued[token]
+        except KeyError:
+            raise InvalidSession from None
 
 
 class Clock:

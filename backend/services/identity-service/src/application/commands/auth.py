@@ -6,9 +6,9 @@ import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
-from application.ports import Clock, RateLimiter, UnitOfWorkFactory
+from application.ports import Clock, RateLimiter, TokenService, UnitOfWorkFactory
 from contracts.views import LoginCodeView
 from domain.entities.auth import (
     AuthSession,
@@ -101,6 +101,7 @@ class IssueLoginCode:
 class SessionGrant:
     session: AuthSession
     member: Member
+    token: str
 
 
 class ExchangeLoginCode:
@@ -111,11 +112,13 @@ class ExchangeLoginCode:
         uow_factory: UnitOfWorkFactory,
         limiter: RateLimiter,
         clock: Clock,
-        attempts_per_minute: int = 10,
+        tokens: TokenService,
+        attempts_per_minute: int = 30,
     ) -> None:
         self._uow_factory = uow_factory
         self._limiter = limiter
         self._clock = clock
+        self._tokens = tokens
         self._attempts = attempts_per_minute
 
     async def __call__(self, code: str, *, client: str) -> SessionGrant:
@@ -140,4 +143,19 @@ class ExchangeLoginCode:
             )
             await uow.sessions.add(session)
             await uow.commit()
-        return SessionGrant(session=session, member=member)
+        return SessionGrant(
+            session=session, member=member, token=self._tokens.issue(session)
+        )
+
+
+class Logout:
+    """Revoke one session; there is no refresh to cancel."""
+
+    def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
+        self._uow_factory = uow_factory
+        self._clock = clock
+
+    async def __call__(self, session_id: UUID) -> None:
+        async with self._uow_factory() as uow:
+            await uow.sessions.revoke(session_id, self._clock())
+            await uow.commit()
