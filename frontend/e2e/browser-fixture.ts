@@ -1,6 +1,14 @@
 import { spawnSync } from 'node:child_process';
 
-type Action = 'reset' | 'code' | 'user-code' | 'join' | 'expire' | 'revoke';
+type Action =
+  | 'reset'
+  | 'code'
+  | 'user-code'
+  | 'join'
+  | 'expire'
+  | 'revoke'
+  | 'board'
+  | 'board-change';
 
 export function fixture(action: Action): { code?: string } {
   const raw = process.env.BOTFLOW_E2E_COMPOSE;

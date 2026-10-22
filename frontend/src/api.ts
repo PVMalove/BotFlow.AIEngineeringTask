@@ -14,6 +14,32 @@ export interface AdminMember extends Member {
 }
 
 export type AccessAction = 'approve' | 'reject' | 'block' | 'unblock';
+export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+export interface Task {
+  id: string;
+  text: string;
+  status: TaskStatus;
+  version: number;
+  author_id: string;
+  author_name: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskPage {
+  data: Task[];
+  meta: { next_cursor: string | null; has_more: boolean };
+}
+
+export function listTasks(
+  status: TaskStatus,
+  cursor: string | null = null,
+  signal?: AbortSignal,
+): Promise<TaskPage> {
+  const params = new URLSearchParams({ status, limit: '50' });
+  if (cursor !== null) params.set('cursor', cursor);
+  return request(`/api/v1/tasks?${params}`, { signal });
+}
 export type AccessList = 'pending' | 'rejected' | 'members';
 export const accessPageSize = 20;
 

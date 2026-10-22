@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import httpx
@@ -20,6 +21,67 @@ from sqlalchemy import text
 APPLICANT = 4_200_000_008
 
 
+async def board_fixture(action: str, author_id: UUID) -> None:
+    """Seed only the disposable board; reads still use the real Tasks API."""
+    async with open_database(Settings(service="tasks")) as database:
+        async with database.sessions() as session:
+            if action == "reset":
+                await session.execute(
+                    text("DELETE FROM tasks WHERE source_key LIKE 'browser-board:%'")
+                )
+            elif action == "board":
+                for status in ("pending", "in_progress", "completed"):
+                    for index in range(52):
+                        # Tied timestamps exercise the ID half of the keyset cursor.
+                        await session.execute(
+                            text(
+                                "INSERT INTO tasks (id, source_key, "
+                                "correlation_id, text, "
+                                "status, version, author_id, author_telegram_id, "
+                                "author_name, created_at, updated_at) VALUES "
+                                "(:id, :source, :correlation, :text, :status, 1, "
+                                ":author, :telegram, :name, :created, :created)"
+                            ),
+                            {
+                                "id": uuid4(),
+                                "source": f"browser-board:{status}:{index}",
+                                "correlation": uuid4(),
+                                "text": f"{status} #{index} / Տեքստ " + "длинный" * 20,
+                                "status": status,
+                                "author": author_id,
+                                "telegram": int(
+                                    os.environ["INITIAL_ADMIN_TELEGRAM_ID"]
+                                ),
+                                "name": "Анна / Աննա",
+                                "created": datetime(2026, 1, 1, tzinfo=UTC)
+                                + timedelta(minutes=index // 4),
+                            },
+                        )
+            elif action == "board-change":
+                await session.execute(
+                    text(
+                        "UPDATE tasks SET status = 'in_progress', version = 2 "
+                        "WHERE source_key = 'browser-board:pending:0'"
+                    )
+                )
+                await session.execute(
+                    text(
+                        "INSERT INTO tasks (id, source_key, correlation_id, text, "
+                        "status, version, author_id, author_telegram_id, author_name, "
+                        "created_at, updated_at) VALUES (:id, 'browser-board:new', "
+                        ":correlation, 'Новая задача / Նոր առաջադրանք', 'pending', 1, "
+                        ":author, :telegram, 'Анна / Աննա', now(), now())"
+                    ),
+                    {
+                        "id": uuid4(),
+                        "correlation": uuid4(),
+                        "author": author_id,
+                        "telegram": int(os.environ["INITIAL_ADMIN_TELEGRAM_ID"]),
+                    },
+                )
+            await session.commit()
+
+
 async def run(action: str) -> dict[str, str]:
     run_id = UUID(os.environ["BOTFLOW_SMOKE_ID"]).hex
     if (
@@ -29,6 +91,15 @@ async def run(action: str) -> dict[str, str]:
         raise RuntimeError("Browser fixtures require an isolated test project")
 
     async with open_database(Settings(service="identity")) as identity:
+        if action in {"reset", "board", "board-change"}:
+            async with identity.sessions() as session:
+                author_id = await session.scalar(
+                    text("SELECT id FROM members WHERE telegram_id = :telegram"),
+                    {"telegram": int(os.environ["INITIAL_ADMIN_TELEGRAM_ID"])},
+                )
+            await board_fixture(action, author_id)
+            if action != "reset":
+                return {"status": "ok"}
         if action in {"code", "user-code", "join"}:
             actor = (
                 int(os.environ["INITIAL_ADMIN_TELEGRAM_ID"])
@@ -99,7 +170,17 @@ async def run(action: str) -> dict[str, str]:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "action", choices=["reset", "code", "user-code", "join", "expire", "revoke"]
+        "action",
+        choices=[
+            "reset",
+            "code",
+            "user-code",
+            "join",
+            "expire",
+            "revoke",
+            "board",
+            "board-change",
+        ],
     )
     arguments = parser.parse_args()
     logging.disable(logging.CRITICAL)

@@ -1,8 +1,73 @@
-import { Box, Chip, Container, Paper, Stack, Typography } from '@mui/material';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  Container,
+  Paper,
+  Stack,
+  Typography,
+} from '@mui/material';
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect } from 'react';
 
-import type { Messages } from './locale';
+import { ApiError, listTasks } from './api';
+import type { Member, TaskStatus } from './api';
+import type { Locale, Messages } from './locale';
+import { boardTasks } from './tasks';
 
-export function Board({ messages }: { messages: Messages }) {
+function useTaskColumn(memberId: string, status: TaskStatus) {
+  return useInfiniteQuery({
+    queryKey: ['tasks', memberId, status],
+    initialPageParam: null as string | null,
+    queryFn: ({ pageParam, signal }) => listTasks(status, pageParam, signal),
+    getNextPageParam: (page) =>
+      page.meta.has_more ? page.meta.next_cursor : undefined,
+    retry: false,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: 'always',
+    refetchOnReconnect: 'always',
+  });
+}
+
+export function Board({
+  member,
+  messages,
+  locale,
+}: {
+  member: Member;
+  messages: Messages;
+  locale: Locale;
+}) {
+  const client = useQueryClient();
+  const pending = useTaskColumn(member.id, 'pending');
+  const inProgress = useTaskColumn(member.id, 'in_progress');
+  const completed = useTaskColumn(member.id, 'completed');
+  const columns = [
+    { status: 'pending', label: messages.taskPending, query: pending },
+    {
+      status: 'in_progress',
+      label: messages.taskInProgress,
+      query: inProgress,
+    },
+    { status: 'completed', label: messages.taskCompleted, query: completed },
+  ] as const;
+  const denied = [pending.error, inProgress.error, completed.error].some(
+    (error) => error instanceof ApiError && [401, 403].includes(error.status),
+  );
+  useEffect(() => {
+    if (denied) void client.invalidateQueries({ queryKey: ['session'] });
+  }, [client, denied]);
+  const tasks = boardTasks(
+    columns.flatMap(
+      ({ query }) => query.data?.pages.flatMap((page) => page.data) ?? [],
+    ),
+  );
+  const dateFormat = new Intl.DateTimeFormat(locale, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  });
+
   return (
     <Container component="main" maxWidth="lg" sx={{ py: { xs: 4, md: 6 } }}>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
@@ -11,120 +76,130 @@ export function Board({ messages }: { messages: Messages }) {
       <Typography variant="h2" sx={{ mb: 1.5 }}>
         {messages.board}
       </Typography>
-      <Typography color="text.secondary" sx={{ mb: 4 }}>
+      <Typography color="text.secondary" sx={{ mb: 3 }}>
         {messages.boardDescription}
       </Typography>
-      <Box
-        sx={{
-          display: 'grid',
-          gridTemplateColumns: {
-            xs: 'minmax(0, 1fr)',
-            md: 'minmax(0, 1.6fr) minmax(0, 1fr)',
-          },
-          gap: 3,
+      <Button
+        color="secondary"
+        variant="outlined"
+        sx={{ mb: 3 }}
+        disabled={columns.some(({ query }) => query.isFetching)}
+        onClick={() => {
+          void client.invalidateQueries({ queryKey: ['tasks', member.id] });
         }}
       >
-        <Paper
-          variant="outlined"
+        {messages.refreshBoard}
+      </Button>
+      {denied && <Alert severity="error">{messages.tasksDenied}</Alert>}
+      {!denied && (
+        <Box
           sx={{
-            p: { xs: 3, sm: 5 },
-            minWidth: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-start',
-            justifyContent: 'center',
+            display: 'grid',
+            gridTemplateColumns: {
+              xs: 'minmax(0, 1fr)',
+              md: 'repeat(3, minmax(0, 1fr))',
+            },
+            gap: 2,
+            alignItems: 'start',
           }}
         >
-          <Chip
-            label={messages.preparingLabel}
-            size="small"
-            sx={{
-              bgcolor: '#F4E4BB',
-              color: 'text.primary',
-              fontWeight: 600,
-              mb: 4,
-              height: 'auto',
-              '& .MuiChip-label': { whiteSpace: 'normal', py: 0.5 },
-            }}
-          />
-          <Box
-            aria-hidden="true"
-            sx={{
-              width: 56,
-              height: 56,
-              border: 1,
-              borderColor: 'divider',
-              borderRadius: '16px',
-              display: 'grid',
-              placeItems: 'center',
-              mb: 3,
-            }}
-          >
-            <Box sx={{ display: 'flex', gap: '4px', alignItems: 'flex-end' }}>
-              {[24, 16, 30].map((height) => (
-                <Box
-                  key={height}
-                  sx={{
-                    width: 7,
-                    height,
-                    bgcolor: 'primary.main',
-                    borderRadius: '3px',
-                  }}
-                />
-              ))}
-            </Box>
-          </Box>
-          <Typography variant="h3" sx={{ mb: 1.5 }}>
-            {messages.preparing}
-          </Typography>
-          <Typography color="text.secondary">
-            {messages.preparingDescription}
-          </Typography>
-        </Paper>
-        <Paper
-          component="aside"
-          elevation={0}
-          sx={{
-            bgcolor: 'secondary.main',
-            color: 'secondary.contrastText',
-            p: { xs: 3, sm: 4 },
-            minWidth: 0,
-          }}
-        >
-          <Typography variant="h3" sx={{ mb: 3 }}>
-            {messages.workflow}
-          </Typography>
-          <Stack
-            component="ol"
-            spacing={3}
-            sx={{ m: 0, p: 0, listStyle: 'none' }}
-          >
-            {[
-              [messages.telegramTitle, messages.telegramDescription],
-              [messages.panelTitle, messages.panelDescription],
-              [messages.teamTitle, messages.teamDescription],
-            ].map(([title, description], index) => (
-              <Stack component="li" direction="row" spacing={2} key={title}>
-                <Box
-                  component="span"
-                  aria-hidden="true"
-                  sx={{ color: 'primary.main', fontSize: 14, pt: 0.25 }}
+          {columns.map(({ status, label, query }) => {
+            const items = tasks.filter((task) => task.status === status);
+            return (
+              <Paper
+                component="section"
+                aria-label={label}
+                key={status}
+                variant="outlined"
+                sx={{ minWidth: 0, p: 2, bgcolor: 'background.default' }}
+              >
+                <Typography variant="h3" sx={{ mb: 2 }}>
+                  {label}
+                </Typography>
+                {query.isFetching && (
+                  <Typography role="status" sx={{ mb: 2 }}>
+                    {messages.tasksLoading}
+                  </Typography>
+                )}
+                {query.isError && (
+                  <Alert severity="error" sx={{ mb: 2 }}>
+                    {messages.tasksLoadFailed}
+                    <Button
+                      color="secondary"
+                      disabled={query.isFetching}
+                      onClick={() => {
+                        if (query.isFetchNextPageError)
+                          void query.fetchNextPage({ cancelRefetch: false });
+                        else void query.refetch();
+                      }}
+                    >
+                      {messages.retry}
+                    </Button>
+                  </Alert>
+                )}
+                {!query.isPending && !query.isError && items.length === 0 && (
+                  <Typography color="text.secondary">
+                    {messages.tasksEmpty}
+                  </Typography>
+                )}
+                <Stack
+                  component="ul"
+                  spacing={2}
+                  sx={{ listStyle: 'none', m: 0, p: 0 }}
                 >
-                  {String(index + 1).padStart(2, '0')}
-                </Box>
-                <Box sx={{ minWidth: 0 }}>
-                  <Typography sx={{ fontWeight: 600, mb: 0.5 }}>
-                    {title}
-                  </Typography>
-                  <Typography variant="body2" sx={{ color: '#D0CDC7' }}>
-                    {description}
-                  </Typography>
-                </Box>
-              </Stack>
-            ))}
-          </Stack>
-        </Paper>
-      </Box>
+                  {items.map((task) => (
+                    <Paper
+                      component="li"
+                      variant="outlined"
+                      key={task.id}
+                      data-task-id={task.id}
+                      sx={{ p: 2, minWidth: 0, overflowWrap: 'anywhere' }}
+                    >
+                      <Chip
+                        size="small"
+                        label={label}
+                        sx={{
+                          mb: 1,
+                          maxWidth: '100%',
+                          height: 'auto',
+                          '& .MuiChip-label': { whiteSpace: 'normal' },
+                        }}
+                      />
+                      <Typography sx={{ whiteSpace: 'pre-wrap', mb: 2 }}>
+                        {task.text}
+                      </Typography>
+                      <Typography variant="body2" sx={{ fontWeight: 600 }}>
+                        {task.author_name}
+                      </Typography>
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        component="time"
+                        dateTime={task.created_at}
+                      >
+                        {dateFormat.format(new Date(task.created_at))}
+                      </Typography>
+                    </Paper>
+                  ))}
+                </Stack>
+                {query.hasNextPage && (
+                  <Button
+                    color="secondary"
+                    fullWidth
+                    sx={{ mt: 2 }}
+                    disabled={query.isFetching}
+                    onClick={() =>
+                      void query.fetchNextPage({ cancelRefetch: false })
+                    }
+                  >
+                    {messages.showMore}
+                  </Button>
+                )}
+              </Paper>
+            );
+          })}
+        </Box>
+      )}
     </Container>
   );
 }

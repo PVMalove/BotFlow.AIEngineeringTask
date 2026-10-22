@@ -1,6 +1,6 @@
 import { afterEach, expect, test, vi } from 'vitest';
 
-import { exchangeCode, getCurrentMember, logout } from './api';
+import { exchangeCode, getCurrentMember, listTasks, logout } from './api';
 
 const member = {
   id: '85a66d7a-744f-4bd3-b4ca-7cb2a9c632c7',
@@ -10,6 +10,18 @@ const member = {
 };
 
 afterEach(() => vi.unstubAllGlobals());
+
+test('reads a status page of 50 tasks and passes the opaque cursor unchanged', async () => {
+  const page = { data: [], meta: { next_cursor: null, has_more: false } };
+  const fetchBoundary = vi.fn().mockResolvedValue(Response.json(page));
+  vi.stubGlobal('fetch', fetchBoundary);
+
+  expect(await listTasks('in_progress', 'opaque+/= cursor')).toEqual(page);
+  expect(fetchBoundary).toHaveBeenCalledWith(
+    '/api/v1/tasks?status=in_progress&limit=50&cursor=opaque%2B%2F%3D+cursor',
+    expect.objectContaining({ credentials: 'same-origin', cache: 'no-store' }),
+  );
+});
 
 test('sends a login code only as JSON with same-origin cookies and no caching', async () => {
   const fetchBoundary = vi.fn().mockResolvedValue(Response.json(member));
