@@ -96,6 +96,22 @@ class NotificationQueue(Protocol):
     async def ack(self, entry_id: str) -> None: ...
 
 
+class TelegramFileUnavailable(Exception):
+    """Telegram no longer serves this file: a retry cannot help."""
+
+
+class AudioTooLarge(Exception):
+    """The audio is above the 5 MiB limit, by Telegram's size or by the bytes read."""
+
+
+class AudioMissing(Exception):
+    """The checkpointed object is not in the audio store."""
+
+
+class TransientIoError(Exception):
+    """A network or storage failure worth retrying; carries no driver message."""
+
+
 @dataclass(frozen=True, slots=True)
 class QueuedVoice:
     entry_id: str

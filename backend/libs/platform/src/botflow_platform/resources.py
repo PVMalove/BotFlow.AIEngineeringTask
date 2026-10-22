@@ -65,6 +65,61 @@ async def open_database(settings: Settings) -> AsyncIterator[Database]:
         await engine.dispose()
 
 
+def _failed(settings: Settings) -> RuntimeError:
+    # Driver and SDK exceptions can contain credential-bearing connection arguments.
+    return RuntimeError(f"Infrastructure initialization failed for {settings.service}")
+
+
+@asynccontextmanager
+async def open_redis(settings: Settings) -> AsyncIterator[Redis]:
+    """The service's own Redis user; for Tasks and Automation only."""
+    redis = Redis(
+        host=settings.redis_host,
+        username=settings.service,
+        password=settings.secret(
+            f"redis_{settings.service}_password"
+        ).get_secret_value(),
+        socket_connect_timeout=10,
+        socket_timeout=10,
+    )
+    try:
+        await redis.ping()
+    except Exception:
+        await redis.aclose()
+        raise _failed(settings) from None
+    try:
+        yield redis
+    finally:
+        await redis.aclose()
+
+
+@asynccontextmanager
+async def open_s3(settings: Settings) -> AsyncIterator[Any]:
+    """The S3 client of the audio bucket; for Automation only."""
+    async with AsyncExitStack() as stack:
+        try:
+            client = await stack.enter_async_context(
+                aioboto3.Session().client(
+                    "s3",
+                    endpoint_url=settings.s3_endpoint,
+                    region_name="us-east-1",
+                    aws_access_key_id="botflow",
+                    aws_secret_access_key=settings.secret(
+                        "minio_password"
+                    ).get_secret_value(),
+                    config=Config(
+                        connect_timeout=10,
+                        read_timeout=10,
+                        retries={"max_attempts": 2},
+                        s3={"addressing_style": "path"},
+                    ),
+                )
+            )
+        except Exception:
+            raise _failed(settings) from None
+        yield client
+
+
 @asynccontextmanager
 async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
     """Unwind every acquired resource even if a later connection fails."""
@@ -88,40 +143,13 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
                 rabbitmq=rabbitmq,
             )
             if settings.service in {"tasks", "automation"}:
-                resources.redis = Redis(
-                    host=settings.redis_host,
-                    username=settings.service,
-                    password=settings.secret(
-                        f"redis_{settings.service}_password"
-                    ).get_secret_value(),
-                    socket_connect_timeout=10,
-                    socket_timeout=10,
-                )
-                stack.push_async_callback(resources.redis.aclose)
-                await resources.redis.ping()
+                resources.redis = await stack.enter_async_context(open_redis(settings))
             if settings.service == "automation":
-                resources.s3 = await stack.enter_async_context(
-                    aioboto3.Session().client(
-                        "s3",
-                        endpoint_url=settings.s3_endpoint,
-                        region_name="us-east-1",
-                        aws_access_key_id="botflow",
-                        aws_secret_access_key=settings.secret(
-                            "minio_password"
-                        ).get_secret_value(),
-                        config=Config(
-                            connect_timeout=10,
-                            read_timeout=10,
-                            retries={"max_attempts": 2},
-                            s3={"addressing_style": "path"},
-                        ),
-                    )
-                )
+                resources.s3 = await stack.enter_async_context(open_s3(settings))
+        except RuntimeError:
+            raise  # already sanitised by open_redis / open_s3
         except Exception:
-            # SDK exceptions can contain credential-bearing connection arguments.
-            raise RuntimeError(
-                f"Infrastructure initialization failed for {settings.service}"
-            ) from None
+            raise _failed(settings) from None
         try:
             yield resources
         finally:

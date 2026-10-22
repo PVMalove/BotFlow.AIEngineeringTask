@@ -245,8 +245,11 @@ services:
       BOTFLOW_ENVIRONMENT: "${BOTFLOW_ENVIRONMENT:-local}"
     secrets:
       - "automation_db_password"
+      - "minio_password"
     depends_on:
       automation-db:
+        condition: "service_healthy"
+      minio:
         condition: "service_healthy"
     networks:
       - "backend"
