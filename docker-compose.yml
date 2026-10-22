@@ -31,6 +31,8 @@ services:
     secrets:
       - "identity_db_password"
       - "rabbitmq_password"
+      - "identity_jwt_private_key"
+      - "automation_service_key"
     depends_on:
       identity-db:
         condition: "service_healthy"
@@ -374,6 +376,8 @@ secrets:
     file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/tasks_service_key"
   automation_service_key:
     file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/automation_service_key"
+  identity_jwt_private_key:
+    file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/identity_jwt_private_key"
   identity_db_password:
     file: "${BOTFLOW_SECRETS_DIR:-./.secrets}/identity_db_password"
   tasks_db_password:
