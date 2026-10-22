@@ -173,7 +173,11 @@ def main() -> int:
             elif stage in {"resource and isolation checks", "persistence checks"}:
                 for line in error.stdout.decode(errors="replace").splitlines():
                     if line.startswith(
-                        ("FAIL: __main__.InfrastructureSmoke.", "Resource checks:")
+                        (
+                            "FAIL: __main__.InfrastructureSmoke.",
+                            "FAIL: auth_flow.AuthFlow.",
+                            "Resource checks:",
+                        )
                     ):
                         print(line, file=sys.stderr)
         finally:
@@ -196,7 +200,8 @@ def main() -> int:
             return 1
         if result == 0:
             print(
-                "Integration smoke PASS: real PG/RabbitMQ/Redis/MinIO, DI lifecycle and restart persistence."
+                "Integration smoke PASS: bot login/Identity exchange, "
+                "real PG/RabbitMQ/Redis/MinIO and restart persistence."
             )
         return result
 

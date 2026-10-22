@@ -9,6 +9,7 @@ from uuid import UUID
 import httpx
 from aio_pika import DeliveryMode, Message
 from api.containers import Container as AutomationContainer
+from auth_flow import AuthFlow
 from botflow_platform.http import create_app
 from botflow_platform.resources import open_database, open_resources
 from botflow_platform.settings import Settings
@@ -189,9 +190,13 @@ class InfrastructureSmoke(unittest.IsolatedAsyncioTestCase):
 
 
 if __name__ == "__main__":
-    result = unittest.TextTestRunner(stream=io.StringIO()).run(
+    suite = unittest.TestSuite()
+    if not AFTER:
+        suite.addTests(unittest.defaultTestLoader.loadTestsFromTestCase(AuthFlow))
+    suite.addTests(
         unittest.defaultTestLoader.loadTestsFromTestCase(InfrastructureSmoke)
     )
+    result = unittest.TextTestRunner(stream=io.StringIO()).run(suite)
     # Never print SDK exceptions, credentials, object payloads, or assertion operands.
     for test, _ in result.errors + result.failures:
         print(f"FAIL: {test.id()}")
