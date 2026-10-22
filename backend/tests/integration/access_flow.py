@@ -292,6 +292,11 @@ class AccessFlow(unittest.IsolatedAsyncioTestCase):
         waiting = await admin.get("/api/v1/admin/join-requests")
         self.assertEqual(waiting.status_code, 200)
         self.assertEqual([m["telegram_id"] for m in waiting.json()], [user])
+        filtered = await admin.get("/api/v1/admin/join-requests?status=pending")
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual([m["telegram_id"] for m in filtered.json()], [user])
+        invalid = await admin.get("/api/v1/admin/join-requests?status=approved")
+        self.assertEqual(invalid.status_code, 422)
 
         approved = await self.decide(admin, member_id, "approve", 1)
 
@@ -312,6 +317,9 @@ class AccessFlow(unittest.IsolatedAsyncioTestCase):
 
         rejected = await self.decide(admin, member_id, "reject", 1)
         self.assertEqual(rejected.json()["member"]["status"], "rejected")
+        listed = await admin.get("/api/v1/admin/join-requests?status=rejected")
+        self.assertEqual(listed.status_code, 200)
+        self.assertEqual([m["telegram_id"] for m in listed.json()], [user])
         self.assertIn("Заявка отправлена", await self.send(user, "/join"))
         self.assertEqual((await self.member(user))[2:], ("pending", 3))
 

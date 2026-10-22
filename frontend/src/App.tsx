@@ -88,7 +88,7 @@ export default function App() {
           </Stack>
         </Container>
       </Box>
-      <SessionRoutes messages={messages} />
+      <SessionRoutes messages={messages} locale={locale} />
     </ThemeProvider>
   );
 }

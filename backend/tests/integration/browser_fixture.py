@@ -17,6 +17,8 @@ from botflow_platform.settings import Settings
 from infrastructure.identity_gateway import HttpIdentityGateway
 from sqlalchemy import text
 
+APPLICANT = 4_200_000_008
+
 
 async def run(action: str) -> dict[str, str]:
     run_id = UUID(os.environ["BOTFLOW_SMOKE_ID"]).hex
@@ -27,8 +29,12 @@ async def run(action: str) -> dict[str, str]:
         raise RuntimeError("Browser fixtures require an isolated test project")
 
     async with open_database(Settings(service="identity")) as identity:
-        if action == "code":
-            admin = int(os.environ["INITIAL_ADMIN_TELEGRAM_ID"])
+        if action in {"code", "user-code", "join"}:
+            actor = (
+                int(os.environ["INITIAL_ADMIN_TELEGRAM_ID"])
+                if action == "code"
+                else APPLICANT
+            )
             key = Settings(service="automation").secret("automation_service_key")
             async with (
                 open_database(Settings(service="automation")) as automation,
@@ -45,15 +51,20 @@ async def run(action: str) -> dict[str, str]:
                 await bot.execute(
                     HandleBotCommandDto(
                         update_id=uuid4().int % (2**63),
-                        telegram_id=admin,
-                        chat_id=admin,
-                        text="/login",
+                        telegram_id=actor,
+                        chat_id=actor,
+                        text="/join" if action == "join" else "/login",
                         private=True,
+                        display_name="Анна / Աննա",
                     )
                 )
                 chat_id, message = telegram.messages[-1]
+                if action == "join":
+                    if "Заявка отправлена." not in message:
+                        raise RuntimeError("The bot did not submit a join request")
+                    return {"status": "ok"}
                 match = re.search(r"Код входа: ([A-Za-z0-9_-]{32})\n", message)
-                if chat_id != admin or match is None:
+                if chat_id != actor or match is None:
                     raise RuntimeError("The bot did not deliver a login code")
                 return {"code": match.group(1)}
         async with identity.sessions() as session:
@@ -61,6 +72,10 @@ async def run(action: str) -> dict[str, str]:
                 await session.execute(text("DELETE FROM rate_limits"))
                 await session.execute(text("DELETE FROM auth_sessions"))
                 await session.execute(text("DELETE FROM login_codes"))
+                await session.execute(
+                    text("DELETE FROM members WHERE telegram_id = :telegram_id"),
+                    {"telegram_id": APPLICANT},
+                )
             elif action == "expire":
                 await session.execute(
                     text(
@@ -83,7 +98,9 @@ async def run(action: str) -> dict[str, str]:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["reset", "code", "expire", "revoke"])
+    parser.add_argument(
+        "action", choices=["reset", "code", "user-code", "join", "expire", "revoke"]
+    )
     arguments = parser.parse_args()
     logging.disable(logging.CRITICAL)
     try:
