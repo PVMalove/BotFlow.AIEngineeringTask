@@ -3,6 +3,6 @@
 from kernel_platform.migrations import configure_environment
 from kernel_platform.settings import Settings
 
-from infrastructure.db.tables import metadata
+from infrastructure.db.models import Base
 
-configure_environment(metadata, Settings(service="tasks"))
+configure_environment(Base.metadata, Settings(service="tasks"))

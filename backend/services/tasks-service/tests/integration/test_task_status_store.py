@@ -31,7 +31,7 @@ from application.commands.create_task import (
 )
 from domain.events.task_domain_event import TaskStatusChanged
 from domain.value_objects.task_status import TaskStatus
-from infrastructure.db.tables import inbox_messages, metadata, outbox, tasks
+from infrastructure.db.models import Base, InboxMessageModel, OutboxModel, TaskModel
 from infrastructure.db.unit_of_work import SqlTasksUnitOfWork
 
 DATABASE_URL = os.environ.get("BOTFLOW_TEST_DATABASE_URL")
@@ -66,7 +66,7 @@ async def engine() -> AsyncIterator[AsyncEngine]:
     assert DATABASE_URL
     engine = create_async_engine(DATABASE_URL)
     async with engine.begin() as connection:
-        await connection.run_sync(metadata.create_all)
+        await connection.run_sync(Base.metadata.create_all)
     yield engine
     await engine.dispose()
 
@@ -95,7 +95,7 @@ async def task_id(sessions: async_sessionmaker[AsyncSession]) -> AsyncIterator[U
     new_id = uuid4()
     async with sessions() as session:
         await session.execute(
-            insert(tasks).values(
+            insert(TaskModel).values(
                 id=new_id,
                 source_key=f"it:{new_id}",
                 correlation_id=uuid4(),
@@ -112,7 +112,7 @@ async def task_id(sessions: async_sessionmaker[AsyncSession]) -> AsyncIterator[U
         await session.commit()
     yield new_id
     async with sessions() as session:
-        await session.execute(delete(tasks).where(tasks.c.id == new_id))
+        await session.execute(delete(TaskModel).where(TaskModel.id == new_id))
         await session.commit()
 
 
@@ -124,7 +124,13 @@ async def stored(
     sessions: async_sessionmaker[AsyncSession], task_id: UUID
 ) -> tuple[str, int, datetime]:
     async with sessions() as session:
-        row = (await session.execute(select(tasks).where(tasks.c.id == task_id))).one()
+        row = (
+            await session.execute(
+                select(TaskModel.status, TaskModel.version, TaskModel.updated_at).where(
+                    TaskModel.id == task_id
+                )
+            )
+        ).one()
     return row.status, row.version, row.updated_at
 
 
@@ -256,15 +262,21 @@ async def test_creating_a_task_stores_it_once_with_one_result_message(
     assert first.value is True and again.value is False
     async with sessions() as session:
         stored_tasks = (
-            await session.execute(select(tasks).where(tasks.c.correlation_id == job))
+            await session.scalars(
+                select(TaskModel).where(TaskModel.correlation_id == job)
+            )
         ).all()
         queued = (
-            await session.execute(select(outbox).where(outbox.c.correlation_id == job))
+            await session.scalars(
+                select(OutboxModel).where(OutboxModel.correlation_id == job)
+            )
         ).all()
-        await session.execute(delete(outbox).where(outbox.c.correlation_id == job))
-        await session.execute(delete(tasks).where(tasks.c.correlation_id == job))
         await session.execute(
-            delete(inbox_messages).where(inbox_messages.c.message_id == f"it-{job}")
+            delete(OutboxModel).where(OutboxModel.correlation_id == job)
+        )
+        await session.execute(delete(TaskModel).where(TaskModel.correlation_id == job))
+        await session.execute(
+            delete(InboxMessageModel).where(InboxMessageModel.message_id == f"it-{job}")
         )
         await session.commit()
     assert len(stored_tasks) == 1 and len(queued) == 1

@@ -1,7 +1,6 @@
 """Domain events that leave the aggregate: outbox rows and notification intents."""
 
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from kernel_domain.domain_event import DomainEvent
@@ -21,7 +20,7 @@ from domain.events.job_domain_event import (
 from domain.notices import task_created_notice
 from domain.value_objects.intent_id import IntentId
 from infrastructure.db.intent_repository import SqlIntentRepository
-from infrastructure.db.tables import notification_intents, outbox
+from infrastructure.db.models import NotificationIntentModel, OutboxModel
 from infrastructure.messaging.envelopes import (
     create_task_envelope,
     outbox_id_for,
@@ -87,15 +86,15 @@ async def stage_automation_event(session: AsyncSession, event: DomainEvent) -> N
         case JobRestarted() if event.voice:
             # The failure notice owns the one result-intent id; a later result needs it.
             await session.execute(
-                delete(notification_intents).where(
-                    notification_intents.c.id
+                delete(NotificationIntentModel).where(
+                    NotificationIntentModel.id
                     == IntentId.for_result(event.job_id.value).value,
-                    notification_intents.c.kind == TRANSCRIPTION_RESULT,
+                    NotificationIntentModel.kind == TRANSCRIPTION_RESULT,
                 )
             )
             await session.execute(
-                update(outbox)
-                .where(outbox.c.id == transcribe_outbox_id_for(event.job_id.value))
+                update(OutboxModel)
+                .where(OutboxModel.id == transcribe_outbox_id_for(event.job_id.value))
                 .values(
                     published_at=None,
                     attempts=0,
@@ -106,10 +105,10 @@ async def stage_automation_event(session: AsyncSession, event: DomainEvent) -> N
         case JobRestarted():
             # Same row, same id; only a row nobody has published yet is made due.
             await session.execute(
-                update(outbox)
+                update(OutboxModel)
                 .where(
-                    outbox.c.id == outbox_id_for(event.job_id.value),
-                    outbox.c.published_at.is_(None),
+                    OutboxModel.id == outbox_id_for(event.job_id.value),
+                    OutboxModel.published_at.is_(None),
                 )
                 .values(attempts=0, next_attempt_at=now, last_error=None)
             )
@@ -123,11 +122,11 @@ async def _enqueue(
     entry_id: UUID,
     message_type: str,
     routing_key: str,
-    envelope: dict[str, Any],
+    envelope: dict[str, object],
 ) -> None:
     await enqueue(
         session,
-        outbox,
+        OutboxModel,
         entry_id=entry_id,
         type=message_type,
         routing_key=routing_key,

@@ -178,6 +178,3 @@ class NotificationIntentModel(Base):
             postgresql_where=status == "pending",
         ),
     )
-
-
-metadata = Base.metadata

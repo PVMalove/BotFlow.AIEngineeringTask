@@ -35,15 +35,15 @@ def status_query(job_id: UUID) -> StatusQuery:
         select(
             JobModel.kind,
             JobModel.status,
-            JobModel.task_id.is_not(None),
-            JobModel.last_error,
+            JobModel.task_id.is_not(None).label("task_created"),
+            JobModel.last_error.label("job_error"),
             VoiceJobModel.stage,
-            VoiceJobModel.attempts,
-            VoiceJobModel.error_code,
-            OutboxModel.attempts,
+            VoiceJobModel.attempts.label("processing_attempts"),
+            VoiceJobModel.error_code.label("voice_error"),
+            OutboxModel.attempts.label("delivery_attempts"),
             OutboxModel.next_attempt_at,
-            OutboxModel.published_at.is_not(None),
-            OutboxModel.last_error,
+            OutboxModel.published_at.is_not(None).label("published"),
+            OutboxModel.last_error.label("outbox_error"),
         )
         .outerjoin(JobModel.voice)
         .outerjoin(
@@ -63,4 +63,18 @@ async def read_job_status(
     session: AsyncSession, job_id: UUID
 ) -> JobStatusRecord | None:
     row = (await session.execute(status_query(job_id))).one_or_none()
-    return JobStatusRecord(*row._tuple()) if row else None
+    if row is None:
+        return None
+    return JobStatusRecord(
+        kind=row.kind,
+        status=row.status,
+        task_created=row.task_created,
+        job_error=row.job_error,
+        stage=row.stage,
+        processing_attempts=row.processing_attempts,
+        voice_error=row.voice_error,
+        delivery_attempts=row.delivery_attempts,
+        next_attempt_at=row.next_attempt_at,
+        published=row.published,
+        outbox_error=row.outbox_error,
+    )

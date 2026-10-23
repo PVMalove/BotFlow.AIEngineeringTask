@@ -20,22 +20,33 @@ from infrastructure.db.job_status_reader import status_query
 DUE = datetime(2026, 1, 1, 12, 0, 5, tzinfo=UTC)
 
 
-def record(**overrides: object) -> JobStatusRecord:
-    values: dict[str, object] = dict(
-        kind="text",
-        status="accepted",
-        task_created=False,
-        job_error=None,
-        stage=None,
-        processing_attempts=None,
-        voice_error=None,
-        delivery_attempts=0,
-        next_attempt_at=None,
-        published=False,
-        outbox_error=None,
+def record(
+    *,
+    kind: str = "text",
+    status: str = "accepted",
+    task_created: bool = False,
+    job_error: str | None = None,
+    stage: str | None = None,
+    processing_attempts: int | None = None,
+    voice_error: str | None = None,
+    delivery_attempts: int | None = 0,
+    next_attempt_at: datetime | None = None,
+    published: bool = False,
+    outbox_error: str | None = None,
+) -> JobStatusRecord:
+    return JobStatusRecord(
+        kind=kind,
+        status=status,
+        task_created=task_created,
+        job_error=job_error,
+        stage=stage,
+        processing_attempts=processing_attempts,
+        voice_error=voice_error,
+        delivery_attempts=delivery_attempts,
+        next_attempt_at=next_attempt_at,
+        published=published,
+        outbox_error=outbox_error,
     )
-    values.update(overrides)
-    return JobStatusRecord(**values)  # type: ignore[arg-type]
 
 
 def fields(rendered: str) -> dict[str, str]:

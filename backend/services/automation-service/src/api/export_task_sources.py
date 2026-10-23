@@ -11,7 +11,7 @@ from kernel_platform.worker import shutdown
 from sqlalchemy import select
 
 from api.containers import Container
-from infrastructure.db.tables import jobs
+from infrastructure.db.models import JobModel
 
 
 async def main() -> None:
@@ -19,7 +19,7 @@ async def main() -> None:
     try:
         database = await container.database.async_()
         async with database.sessions() as session:
-            rows = await session.execute(select(jobs.c.id, jobs.c.kind))
+            rows = await session.execute(select(JobModel.id, JobModel.kind))
             print(
                 json.dumps(
                     [{"job_id": str(row.id), "source_type": row.kind} for row in rows]

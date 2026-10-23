@@ -14,7 +14,7 @@ from sqlalchemy import update
 
 from api.containers import Container
 from domain.value_objects.task_source import TaskSource
-from infrastructure.db.tables import tasks
+from infrastructure.db.models import TaskModel
 
 
 async def main() -> None:
@@ -31,12 +31,13 @@ async def main() -> None:
         async with resources.sessions() as session:
             for job_id, source_type in rows:
                 result = await session.execute(
-                    update(tasks)
+                    update(TaskModel)
                     .where(
-                        tasks.c.correlation_id == job_id, tasks.c.source_type.is_(None)
+                        TaskModel.correlation_id == job_id,
+                        TaskModel.source_type.is_(None),
                     )
                     .values(source_type=source_type.value)
-                    .returning(tasks.c.id)
+                    .returning(TaskModel.id)
                 )
                 changed += len(result.all())
             await session.commit()

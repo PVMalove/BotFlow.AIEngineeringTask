@@ -12,8 +12,10 @@ from sqlalchemy import CheckConstraint
 from domain.entities.voice_message import VoiceMessage
 from domain.job_limits import JobLimits
 from domain.value_objects.job_status import JobKind, VoiceStage
-from infrastructure.db.tables import jobs, voice_jobs
+from infrastructure.db.models import Base
 
+jobs = Base.metadata.tables["jobs"]
+voice_jobs = Base.metadata.tables["voice_jobs"]
 VERSIONS = Path(__file__).parents[2] / "src/infrastructure/db/alembic/versions"
 
 

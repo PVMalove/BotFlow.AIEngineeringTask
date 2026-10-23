@@ -1,15 +1,13 @@
-"""Identity persistence adapter, used within the caller's session."""
+"""Web auth sessions in PostgreSQL, used in the unit of work's session."""
 
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import update
+from sqlalchemy import ColumnElement, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.entities.auth_session import AuthSession
-from infrastructure.db.models import (
-    AuthSessionModel,
-)
+from infrastructure.db.models import AuthSessionModel
 
 
 class SqlSessions:
@@ -40,21 +38,14 @@ class SqlSessions:
         )
 
     async def revoke(self, session_id: UUID, now: datetime) -> None:
-        await self._session.execute(
-            update(AuthSessionModel)
-            .where(
-                AuthSessionModel.id == session_id,
-                AuthSessionModel.revoked_at.is_(None),
-            )
-            .values(revoked_at=now)
-        )
+        await self._revoke(AuthSessionModel.id == session_id, now)
 
     async def revoke_all(self, member_id: UUID, now: datetime) -> None:
+        await self._revoke(AuthSessionModel.member_id == member_id, now)
+
+    async def _revoke(self, selector: ColumnElement[bool], now: datetime) -> None:
         await self._session.execute(
             update(AuthSessionModel)
-            .where(
-                AuthSessionModel.member_id == member_id,
-                AuthSessionModel.revoked_at.is_(None),
-            )
+            .where(selector, AuthSessionModel.revoked_at.is_(None))
             .values(revoked_at=now)
         )

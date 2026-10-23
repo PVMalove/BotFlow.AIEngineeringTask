@@ -1,10 +1,14 @@
 """The routing-key filter of a relay: each relay claims only the rows it can deliver."""
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import cast
 
-from sqlalchemy.dialects import postgresql
+from sqlalchemy import Select
+from sqlalchemy.dialects.postgresql.base import PGDialect
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.sql import visitors
+from sqlalchemy.sql.elements import BinaryExpression, BindParameter, ColumnClause
 
 from kernel_platform.outbox import OutboxColumns, SqlOutboxTx
 
@@ -19,61 +23,67 @@ class OutboxModel(OutboxColumns, Base):
     __tablename__ = "outbox"
 
 
-TABLE = Base.metadata.tables["outbox"]
-
-
-class Session:
+class RecordingSession:
     def __init__(self) -> None:
-        self.statements: list[Any] = []
+        self.statements: list[Select[tuple[OutboxModel]]] = []
 
-    async def execute(self, statement: Any) -> list[Any]:
+    async def scalars(self, statement: Select[tuple[OutboxModel]]) -> list[object]:
         self.statements.append(statement)
         return []
 
 
-async def claimed_sql(routing_keys: tuple[str, ...] | None) -> str:
-    session = Session()
-    tx = SqlOutboxTx(session, TABLE, routing_keys)  # type: ignore[arg-type]
+async def claim(routing_keys: tuple[str, ...] | None) -> Select[tuple[OutboxModel]]:
+    session = RecordingSession()
+    tx = SqlOutboxTx(cast(AsyncSession, session), OutboxModel, routing_keys)
 
     await tx.claim_due(NOW, 20)
 
     (statement,) = session.statements
-    compiled = statement.compile(
-        dialect=postgresql.dialect(),  # type: ignore[no-untyped-call]
-        compile_kwargs={"literal_binds": True},
-    )
-    return " ".join(str(compiled).split())
+    return statement
+
+
+def routing_conditions(statement: Select[tuple[OutboxModel]]) -> list[tuple[str, str]]:
+    """(operator, value) of every comparison of `routing_key` in the WHERE clause."""
+    return [
+        (str(clause.operator.__name__), str(clause.right.value))
+        for clause in visitors.iterate(statement.whereclause)
+        if isinstance(clause, BinaryExpression)
+        and isinstance(clause.left, ColumnClause)
+        and clause.left.name == "routing_key"
+        and isinstance(clause.right, BindParameter)
+    ]
 
 
 async def test_without_a_filter_every_due_row_is_claimed() -> None:
-    sql = await claimed_sql(None)
-
-    assert "routing_key" not in sql.split("WHERE")[1]
+    assert routing_conditions(await claim(None)) == []
 
 
 async def test_an_exact_key_claims_only_that_key() -> None:
-    sql = await claimed_sql(("task.create",))
+    conditions = routing_conditions(await claim(("task.create",)))
 
-    assert "outbox.routing_key = 'task.create'" in sql
+    assert conditions == [("eq", "task.create")]
 
 
 async def test_a_wildcard_claims_every_key_under_the_prefix() -> None:
-    sql = await claimed_sql(("voice.*",))
+    conditions = routing_conditions(await claim(("voice.*",)))
 
-    assert "outbox.routing_key LIKE 'voice.' ||" in sql
-    assert "outbox.routing_key = " not in sql
+    assert conditions == [("startswith_op", "voice.")]
 
 
 async def test_several_patterns_are_alternatives() -> None:
-    sql = await claimed_sql(("task.create", "voice.*"))
+    conditions = routing_conditions(await claim(("task.create", "voice.*")))
 
-    assert "outbox.routing_key = 'task.create' OR" in sql
-    assert "outbox.routing_key LIKE 'voice.' ||" in sql
+    assert conditions == [("eq", "task.create"), ("startswith_op", "voice.")]
 
 
 async def test_the_filter_keeps_the_due_unpublished_and_locking_rules() -> None:
-    sql = await claimed_sql(("voice.*",))
+    statement = await claim(("voice.*",))
 
-    assert "published_at IS NULL" in sql
-    assert "next_attempt_at <=" in sql
-    assert "FOR UPDATE SKIP LOCKED" in sql
+    filtered = {
+        column.name
+        for column in visitors.iterate(statement.whereclause)
+        if isinstance(column, ColumnClause)
+    }
+    assert {"published_at", "next_attempt_at", "routing_key"} <= filtered
+    compiled = statement.compile(dialect=PGDialect())  # type: ignore[no-untyped-call]
+    assert str(compiled).rstrip().endswith("FOR UPDATE SKIP LOCKED")

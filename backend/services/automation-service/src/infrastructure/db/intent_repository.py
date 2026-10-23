@@ -1,4 +1,4 @@
-"""NotificationIntent aggregates and the consumer inbox in PostgreSQL."""
+"""NotificationIntent aggregates in PostgreSQL."""
 
 from collections.abc import Callable
 from datetime import datetime

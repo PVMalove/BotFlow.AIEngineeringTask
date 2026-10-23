@@ -1,4 +1,4 @@
-"""Identity persistence adapter, used within the caller's session."""
+"""Fixed-window rate limits in PostgreSQL, in their own short transactions."""
 
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -7,9 +7,7 @@ from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from infrastructure.db.models import (
-    RateLimitModel,
-)
+from infrastructure.db.models import RateLimitModel
 
 
 class SqlRateLimiter:

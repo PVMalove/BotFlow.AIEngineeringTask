@@ -13,7 +13,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Protocol
 from uuid import UUID
 
 from aiormq.exceptions import ChannelInvalidStateError
@@ -22,7 +22,6 @@ from sqlalchemy import (
     DateTime,
     Index,
     Integer,
-    Table,
     Text,
     Uuid,
     literal_column,
@@ -43,7 +42,7 @@ class OutboxRow:
     id: UUID
     type: str
     routing_key: str
-    payload: dict[str, Any]  # the complete message envelope
+    payload: dict[str, object]  # the complete message envelope
     created_at: datetime
     attempts: int
     next_attempt_at: datetime | None  # None on an unpublished row: exhausted
@@ -79,18 +78,18 @@ class OutboxColumns:
 
 async def enqueue(
     session: AsyncSession,
-    table: Table,
+    model: type[OutboxColumns],
     *,
     entry_id: UUID,
     type: str,
     routing_key: str,
-    payload: dict[str, Any],
+    payload: dict[str, object],
     now: datetime,
     correlation_id: UUID | None = None,
 ) -> bool:
     """Add a row in the caller's transaction; False when `entry_id` already exists."""
     result = await session.execute(
-        insert(table)
+        insert(model)
         .values(
             id=entry_id,
             type=type,
@@ -100,21 +99,25 @@ async def enqueue(
             created_at=now,
             next_attempt_at=now,
         )
-        .on_conflict_do_nothing(index_elements=[table.c.id])
-        .returning(table.c.id)
+        .on_conflict_do_nothing(index_elements=[model.id])
+        .returning(model.id)
     )
     return result.scalar_one_or_none() is not None
 
 
 async def replay(
-    session: AsyncSession, table: Table, *, correlation_id: UUID, now: datetime
+    session: AsyncSession,
+    model: type[OutboxColumns],
+    *,
+    correlation_id: UUID,
+    now: datetime,
 ) -> bool:
     """Make the unpublished row of `correlation_id` due again with a fresh budget."""
     result = await session.execute(
-        update(table)
-        .where(table.c.correlation_id == correlation_id, table.c.published_at.is_(None))
+        update(model)
+        .where(model.correlation_id == correlation_id, model.published_at.is_(None))
         .values(attempts=0, next_attempt_at=now)
-        .returning(table.c.id)
+        .returning(model.id)
     )
     return result.first() is not None
 
@@ -143,25 +146,26 @@ class SqlOutboxTx:
     def __init__(
         self,
         session: AsyncSession,
-        table: Table,
+        model: type[OutboxColumns],
         routing_keys: Sequence[str] | None = None,
     ) -> None:
         self.session = session
-        self._table = table
+        self._model = model
         self._routing_keys = routing_keys
 
     async def claim_due(self, now: datetime, limit: int) -> list[OutboxRow]:
-        t = self._table
-        rows = await self.session.execute(
-            select(t)
+        m = self._model
+        rows = await self.session.scalars(
+            select(m)
             .where(
-                t.c.published_at.is_(None),
-                t.c.next_attempt_at <= now,
+                m.published_at.is_(None),
+                m.next_attempt_at <= now,
                 *self._routed(),
             )
-            .order_by(t.c.created_at, t.c.id)
+            .order_by(m.created_at, m.id)
             .limit(limit)
             .with_for_update(skip_locked=True)
+            .execution_options(populate_existing=True)
         )
         return [
             OutboxRow(
@@ -178,9 +182,9 @@ class SqlOutboxTx:
         ]
 
     async def mark_published(self, entry_id: UUID, now: datetime) -> None:
-        t = self._table
+        m = self._model
         await self.session.execute(
-            update(t).where(t.c.id == entry_id).values(published_at=now)
+            update(m).where(m.id == entry_id).values(published_at=now)
         )
 
     async def reschedule(
@@ -190,10 +194,10 @@ class SqlOutboxTx:
         next_attempt_at: datetime | None,
         error: str,
     ) -> None:
-        t = self._table
+        m = self._model
         await self.session.execute(
-            update(t)
-            .where(t.c.id == entry_id)
+            update(m)
+            .where(m.id == entry_id)
             .values(
                 attempts=attempts, next_attempt_at=next_attempt_at, last_error=error
             )
@@ -202,7 +206,7 @@ class SqlOutboxTx:
     def _routed(self) -> list[ColumnElement[bool]]:
         if self._routing_keys is None:
             return []
-        column = self._table.c.routing_key
+        column = self._model.routing_key
         return [
             or_(
                 *(
@@ -217,14 +221,14 @@ class SqlOutboxTx:
 
 def sql_transactions(
     sessions: async_sessionmaker[AsyncSession],
-    table: Table,
+    model: type[OutboxColumns],
     *,
     routing_keys: Sequence[str] | None = None,
 ) -> Callable[[], AbstractAsyncContextManager[SqlOutboxTx]]:
     @asynccontextmanager
     async def transaction() -> AsyncIterator[SqlOutboxTx]:
         async with sessions() as session:
-            yield SqlOutboxTx(session, table, routing_keys)
+            yield SqlOutboxTx(session, model, routing_keys)
             await session.commit()  # an error above rolls the session back on close
 
     return transaction

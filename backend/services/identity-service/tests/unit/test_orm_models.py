@@ -1,32 +1,48 @@
-"""Infrastructure mappings preserve table identity and keep domain entities unmapped."""
+"""ORM mappings stay in infrastructure; repositories work in the unit's session."""
 
-from sqlalchemy import inspect
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
 
-from infrastructure.db.models import Base, LoginCodeModel, MemberModel
-from infrastructure.db.tables import login_codes, members, metadata
+from sqlalchemy import Uuid, inspect
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from domain.entities.member import Member
+from domain.value_objects.member_id import MemberId
+from infrastructure.db.models import Base
+from infrastructure.db.unit_of_work import SqlUnitOfWork
+
+NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
-def test_models_share_the_migration_metadata() -> None:
-    assert Base.metadata is metadata
-    assert inspect(MemberModel).local_table is members
-    assert inspect(LoginCodeModel).local_table is login_codes
-    assert inspect(MemberModel).primary_key[0].type.python_type.__name__ == "UUID"
+def test_models_declare_the_service_tables_with_uuid_keys() -> None:
+    assert set(Base.metadata.tables) == {
+        "members",
+        "login_codes",
+        "auth_sessions",
+        "rate_limits",
+        "outbox",
+    }
+    assert isinstance(Base.metadata.tables["members"].c.id.type, Uuid)
+    assert isinstance(Base.metadata.tables["login_codes"].c.member_id.type, Uuid)
 
 
-async def test_uow_attaches_every_repository_to_one_session() -> None:
-    from unittest.mock import AsyncMock, Mock
+def test_domain_entities_are_not_mapped() -> None:
+    assert inspect(Member, raiseerr=False) is None
 
-    from sqlalchemy.ext.asyncio import AsyncSession
 
-    from infrastructure.db.unit_of_work import SqlUnitOfWork
-
+async def test_uow_repositories_work_in_the_units_session() -> None:
     session = AsyncMock(spec=AsyncSession)
+    session.scalars.return_value = Mock(one_or_none=Mock(return_value=None))
     uow = SqlUnitOfWork(Mock(return_value=session))
     async with uow:
-        repositories = [uow.members, uow.login_codes, uow.sessions, uow.outbox]
-        assert all(
-            vars(repository)["_session"] is session for repository in repositories
-        )
+        await uow.members.lock_decisions()
+        assert await uow.members.get(MemberId(uuid4())) is None
+        await uow.login_codes.cancel_active(uuid4(), NOW)
+        await uow.sessions.revoke(uuid4(), NOW)
+
+    assert session.execute.await_count == 3
+    session.scalars.assert_awaited_once()
     session.rollback.assert_awaited_once()
     session.commit.assert_not_awaited()
     session.close.assert_awaited_once()

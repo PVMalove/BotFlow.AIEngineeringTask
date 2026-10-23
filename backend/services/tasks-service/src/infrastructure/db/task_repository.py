@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domain.entities.task import Task
 from domain.value_objects.task_id import TaskId
 from infrastructure.db.models import TaskModel
-from infrastructure.db.task_reader import to_task
+from infrastructure.db.task_mapper import to_task
 
 
 class SqlTaskRepository:
@@ -19,7 +19,9 @@ class SqlTaskRepository:
         self._track = track
 
     async def get(self, task_id: TaskId) -> Task | None:
-        row = await self._session.get(TaskModel, task_id.value)
+        # The status change compares versions: read the committed row, not a copy
+        # cached earlier in this session.
+        row = await self._session.get(TaskModel, task_id.value, populate_existing=True)
         if row is None:
             return None
         task = to_task(row)

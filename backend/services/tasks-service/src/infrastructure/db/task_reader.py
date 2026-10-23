@@ -6,9 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.entities.task import Task
 from domain.value_objects.task_id import TaskId
-from domain.value_objects.task_source import TaskSource
 from domain.value_objects.task_status import TaskStatus
 from infrastructure.db.models import TaskModel
+from infrastructure.db.task_mapper import to_task
 
 
 class SqlTaskReader:
@@ -36,20 +36,3 @@ class SqlTaskReader:
         async with self._sessions() as session:
             row = await session.get(TaskModel, task_id.value)
         return to_task(row) if row else None
-
-
-def to_task(row: TaskModel) -> Task:
-    return Task.reconstitute(
-        TaskId(row.id),
-        text=row.text,
-        status=TaskStatus(row.status),
-        version=row.version,
-        author_id=row.author_id,
-        author_telegram_id=row.author_telegram_id,
-        author_name=row.author_name,
-        source_key=row.source_key,
-        correlation_id=row.correlation_id,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-        source_type=TaskSource(row.source_type) if row.source_type else None,
-    )

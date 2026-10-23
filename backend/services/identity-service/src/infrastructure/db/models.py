@@ -134,6 +134,3 @@ class OutboxModel(Base):
             postgresql_where=published_at.is_(None),
         ),
     )
-
-
-metadata = Base.metadata

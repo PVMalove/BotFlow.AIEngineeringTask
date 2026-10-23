@@ -1,4 +1,3 @@
-import { isAccessDenied } from './errors';
 import {
   Alert,
   Avatar,
@@ -17,6 +16,7 @@ import { useEffect, useState } from 'react';
 
 import { accessPageSize, ApiError, decideAccess, listAccess } from './api';
 import type { AccessAction, AccessList, AdminMember, Member } from './api';
+import { isAccessDenied } from './errors';
 import type { Locale, Messages } from './locale';
 
 function decisionError(error: unknown, messages: Messages): string {
@@ -183,8 +183,7 @@ export function AdminAccess({
         )}
         {members.isError ? (
           <Alert severity="error">
-            {members.error instanceof ApiError &&
-            [401, 403].includes(members.error.status)
+            {isAccessDenied(members.error)
               ? messages.adminDenied
               : messages.accessLoadFailed}
           </Alert>

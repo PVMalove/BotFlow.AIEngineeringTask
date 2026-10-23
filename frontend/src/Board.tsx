@@ -68,7 +68,7 @@ export function Board({
           flexWrap: 'wrap',
         }}
       >
-        <Typography variant="h2">{messages.defaultBoardName}</Typography>
+        <Typography variant="h2">{messages.brandName}</Typography>
         <Button
           color="secondary"
           variant="outlined"
@@ -107,9 +107,11 @@ export function Board({
               onDragStart: () => messages.dragStarted,
               onDragOver: ({ over }) =>
                 over
-                  ? messages.dragOver +
-                    ': ' +
-                    columns.find((column) => column.status === over.id)?.label
+                  ? messages.dragOver.replace(
+                      '{column}',
+                      columns.find((column) => column.status === over.id)
+                        ?.label ?? '',
+                    )
                   : undefined,
               onDragEnd: () => messages.dragEnded,
               onDragCancel: () => messages.dragCancelled,

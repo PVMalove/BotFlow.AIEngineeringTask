@@ -65,6 +65,3 @@ class InboxMessageModel(InboxColumns, Base):
 
 class OutboxModel(OutboxColumns, Base):
     __tablename__ = "outbox"
-
-
-metadata = Base.metadata

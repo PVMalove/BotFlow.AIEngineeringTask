@@ -1,16 +1,32 @@
-"""Infrastructure mappings preserve table identity and keep domain entities unmapped."""
+"""ORM mappings stay in infrastructure; repositories work in the unit's session."""
 
-from sqlalchemy import inspect
+from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
 
+from sqlalchemy import Uuid, inspect
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from domain.entities.job import Job
+from domain.value_objects.intent_id import IntentId
 from infrastructure.db.models import Base, JobModel, VoiceJobModel
-from infrastructure.db.tables import jobs, metadata, voice_jobs
+from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
 
 
-def test_models_share_the_migration_metadata() -> None:
-    assert Base.metadata is metadata
-    assert inspect(JobModel).local_table is jobs
-    assert inspect(VoiceJobModel).local_table is voice_jobs
-    assert inspect(JobModel).primary_key[0].type.python_type.__name__ == "UUID"
+def test_models_declare_the_service_tables_with_uuid_keys() -> None:
+    assert set(Base.metadata.tables) == {
+        "telegram_updates",
+        "jobs",
+        "voice_jobs",
+        "outbox",
+        "inbox_messages",
+        "notification_intents",
+    }
+    assert isinstance(Base.metadata.tables["jobs"].c.id.type, Uuid)
+    assert isinstance(Base.metadata.tables["voice_jobs"].c.job_id.type, Uuid)
+
+
+def test_domain_entities_are_not_mapped() -> None:
+    assert inspect(Job, raiseerr=False) is None
 
 
 def test_voice_is_an_explicit_one_to_one_relationship() -> None:
@@ -20,20 +36,18 @@ def test_voice_is_an_explicit_one_to_one_relationship() -> None:
     assert relation.back_populates == "job"
 
 
-async def test_uow_attaches_every_repository_to_one_session() -> None:
-    from unittest.mock import AsyncMock, Mock
-
-    from sqlalchemy.ext.asyncio import AsyncSession
-
-    from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
-
+async def test_uow_repositories_work_in_the_units_session() -> None:
     session = AsyncMock(spec=AsyncSession)
+    session.execute.return_value = Mock(scalar_one_or_none=Mock(return_value=None))
+    session.scalars.return_value = Mock(one_or_none=Mock(return_value=None))
     uow = SqlAutomationUnitOfWork(Mock(return_value=session))
     async with uow:
-        repositories = [uow.jobs, uow.intents, uow.inbox]
-        assert all(
-            vars(repository)["_session"] is session for repository in repositories
-        )
+        await uow.jobs.lock_acceptance()
+        assert await uow.inbox.claim("message") is False
+        assert await uow.intents.get(IntentId(uuid4())) is None
+
+    assert session.execute.await_count == 2
+    session.scalars.assert_awaited_once()
     session.rollback.assert_awaited_once()
     session.commit.assert_not_awaited()
     session.close.assert_awaited_once()

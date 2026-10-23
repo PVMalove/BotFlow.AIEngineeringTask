@@ -1,4 +1,4 @@
-"""Identity persistence adapter, used within the caller's session."""
+"""One-time login codes in PostgreSQL, used in the unit of work's session."""
 
 from datetime import datetime
 from uuid import UUID
@@ -7,9 +7,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.entities.login_code import LoginCode
-from infrastructure.db.models import (
-    LoginCodeModel,
-)
+from infrastructure.db.models import LoginCodeModel
 
 
 class SqlLoginCodes:

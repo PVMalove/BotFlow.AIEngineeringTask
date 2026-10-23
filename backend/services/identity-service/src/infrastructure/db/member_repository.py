@@ -1,9 +1,9 @@
-"""Identity persistence adapter, used within the caller's session."""
+"""Members in PostgreSQL, read and written in the unit of work's session."""
 
 from collections.abc import Callable
 
 from kernel_domain.entity import Entity
-from sqlalchemy import func, select, update
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,10 +11,7 @@ from domain.entities.member import Member
 from domain.value_objects.member_id import MemberId
 from domain.value_objects.member_status import MemberStatus
 from domain.value_objects.role import Role
-from infrastructure.db.models import (
-    LoginCodeModel,
-    MemberModel,
-)
+from infrastructure.db.models import LoginCodeModel, MemberModel
 
 # Serializes access decisions independently of the migration lock.
 _DECISION_LOCK_KEY = 7_204_122
@@ -48,17 +45,13 @@ class SqlMembers:
 
     async def get(self, member_id: MemberId, *, lock: bool = False) -> Member | None:
         query = select(MemberModel).where(MemberModel.id == member_id.value)
-        if lock:
-            query = query.with_for_update()
-        return self._loaded((await self._session.scalars(query)).one_or_none())
+        return await self._one(query, lock=lock)
 
     async def get_by_telegram_id(
         self, telegram_id: int, *, lock: bool = False
     ) -> Member | None:
         query = select(MemberModel).where(MemberModel.telegram_id == telegram_id)
-        if lock:
-            query = query.with_for_update()
-        return self._loaded((await self._session.scalars(query)).one_or_none())
+        return await self._one(query, lock=lock)
 
     async def get_by_login_code(
         self, code_hash: str, *, lock: bool = False
@@ -68,9 +61,7 @@ class SqlMembers:
             .join(LoginCodeModel, LoginCodeModel.member_id == MemberModel.id)
             .where(LoginCodeModel.code_hash == code_hash)
         )
-        if lock:
-            query = query.with_for_update(of=MemberModel)
-        return self._loaded((await self._session.scalars(query)).one_or_none())
+        return await self._one(query, lock=lock)
 
     async def lock_decisions(self) -> None:
         await self._session.execute(
@@ -121,7 +112,14 @@ class SqlMembers:
         self._track(member)  # its events are staged by the commit
         return True
 
-    def _loaded(self, row: MemberModel | None) -> Member | None:
+    async def _one(self, query: Select[MemberModel], *, lock: bool) -> Member | None:
+        if lock:
+            # A locked read must see the committed row, not a copy cached earlier
+            # in this session.
+            query = query.with_for_update(of=MemberModel).execution_options(
+                populate_existing=True
+            )
+        row = (await self._session.scalars(query)).one_or_none()
         return _member(row) if row else None
 
 

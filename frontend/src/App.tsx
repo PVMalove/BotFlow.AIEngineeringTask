@@ -56,12 +56,10 @@ export default function App() {
                   fontWeight: 600,
                 }}
               >
-                B.
+                {messages.brandMark}
               </Box>
               <Box sx={{ minWidth: 0 }}>
-                <Typography variant="h1">
-                  {messages.defaultBoardName}
-                </Typography>
+                <Typography variant="h1">{messages.brandName}</Typography>
               </Box>
             </Stack>
             <ToggleButtonGroup
@@ -106,7 +104,7 @@ export default function App() {
                 aria-label={messages.languageRussian}
                 title={messages.languageRussian}
               >
-                RU
+                {messages.languageRussianShort}
               </ToggleButton>
               <ToggleButton
                 value="hy"
@@ -114,7 +112,7 @@ export default function App() {
                 aria-label={messages.languageArmenian}
                 title={messages.languageArmenian}
               >
-                ՀԱՅ
+                {messages.languageArmenianShort}
               </ToggleButton>
             </ToggleButtonGroup>
           </Stack>

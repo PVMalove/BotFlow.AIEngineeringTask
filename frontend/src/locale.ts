@@ -3,16 +3,24 @@ import { useEffect, useState } from 'react';
 export type Locale = 'ru' | 'hy';
 export type Messages = (typeof messages)['ru'];
 
+// Endonyms and the brand are not translated: both dictionaries share them.
+const shared = {
+  brandName: 'BotFlow',
+  brandMark: 'B.',
+  sourceTelegram: 'Telegram',
+  languageRussian: 'Русский',
+  languageRussianShort: 'RU',
+  languageArmenian: 'Հայերեն',
+  languageArmenianShort: 'ՀԱՅ',
+};
+
 const messages = {
   ru: {
+    ...shared,
     connecting: 'Подключаемся к обновлениям…',
     connected: 'Обновления подключены',
     reconnecting: 'Восстанавливаем связь. Доска обновляется периодически.',
     denied: 'Обновления приостановлены. Проверяем доступ.',
-    defaultBoardName: 'BotFlow',
-    sourceTelegram: 'Telegram',
-    languageRussian: 'Русский',
-    languageArmenian: 'Հայերեն',
     taskDetails: 'Задача',
     taskStatus: 'Статус',
     taskSource: 'Источник',
@@ -38,7 +46,7 @@ const messages = {
     dragInstructions:
       'Перетащите ручку мышью или касанием. Escape отменяет перенос. Для изменения статуса с клавиатуры откройте окно задачи.',
     dragStarted: 'Перенос начат.',
-    dragOver: 'Целевая колонка',
+    dragOver: 'Целевая колонка: {column}',
     dragEnded: 'Перенос завершён.',
     dragCancelled: 'Перенос отменён.',
     loadedCount: 'Число загруженных записей; + — общий итог пока неизвестен.',
@@ -129,14 +137,11 @@ const messages = {
     teamDescription: 'Общая картина работы для всей команды.',
   },
   hy: {
+    ...shared,
     connecting: 'Միանում ենք թարմացումներին…',
     connected: 'Թարմացումները միացված են',
     reconnecting: 'Վերականգնում ենք կապը։ Վահանակը պարբերաբար թարմացվում է։',
     denied: 'Թարմացումները դադարեցված են։ Ստուգում ենք մուտքը։',
-    defaultBoardName: 'BotFlow',
-    sourceTelegram: 'Telegram',
-    languageRussian: 'Русский',
-    languageArmenian: 'Հայերեն',
     taskDetails: 'Առաջադրանք',
     taskStatus: 'Կարգավիճակ',
     taskSource: 'Աղբյուր',
@@ -162,7 +167,7 @@ const messages = {
     dragInstructions:
       'Տեղափոխեք բռնակը մկնիկով կամ հպումով։ Escape-ը չեղարկում է տեղափոխումը։ Ստեղնաշարով կարգավիճակը փոխելու համար բացեք առաջադրանքի պատուհանը։',
     dragStarted: 'Տեղափոխումը սկսված է։',
-    dragOver: 'Նպատակային սյունակ',
+    dragOver: 'Նպատակային սյունակը․ {column}',
     dragEnded: 'Տեղափոխումն ավարտված է։',
     dragCancelled: 'Տեղափոխումը չեղարկված է։',
     loadedCount:

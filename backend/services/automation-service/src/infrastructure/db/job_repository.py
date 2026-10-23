@@ -65,75 +65,79 @@ class SqlJobRepository:
     async def get(self, job_id: JobId, *, lock: bool = False) -> Job | None:
         query = _select_job().where(JobModel.id == job_id.value)
         if lock:
-            query = query.with_for_update(of=JobModel)
+            # A locked read must see the committed row, not a copy cached earlier
+            # in this session.
+            query = query.with_for_update(of=JobModel).execution_options(
+                populate_existing=True
+            )
         row = (await self._session.scalars(query)).one_or_none()
         return _job(row) if row else None
 
     async def add(self, job: Job) -> None:
-        model = JobModel(
-            id=job.id.value,
-            bot_id=job.bot_id,
-            chat_id=job.chat_id,
-            message_id=job.message_id,
-            author_id=job.author_id,
-            author_telegram_id=job.author_telegram_id,
-            author_name=job.author_name,
-            text=job.text,
-            kind=job.kind.value,
-            status=job.status.value,
-            message_date=job.message_date,
-            received_at=job.received_at,
-            created_at=job.created_at,
-            updated_at=job.updated_at,
-        )
+        model = JobModel(id=job.id.value)
+        _write_job(model, job)
         if job.voice is not None:
-            model.voice = VoiceJobModel(
-                job_id=job.id.value,
-                file_id=job.voice.file_id,
-                file_unique_id=job.voice.file_unique_id,
-                duration_seconds=job.voice.duration_seconds,
-                file_size_bytes=job.voice.file_size_bytes,
-                mime_type=job.voice.mime_type,
-                stage=job.voice.stage.value,
-            )
+            model.voice = VoiceJobModel(job_id=job.id.value)
+            _write_voice(model.voice, job.voice)
         self._session.add(model)
         await self._session.flush()
         self._track(job)
 
     async def update(self, job: Job) -> None:
-        model = (
-            await self._session.scalars(
-                _select_job().where(JobModel.id == job.id.value)
-            )
-        ).one_or_none()
+        # The row is already in this session when the caller took `get(lock=True)`.
+        model = await self._session.get(
+            JobModel, job.id.value, options=[joinedload(JobModel.voice)]
+        )
         if model is not None:
-            model.text = job.text
-            model.status = job.status.value
-            model.task_id = job.task_id
-            model.last_error = job.last_error
-            model.acked_at = job.acked_at
-            model.updated_at = job.updated_at
-            voice = job.voice
-            stored = model.voice
-            if voice is not None and stored is not None:
-                stored.stage = voice.stage.value
-                stored.s3_key = voice.s3_key
-                stored.audio_bytes = voice.audio_bytes
-                stored.audio_sha256 = voice.audio_sha256
-                stored.language = voice.language
-                stored.error_code = voice.error_code
-                stored.attempts = voice.attempts
-                stored.cold_start = voice.cold_start
-                stored.started_at = voice.started_at
-                stored.stored_at = voice.stored_at
-                stored.stt_started_at = voice.stt_started_at
-                stored.stt_finished_at = voice.stt_finished_at
+            _write_job(model, job)
+            if job.voice is not None and model.voice is not None:
+                _write_voice(model.voice, job.voice)
             await self._session.flush()
         self._track(job)
 
 
 def _select_job() -> Select[JobModel]:
     return select(JobModel).options(joinedload(JobModel.voice))
+
+
+def _write_job(model: JobModel, job: Job) -> None:
+    """Copy the aggregate onto its row; unchanged attributes issue no UPDATE."""
+    model.bot_id = job.bot_id
+    model.chat_id = job.chat_id
+    model.message_id = job.message_id
+    model.author_id = job.author_id
+    model.author_telegram_id = job.author_telegram_id
+    model.author_name = job.author_name
+    model.text = job.text
+    model.kind = job.kind.value
+    model.status = job.status.value
+    model.task_id = job.task_id
+    model.last_error = job.last_error
+    model.message_date = job.message_date
+    model.received_at = job.received_at
+    model.acked_at = job.acked_at
+    model.created_at = job.created_at
+    model.updated_at = job.updated_at
+
+
+def _write_voice(model: VoiceJobModel, voice: VoiceMessage) -> None:
+    model.file_id = voice.file_id
+    model.file_unique_id = voice.file_unique_id
+    model.duration_seconds = voice.duration_seconds
+    model.file_size_bytes = voice.file_size_bytes
+    model.mime_type = voice.mime_type
+    model.stage = voice.stage.value
+    model.s3_key = voice.s3_key
+    model.audio_bytes = voice.audio_bytes
+    model.audio_sha256 = voice.audio_sha256
+    model.language = voice.language
+    model.error_code = voice.error_code
+    model.attempts = voice.attempts
+    model.cold_start = voice.cold_start
+    model.started_at = voice.started_at
+    model.stored_at = voice.stored_at
+    model.stt_started_at = voice.stt_started_at
+    model.stt_finished_at = voice.stt_finished_at
 
 
 def _job(row: JobModel) -> Job:

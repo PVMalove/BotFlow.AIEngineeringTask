@@ -12,6 +12,7 @@ import {
   type TaskPage,
   type TaskStatus,
 } from './api';
+import { isAccessDenied } from './errors';
 import { boardTasks } from './tasks';
 
 export type BoardConnection =
@@ -126,11 +127,7 @@ export function startBoardRealtime(
         const refused = client
           .getQueryCache()
           .findAll({ queryKey })
-          .some(
-            ({ state }) =>
-              state.error instanceof ApiError &&
-              [401, 403].includes(state.error.status),
-          );
+          .some(({ state }) => isAccessDenied(state.error));
         if (refused) {
           deny();
           void client.invalidateQueries({ queryKey: ['session'] });

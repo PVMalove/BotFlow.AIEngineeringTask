@@ -1,30 +1,15 @@
-import { isAccessDenied } from './errors';
-import { PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import type {
-  DragEndEvent,
-  DragStartEvent,
-  DragOverEvent,
-} from '@dnd-kit/core';
-import {
-  skipToken,
-  useInfiniteQuery,
-  useQuery,
-  useQueryClient,
-} from '@tanstack/react-query';
+import { skipToken, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { InfiniteData } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ApiError, changeTaskStatus, getTask } from './api';
 import type { Member, Task, TaskPage, TaskStatus } from './api';
+import { knownBoardTasks } from './boardRealtime';
+import { classifySaveError, isAccessDenied } from './errors';
 import type { Messages } from './locale';
 import { boardTasks } from './tasks';
-import { boardColumnOptions, knownBoardTasks } from './boardRealtime';
+import { useBoardColumns } from './useBoardColumns';
+import { useBoardDrag } from './useBoardDrag';
 import { useBoardRealtime } from './useBoardRealtime';
-
-function useTaskColumn(memberId: string, status: TaskStatus) {
-  return useInfiniteQuery(
-    boardColumnOptions(useQueryClient(), memberId, status),
-  );
-}
 
 type Notice =
   | 'taskConflict'
@@ -46,18 +31,7 @@ export function useBoard(member: Member, messages: Messages) {
   const client = useQueryClient();
   const { connection, refresh } = useBoardRealtime(member.id);
   const key = ['tasks', member.id];
-  const pending = useTaskColumn(member.id, 'pending');
-  const inProgress = useTaskColumn(member.id, 'in_progress');
-  const completed = useTaskColumn(member.id, 'completed');
-  const columns = [
-    { status: 'pending', label: messages.taskPending, query: pending },
-    {
-      status: 'in_progress',
-      label: messages.taskInProgress,
-      query: inProgress,
-    },
-    { status: 'completed', label: messages.taskCompleted, query: completed },
-  ] as const;
+  const { columns, refused } = useBoardColumns(member.id, messages);
   const [opened, setOpened] = useState<Task | null>(null);
   const [selected, setSelected] = useState<TaskStatus>('pending');
   // This session-scoped state must survive Board unmounting during navigation.
@@ -75,19 +49,23 @@ export function useBoard(member: Member, messages: Messages) {
   const notice = operation?.notice ?? localNotice;
   const setOperation = (next: TaskOperation | null) =>
     client.setQueryData(operationKey, next);
-  const [dragged, setDragged] = useState<Task | null>(null);
-  const [over, setOver] = useState<string | null>(null);
-  const suppressClick = useRef(false);
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
-  );
   const mayEdit = (task: Task) =>
     member.role === 'admin' || member.id === task.author_id;
-  const denied =
-    connection === 'denied' ||
-    [pending.error, inProgress.error, completed.error].some((error) =>
-      isAccessDenied(error),
-    );
+  const {
+    dragged,
+    over,
+    sensors,
+    startDrag,
+    overDrag,
+    cancelDrag,
+    endDrag,
+    isClickSuppressed,
+    activateTask,
+  } = useBoardDrag(
+    columns.map(({ status }) => status),
+    (task, target) => void save(task, target),
+  );
+  const denied = connection === 'denied' || refused;
   useEffect(() => {
     if (denied && connection !== 'denied')
       void client.invalidateQueries({ queryKey: ['session'] });
@@ -133,12 +111,13 @@ export function useBoard(member: Member, messages: Messages) {
       setOperation(null);
   }
 
-  function putTask(task: Task | null, id: string) {
+  function putTask(incoming: Task | null, id: string) {
     // A delayed mutation/GET must not replace a newer REST (or future WS) version.
     const known = knownBoardTasks(client, member.id).find(
       (item) => item.id === id,
     );
-    if (task && known && known.version > task.version) task = known;
+    const task =
+      incoming && known && known.version > incoming.version ? known : incoming;
     for (const { status } of columns) {
       client.setQueryData<InfiniteData<TaskPage>>(
         [...key, status],
@@ -209,30 +188,31 @@ export function useBoard(member: Member, messages: Messages) {
       await client.invalidateQueries({ queryKey: key });
     } catch (error) {
       if (!ownsOperation(attempt)) return;
-      if (error instanceof ApiError && error.status === 409) {
-        await reconcile(attempt, 'taskConflict');
-      } else if (
-        !(error instanceof ApiError) ||
-        error.status === 0 ||
-        error.status >= 500
-      ) {
-        await reconcile(attempt, 'taskUnknown');
-      } else if (error.status === 403) {
-        await reconcile(attempt, 'accessDenied');
-        if (ownsOperation(attempt))
+      switch (classifySaveError(error)) {
+        case 'conflict':
+          await reconcile(attempt, 'taskConflict');
+          break;
+        case 'unknown':
+          await reconcile(attempt, 'taskUnknown');
+          break;
+        case 'forbidden':
+          await reconcile(attempt, 'accessDenied');
+          if (ownsOperation(attempt))
+            void client.invalidateQueries({ queryKey: ['session'] });
+          break;
+        case 'missing':
+          await reconcile(attempt, 'taskMissing');
+          break;
+        case 'unauthorized':
+          setNotice('accessDenied');
           void client.invalidateQueries({ queryKey: ['session'] });
-      } else if (error.status === 404) {
-        await reconcile(attempt, 'taskMissing');
-      } else {
-        setNotice(
-          isAccessDenied(error)
-            ? 'accessDenied'
-            : error.status === 429
-              ? 'rateLimited'
-              : 'taskSaveFailed',
-        );
-        if (isAccessDenied(error))
-          void client.invalidateQueries({ queryKey: ['session'] });
+          break;
+        case 'rateLimited':
+          setNotice('rateLimited');
+          break;
+        case 'failed':
+          setNotice('taskSaveFailed');
+          break;
       }
     } finally {
       finishOperation(attempt);
@@ -250,36 +230,9 @@ export function useBoard(member: Member, messages: Messages) {
     }
   }
 
-  function endDrag(event: DragEndEvent) {
-    setDragged(null);
-    setOver(null);
-    // Reset only on the next user activation; the trailing click stays suppressed.
-    suppressClick.current = true;
-    const task = dragged;
-    const target = columns.find(
-      (column) => column.status === event.over?.id,
-    )?.status;
-    if (task && target && task.status !== target) void save(task, target);
-  }
-
-  function startDrag({ active }: DragStartEvent) {
-    setDragged(active.data.current?.task as Task);
-    suppressClick.current = true;
-  }
-
-  function overDrag({ over }: DragOverEvent) {
-    setOver(over ? String(over.id) : null);
-  }
-
-  function cancelDrag() {
-    setDragged(null);
-    setOver(null);
-    suppressClick.current = true;
-  }
-
   function openTask(task: Task) {
     if (
-      suppressClick.current ||
+      isClickSuppressed() ||
       busy ||
       (blocked && operation?.task.id !== task.id)
     )
@@ -313,8 +266,6 @@ export function useBoard(member: Member, messages: Messages) {
     overDrag,
     cancelDrag,
     openTask,
-    activateTask: () => {
-      suppressClick.current = false;
-    },
+    activateTask,
   };
 }

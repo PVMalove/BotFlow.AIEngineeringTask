@@ -1,32 +1,38 @@
-"""Infrastructure mappings preserve table identity and keep domain entities unmapped."""
+"""ORM mappings stay in infrastructure; repositories work in the unit's session."""
 
-from sqlalchemy import inspect
+from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
 
-from infrastructure.db.models import Base, InboxMessageModel, TaskModel
-from infrastructure.db.tables import inbox_messages, metadata, tasks
+from sqlalchemy import Uuid, inspect
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from domain.entities.task import Task
+from domain.value_objects.task_id import TaskId
+from infrastructure.db.models import Base
+from infrastructure.db.unit_of_work import SqlTasksUnitOfWork
 
 
-def test_models_share_the_migration_metadata() -> None:
-    assert Base.metadata is metadata
-    assert inspect(TaskModel).local_table is tasks
-    assert inspect(InboxMessageModel).local_table is inbox_messages
-    assert inspect(TaskModel).primary_key[0].type.python_type.__name__ == "UUID"
+def test_models_declare_the_service_tables_with_uuid_keys() -> None:
+    assert set(Base.metadata.tables) == {"tasks", "inbox_messages", "outbox"}
+    assert isinstance(Base.metadata.tables["tasks"].c.id.type, Uuid)
+    assert isinstance(Base.metadata.tables["outbox"].c.id.type, Uuid)
 
 
-async def test_uow_attaches_every_repository_to_one_session() -> None:
-    from unittest.mock import AsyncMock, Mock
+def test_domain_entities_are_not_mapped() -> None:
+    assert inspect(Task, raiseerr=False) is None
 
-    from sqlalchemy.ext.asyncio import AsyncSession
 
-    from infrastructure.db.unit_of_work import SqlTasksUnitOfWork
-
+async def test_uow_repositories_work_in_the_units_session() -> None:
     session = AsyncMock(spec=AsyncSession)
+    session.get.return_value = None
+    session.execute.return_value = Mock(scalar_one_or_none=Mock(return_value=None))
     uow = SqlTasksUnitOfWork(Mock(return_value=session))
     async with uow:
-        repositories = [uow.tasks, uow.inbox]
-        assert all(
-            vars(repository)["_session"] is session for repository in repositories
-        )
+        assert await uow.tasks.get(TaskId(uuid4())) is None
+        assert await uow.inbox.claim("message") is False
+
+    session.get.assert_awaited_once()
+    session.execute.assert_awaited_once()
     session.rollback.assert_awaited_once()
     session.commit.assert_not_awaited()
     session.close.assert_awaited_once()
