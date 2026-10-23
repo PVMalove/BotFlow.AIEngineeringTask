@@ -30,10 +30,14 @@ from api.containers import (
     build_task_flow,
     build_voice_flow,
 )
+from application.commands.replay_job import (
+    ReplayJobCommand,
+    ReplayJobCommandHandler,
+    ReplayOutcome,
+)
 from application.commands.transcribe_voice import TranscribeVoiceCommandHandler
 from application.queries.job_status import render, view_of
 from infrastructure.db.job_status_reader import read_job_status
-from infrastructure.db.replay import replay_job, replay_voice_job
 from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
 from infrastructure.identity_gateway import HttpIdentityGateway
 from infrastructure.s3_audio import S3AudioStore
@@ -135,17 +139,16 @@ async def replay(job_id: UUID) -> None:
     container = Container()
     try:
         database = await container.database.async_()
-        # A failed voice job runs again from its stored audio; any other job
-        # has its unpublished CreateTask made due again.
-        replayed = await replay_voice_job(
-            database.sessions, job_id
-        ) or await replay_job(database.sessions, job_id)
+        handler = ReplayJobCommandHandler(
+            lambda: SqlAutomationUnitOfWork(database.sessions)
+        )
+        result = await handler.execute(ReplayJobCommand(job_id))
     finally:
         await shutdown(container)
-    if not replayed:
-        raise SystemExit(
-            "Nothing to replay: no failed voice job or unpublished CreateTask."
-        )
+    if result.is_err:
+        raise SystemExit(result.error.description)
+    if result.value is ReplayOutcome.UNCHANGED:
+        raise SystemExit("Nothing to replay: the job has not failed (or is replayed).")
     print("The job is due again.")
 
 

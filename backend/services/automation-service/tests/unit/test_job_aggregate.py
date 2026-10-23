@@ -236,3 +236,15 @@ def test_the_limits_refuse_the_common_cap_before_the_voice_cap() -> None:
     refusal = limits.check(JobCounts(5, 2, 10, 2), voice=True)
     assert refusal is not None and refusal.code == "voice_limit"
     assert limits.check(JobCounts(5, 2, 10, 2), voice=False) is None
+
+
+def test_a_restarted_delivery_forgets_the_old_error_and_names_its_event() -> None:
+    job = text_job()
+    job.fail_delivery("exhausted", LATER)
+    job.pull_events()
+
+    assert job.restart_delivery(LATER) is True
+
+    assert job.last_error is None
+    (event,) = job.pull_events()
+    assert isinstance(event, JobRestarted) and event.voice is False

@@ -24,6 +24,7 @@ from infrastructure.db.intent_repository import SqlIntentRepository
 from infrastructure.db.tables import notification_intents, outbox
 from infrastructure.messaging.envelopes import (
     create_task_envelope,
+    outbox_id_for,
     transcribe_envelope,
     transcribe_outbox_id_for,
 )
@@ -101,6 +102,16 @@ async def stage_automation_event(session: AsyncSession, event: DomainEvent) -> N
                     next_attempt_at=now,
                     last_error=None,
                 )
+            )
+        case JobRestarted():
+            # Same row, same id; only a row nobody has published yet is made due.
+            await session.execute(
+                update(outbox)
+                .where(
+                    outbox.c.id == outbox_id_for(event.job_id.value),
+                    outbox.c.published_at.is_(None),
+                )
+                .values(attempts=0, next_attempt_at=now, last_error=None)
             )
         case _:
             return

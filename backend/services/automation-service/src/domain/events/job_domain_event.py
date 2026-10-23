@@ -89,7 +89,10 @@ class VoiceJobFailed(JobEvent):
 
 @dataclass(frozen=True, kw_only=True)
 class JobRestarted(JobEvent):
-    """A failed job runs again: its stale failure notice and outbox row are reset."""
+    """A failed job runs again: its stale failure notice and outbox row are reset.
+
+    `voice` tells which row is reset: TranscribeVoice (voice) or CreateTask.
+    """
 
     event_type: str = "job.restarted"
 

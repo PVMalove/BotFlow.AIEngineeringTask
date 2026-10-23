@@ -30,10 +30,14 @@ from application.commands.accept_text import (
 from application.commands.handle_bot_command import HandleBotCommandDto
 from application.commands.job_acceptance import AcceptOutcome, JobAcceptance
 from application.commands.record_task_result import RecordTaskResultCommandHandler
+from application.commands.replay_job import (
+    ReplayJobCommand,
+    ReplayJobCommandHandler,
+    ReplayOutcome,
+)
 from domain.entities.job import Job
 from domain.value_objects.job_id import JobId
 from infrastructure.db.relay_hooks import fail_job
-from infrastructure.db.replay import replay_job
 from infrastructure.db.tables import outbox
 from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
 from infrastructure.identity_gateway import HttpIdentityGateway
@@ -637,7 +641,7 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
             k=TASK_CREATE_ROUTING_KEY,
             id=entry,
         )
-        self.assertTrue(await replay_job(self.automation_db.sessions, job_id))
+        self.assertEqual(await self.replay(job_id), ReplayOutcome.REPLAYED)
         self.assertEqual((await self.job(AUTHOR_B, 10))[1], "accepted")
 
         async def completed() -> bool:
@@ -645,7 +649,7 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
 
         await self.pump(flow, pipeline, completed)
         self.assertEqual(len(await self.tasks_with_text("Позвонить маме")), 1)
-        self.assertFalse(await replay_job(self.automation_db.sessions, job_id))
+        self.assertEqual(await self.replay(job_id), ReplayOutcome.UNCHANGED)
 
         # Another copy of the same command (a new message id) makes no second task.
         resends = ConfirmedPublisher(resources.rabbitmq, declare_task_topology)
@@ -675,6 +679,12 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.2)
         self.assertTrue(await copy_consumed())
         self.assertEqual(len(await self.tasks_with_text("Позвонить маме")), 1)
+
+    async def replay(self, job_id: UUID) -> ReplayOutcome:
+        result = await ReplayJobCommandHandler(self.uow).execute(
+            ReplayJobCommand(job_id)
+        )
+        return result.value
 
     async def rows_exec(self, statement: str, **params: object) -> None:
         async with self.automation_db.sessions() as session:
