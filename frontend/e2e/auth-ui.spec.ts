@@ -12,7 +12,10 @@ test('validates an empty or malformed code locally in both languages', async ({
   page,
 }) => {
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ status: 401, json: { detail: 'unauthenticated' } }),
+    route.fulfill({
+      status: 401,
+      json: { error: { code: 'unauthenticated', message: 'unauthenticated' } },
+    }),
   );
   const exchanges: string[] = [];
   page.on('request', (request) => {
@@ -60,14 +63,24 @@ for (const failure of [
     page,
   }) => {
     await page.route('**/api/v1/users/me', (route) =>
-      route.fulfill({ status: 401, json: { detail: 'unauthenticated' } }),
+      route.fulfill({
+        status: 401,
+        json: {
+          error: { code: 'unauthenticated', message: 'unauthenticated' },
+        },
+      }),
     );
     await page.route('**/api/v1/auth/exchange', (route) =>
       failure.status === 0
         ? route.abort('failed')
         : route.fulfill({
             status: failure.status,
-            json: { detail: 'private-server-detail' },
+            json: {
+              error: {
+                code: 'private-server-detail',
+                message: 'private-server-detail',
+              },
+            },
           }),
     );
     await page.goto('/login');
@@ -85,7 +98,10 @@ test('requires login when a protected route has no session', async ({
   page,
 }) => {
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ status: 401, json: { detail: 'unauthenticated' } }),
+    route.fulfill({
+      status: 401,
+      json: { error: { code: 'unauthenticated', message: 'unauthenticated' } },
+    }),
   );
 
   await page.goto('/');
@@ -108,8 +124,13 @@ test('returns to login when the active session is revoked', async ({
   await page.route('**/api/v1/users/me', (route) =>
     route.fulfill(
       revoked
-        ? { status: 401, json: { detail: 'unauthenticated' } }
-        : { json: member },
+        ? {
+            status: 401,
+            json: {
+              error: { code: 'unauthenticated', message: 'unauthenticated' },
+            },
+          }
+        : { json: { data: member, meta: {} } },
     ),
   );
   await page.goto('/');
@@ -136,8 +157,16 @@ test('hides cached protected content on Identity failure and allows a retry', as
   await page.route('**/api/v1/users/me', (route) =>
     route.fulfill(
       unavailable
-        ? { status: 503, json: { detail: 'identity_unavailable' } }
-        : { json: member },
+        ? {
+            status: 503,
+            json: {
+              error: {
+                code: 'identity_unavailable',
+                message: 'identity_unavailable',
+              },
+            },
+          }
+        : { json: { data: member, meta: {} } },
     ),
   );
   await page.goto('/');
@@ -170,12 +199,17 @@ test('shows a safe invalid-code error and translates it without losing the form'
   page,
 }) => {
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ status: 401, json: { detail: 'unauthenticated' } }),
+    route.fulfill({
+      status: 401,
+      json: { error: { code: 'unauthenticated', message: 'unauthenticated' } },
+    }),
   );
   await page.route('**/api/v1/auth/exchange', (route) =>
     route.fulfill({
       status: 401,
-      json: { detail: 'invalid_code', debug: 'private-server-detail' },
+      json: {
+        error: { code: 'invalid_code', message: 'private-server-detail' },
+      },
     }),
   );
   await page.goto('/login');
@@ -201,14 +235,19 @@ test('exchanges a code, restores the session and logs out in the selected langua
   await page.route('**/api/v1/users/me', (route) =>
     route.fulfill(
       signedIn
-        ? { json: member }
-        : { status: 401, json: { detail: 'unauthenticated' } },
+        ? { json: { data: member, meta: {} } }
+        : {
+            status: 401,
+            json: {
+              error: { code: 'unauthenticated', message: 'unauthenticated' },
+            },
+          },
     ),
   );
   await page.route('**/api/v1/auth/exchange', async (route) => {
     expect(route.request().postDataJSON()).toEqual({ code: 'a'.repeat(32) });
     signedIn = true;
-    await route.fulfill({ json: member });
+    await route.fulfill({ json: { data: member, meta: {} } });
   });
   await page.route('**/api/v1/auth/logout', async (route) => {
     expect(route.request().method()).toBe('POST');

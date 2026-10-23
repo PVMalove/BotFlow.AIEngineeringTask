@@ -33,7 +33,7 @@ test('logs in through real Identity, restores the bilingual session and logs out
   expect(cookie?.sameSite).toBe('Strict');
   const me = await page.request.get('/api/v1/users/me');
   expect(me.status()).toBe(200);
-  const current = await me.json();
+  const current = (await me.json()).data;
   expect(current.role).toBe('admin');
   await expect(page.getByRole('navigation')).toContainText(
     current.display_name ?? 'Անունը նշված չէ',

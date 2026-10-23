@@ -16,11 +16,13 @@ async def test_find_member_reads_the_stable_member_id() -> None:
         return httpx.Response(
             200,
             json={
-                "id": str(member_id),
-                "telegram_id": USER,
-                "role": "member",
-                "status": "approved",
-                "access_version": 3,
+                "data": {
+                    "id": str(member_id),
+                    "telegram_id": USER,
+                    "role": "member",
+                    "status": "approved",
+                    "access_version": 3,
+                }
             },
         )
 

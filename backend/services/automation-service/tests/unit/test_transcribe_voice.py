@@ -1,17 +1,18 @@
-"""TranscribeVoice: every stage and error branch against in-memory fakes."""
+"""TranscribeVoiceCommandHandler: every stage and error branch, in memory."""
 
 import hashlib
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from botflow_platform.retry import RetryPolicy
+from conftest import NOW, Log, LoggedUnitOfWork, World
+from kernel_platform.retry import RetryPolicy
 
 from application.commands.transcribe_voice import (
-    FAILURES,
     TranscribeOutcome,
-    TranscribeVoice,
+    TranscribeVoiceCommand,
+    TranscribeVoiceCommandHandler,
 )
 from application.ports import (
     AudioMissing,
@@ -19,117 +20,44 @@ from application.ports import (
     AudioTooLong,
     CorruptedAudio,
     EmptyAudio,
-    OutboxMessage,
     StuckWorkerError,
     TelegramFileUnavailable,
     Transcript,
     TranscriptionTimeout,
     TransientIoError,
-    VoiceWork,
 )
-from domain.jobs import outbox_id_for
+from domain.entities.job import Job
+from domain.entities.voice_message import VoiceMessage
+from domain.notices import VOICE_FAILURES
+from domain.value_objects.intent_id import IntentId
+from domain.value_objects.job_id import JobId
+from domain.value_objects.job_status import JobStatus, VoiceStage
+from infrastructure.messaging.envelopes import outbox_id_for
 
-NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-JOB_ID = uuid4()
 AUTHOR_ID = uuid4()
+CHAT = 4_200_000_001
 AUDIO = b"OggS-audio-bytes"
 
 
-def work(**overrides: Any) -> VoiceWork:
-    values: dict[str, Any] = dict(
-        job_id=JOB_ID,
+def voice_job(message_id: int = 7, **voice: Any) -> Job:
+    job = Job.accept_voice(
+        VoiceMessage("AwACfile", "uniq", 12, 48_000, "audio/ogg", **voice),
         bot_id=123,
-        chat_id=4_200_000_001,
-        message_id=7,
+        chat_id=CHAT,
+        message_id=message_id,
         author_id=AUTHOR_ID,
-        author_telegram_id=4_200_000_001,
+        author_telegram_id=CHAT,
         author_name="Ann (@ann)",
+        message_date=NOW,
         received_at=NOW,
-        file_id="AwACfile",
-        mime_type="audio/ogg",
-        stage="queued",
-        s3_key=None,
-        attempts=1,
+        now=NOW,
     )
-    values.update(overrides)
-    return VoiceWork(**values)
+    job.pull_events()  # accepted long ago: its CreateTask hand-off is not under test
+    return job
 
 
-class Log:
-    def __init__(self) -> None:
-        self.events: list[str] = []
-
-
-class Store:
-    def __init__(self, log: Log) -> None:
-        self.log = log
-        self.work: VoiceWork | None = work()
-        self.begin_error: Exception | None = None
-        self.begins: list[tuple[UUID, datetime, bool]] = []
-        self.checkpoints: list[tuple[UUID, str, int, str, datetime]] = []
-        self.completed: list[dict[str, Any]] = []
-        self.failed: list[dict[str, Any]] = []
-        self.fail_error: Exception | None = None
-
-    async def begin(
-        self, job_id: UUID, now: datetime, cold_start: bool
-    ) -> VoiceWork | None:
-        self.log.events.append("begin")
-        if self.begin_error:
-            raise self.begin_error
-        self.begins.append((job_id, now, cold_start))
-        return self.work
-
-    async def checkpoint(
-        self, job_id: UUID, key: str, audio_bytes: int, sha256: str, now: datetime
-    ) -> None:
-        self.log.events.append("checkpoint")
-        self.checkpoints.append((job_id, key, audio_bytes, sha256, now))
-
-    async def complete(
-        self,
-        work: VoiceWork,
-        transcript: Transcript,
-        create_task: OutboxMessage,
-        stt_started_at: datetime,
-        stt_finished_at: datetime,
-        now: datetime,
-    ) -> bool:
-        self.log.events.append("complete")
-        self.completed.append(
-            dict(
-                work=work,
-                transcript=transcript,
-                create_task=create_task,
-                stt_started_at=stt_started_at,
-                stt_finished_at=stt_finished_at,
-                now=now,
-            )
-        )
-        return True
-
-    async def fail(
-        self,
-        work: VoiceWork,
-        error_code: str,
-        body: str,
-        now: datetime,
-        stt_started_at: datetime | None = None,
-        stt_finished_at: datetime | None = None,
-    ) -> bool:
-        self.log.events.append("fail")
-        if self.fail_error:
-            raise self.fail_error
-        self.failed.append(
-            dict(
-                work=work,
-                code=error_code,
-                body=body,
-                stt_started_at=stt_started_at,
-                stt_finished_at=stt_finished_at,
-            )
-        )
-        return True
+JOB = voice_job()
+JOB_ID = JOB.id.value
 
 
 class Telegram:
@@ -183,26 +111,21 @@ class Stt:
 
 
 class Harness:
-    def __init__(self) -> None:
+    def __init__(self, job: Job | None = JOB) -> None:
         self.log = Log()
-        self.store = Store(self.log)
+        self.world = World()
+        if job is not None:
+            self.world.jobs[job.id] = job
         self.telegram = Telegram(self.log)
         self.audio = Audio(self.log)
         self.stt = Stt(self.log)
         self.sleeps: list[float] = []
         self.ticks = 0
-
-    def clock(self) -> datetime:
-        self.ticks += 1
-        return NOW + timedelta(seconds=self.ticks)
-
-    async def sleep(self, seconds: float) -> None:
-        self.sleeps.append(seconds)
-
-    @property
-    def sut(self) -> TranscribeVoice:
-        return TranscribeVoice(
-            self.store,
+        self.begin_error: Exception | None = None
+        self.fail_after_calls: int | None = None  # the n-th transaction onwards fails
+        self.calls = 0
+        self.sut = TranscribeVoiceCommandHandler(
+            self._unit_of_work,
             self.telegram,
             self.audio,
             self.stt,
@@ -211,115 +134,154 @@ class Harness:
             policy=RetryPolicy(jitter=0),
         )
 
+    def clock(self) -> Any:
+        self.ticks += 1
+        return NOW + timedelta(seconds=self.ticks)
+
+    async def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+
+    def job(self, job_id: JobId | None = None) -> Job:
+        return self.world.jobs[job_id or JOB.id]
+
+    async def run(self, job_id: UUID = JOB_ID) -> Any:
+        return await self.sut.execute(TranscribeVoiceCommand(job_id))
+
+    def _unit_of_work(self) -> LoggedUnitOfWork:
+        self.calls += 1
+        if self.begin_error and self.calls == 1:
+            raise self.begin_error
+        if self.fail_after_calls is not None and self.calls >= self.fail_after_calls:
+            raise RuntimeError("db connection lost")
+        return LoggedUnitOfWork(self.world, self.log)
+
 
 async def test_the_stages_run_in_order_and_the_job_completes_once() -> None:
     h = Harness()
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
     assert result.outcome is TranscribeOutcome.COMPLETED and result.error_code is None
-    assert h.log.events == ["begin", "fetch", "put", "checkpoint", "stt", "complete"]
+    assert h.log.events == [
+        "committed",  # begin
+        "fetch",
+        "put",
+        "committed",  # checkpoint
+        "stt",
+        "committed",  # complete
+    ]
     assert h.telegram.calls == ["AwACfile"]
     assert h.audio.puts == [(JOB_ID, AUDIO, "audio/ogg")]
     assert h.stt.heard == [AUDIO]
-    assert h.store.failed == []
+    voice = h.job().voice
+    assert voice is not None and voice.stage is VoiceStage.DONE
 
 
 async def test_the_checkpoint_names_the_object_its_size_and_checksum() -> None:
     h = Harness()
 
-    await h.sut.execute(JOB_ID)
+    await h.run()
 
-    ((job_id, key, size, sha, _),) = h.store.checkpoints
-    assert (job_id, key, size) == (JOB_ID, f"voice/{JOB_ID}", len(AUDIO))
-    assert sha == hashlib.sha256(AUDIO).hexdigest()
+    voice = h.job().voice
+    assert voice is not None
+    assert (voice.s3_key, voice.audio_bytes) == (f"voice/{JOB_ID}", len(AUDIO))
+    assert voice.audio_sha256 == hashlib.sha256(AUDIO).hexdigest()
+    assert voice.stored_at is not None
 
 
 async def test_the_transcript_becomes_the_create_task_of_the_text_path() -> None:
     h = Harness()
 
-    await h.sut.execute(JOB_ID)
+    await h.run()
 
-    (done,) = h.store.completed
-    message: OutboxMessage = done["create_task"]
-    assert done["transcript"] == Transcript("Купить молоко", "ru")
-    assert message.id == outbox_id_for(JOB_ID)
-    assert (message.type, message.routing_key) == ("CreateTask", "task.create")
-    assert message.correlation_id == JOB_ID
-    assert message.payload["payload"] == {
+    job = h.job()
+    assert job.text == "Купить молоко"
+    assert job.voice is not None and job.voice.language == "ru"
+    kind, envelope = h.world.outbox[outbox_id_for(JOB_ID)]
+    assert kind == "CreateTask" == envelope["type"]
+    assert envelope["correlation_id"] == str(JOB_ID)
+    assert envelope["payload"] == {
         "job_id": str(JOB_ID),
         "bot_id": 123,
-        "chat_id": 4_200_000_001,
+        "chat_id": CHAT,
         "message_id": 7,
         "author_id": str(AUTHOR_ID),
-        "author_telegram_id": 4_200_000_001,
+        "author_telegram_id": CHAT,
         "author_name": "Ann (@ann)",
         "text": "Купить молоко",
         "source_type": "voice",
     }
-    assert message.payload["occurred_at"] == NOW.isoformat()
+    assert envelope["occurred_at"] == NOW.isoformat()
 
 
 async def test_the_transcript_is_trimmed_before_it_becomes_the_task_text() -> None:
     h = Harness()
     h.stt.transcript = Transcript("  Позвонить маме \n", "ru")
 
-    await h.sut.execute(JOB_ID)
+    await h.run()
 
-    (done,) = h.store.completed
-    assert done["create_task"].payload["payload"]["text"] == "Позвонить маме"
-    assert done["transcript"].text == "Позвонить маме"
+    _, envelope = h.world.outbox[outbox_id_for(JOB_ID)]
+    assert envelope["payload"]["text"] == "Позвонить маме"
+    assert h.job().text == "Позвонить маме"
 
 
 async def test_the_stt_window_is_measured_around_recognition_only() -> None:
     h = Harness()
 
-    await h.sut.execute(JOB_ID)
+    await h.run()
 
-    (done,) = h.store.completed
-    assert done["stt_started_at"] < done["stt_finished_at"] <= done["now"]
-    ((_, begin_at, _),) = h.store.begins
-    assert begin_at < h.store.checkpoints[0][4] < done["stt_started_at"]
+    voice = h.job().voice
+    assert voice is not None
+    assert voice.started_at is not None and voice.stored_at is not None
+    assert voice.stt_started_at is not None and voice.stt_finished_at is not None
+    assert voice.started_at < voice.stored_at < voice.stt_started_at
+    assert voice.stt_started_at < voice.stt_finished_at
 
 
 async def test_a_resumed_record_reads_the_object_and_never_asks_telegram() -> None:
-    h = Harness()
-    h.store.work = work(stage="stored", s3_key=f"voice/{JOB_ID}")
+    h = Harness(voice_job(stage=VoiceStage.STORED, s3_key=f"voice/{JOB_ID}"))
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
     assert result.outcome is TranscribeOutcome.COMPLETED
-    assert h.log.events == ["begin", "get", "stt", "complete"]
+    assert h.log.events == ["committed", "get", "stt", "committed"]
     assert h.telegram.calls == []
 
 
 async def test_a_checkpointed_object_that_vanished_is_fetched_again() -> None:
-    h = Harness()
-    h.store.work = work(stage="stored", s3_key=f"voice/{JOB_ID}")
+    h = Harness(voice_job(stage=VoiceStage.STORED, s3_key=f"voice/{JOB_ID}"))
     h.audio.get_errors = [AudioMissing()]
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
     assert result.outcome is TranscribeOutcome.COMPLETED
     assert h.log.events == [
-        "begin",
+        "committed",
         "get",
         "fetch",
         "put",
-        "checkpoint",
+        "committed",
         "stt",
-        "complete",
+        "committed",
     ]
 
 
 async def test_a_finished_or_unknown_job_is_only_acknowledged() -> None:
-    h = Harness()
-    h.store.work = None
+    h = Harness(job=None)
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
     assert result.outcome is TranscribeOutcome.SKIPPED
-    assert h.log.events == ["begin"]
+    assert h.log.events == []
+
+
+async def test_an_already_finished_voice_is_skipped_without_work() -> None:
+    h = Harness(voice_job(stage=VoiceStage.DONE))
+
+    result = await h.run()
+
+    assert result.outcome is TranscribeOutcome.SKIPPED
+    assert h.telegram.calls == [] and h.stt.heard == []
 
 
 @pytest.mark.parametrize(
@@ -338,19 +300,23 @@ async def test_a_recognition_error_fails_the_job_with_a_clear_notice(
     h = Harness()
     h.stt.error = error
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
     assert result.outcome is TranscribeOutcome.FAILED and result.error_code == code
-    assert h.log.events[-1] == "fail" and "complete" not in h.log.events
-    (failed,) = h.store.failed
-    assert failed["code"] == code and failed["body"] == FAILURES[code]
-    assert failed["stt_started_at"] is not None
-    assert failed["stt_finished_at"] is not None
+    job = h.job()
+    assert job.status is JobStatus.FAILED and job.voice is not None
+    assert (job.voice.stage, job.voice.error_code) == (VoiceStage.FAILED, code)
+    assert job.voice.stt_started_at is not None
+    assert job.voice.stt_finished_at is not None
+    assert h.world.outbox == {}  # no task
+    notice = h.world.intents[IntentId.for_result(JOB_ID)]
+    assert notice.body == VOICE_FAILURES[code]
+    assert (notice.chat_id, notice.kind) == (CHAT, "transcription.result")
 
 
-@pytest.mark.parametrize("code", sorted(FAILURES))
+@pytest.mark.parametrize("code", sorted(VOICE_FAILURES))
 def test_every_failure_has_an_understandable_russian_notice(code: str) -> None:
-    body = FAILURES[code]
+    body = VOICE_FAILURES[code]
 
     assert any("а" <= ch.lower() <= "я" for ch in body)
     assert "задача не создана" in body.lower()
@@ -363,9 +329,9 @@ async def test_only_a_timeout_asks_the_worker_to_restart() -> None:
     empty = Harness()
     empty.stt.error = EmptyAudio()
 
-    assert (await timed_out.sut.execute(JOB_ID)).restart_required is True
-    assert (await empty.sut.execute(JOB_ID)).restart_required is False
-    assert (await Harness().sut.execute(JOB_ID)).restart_required is False
+    assert (await timed_out.run()).restart_required is True
+    assert (await empty.run()).restart_required is False
+    assert (await Harness().run()).restart_required is False
 
 
 @pytest.mark.parametrize("text", ["", "   \n"])
@@ -373,28 +339,28 @@ async def test_an_empty_transcript_is_an_empty_audio_error(text: str) -> None:
     h = Harness()
     h.stt.transcript = Transcript(text, "ru")
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
-    assert result.error_code == "empty_audio" and h.store.completed == []
+    assert result.error_code == "empty_audio" and h.world.outbox == {}
 
 
 async def test_a_transcript_longer_than_a_task_may_be_is_refused() -> None:
     h = Harness()
     h.stt.transcript = Transcript("я" * 4097, "ru")
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
-    assert result.error_code == "text_too_long" and h.store.completed == []
+    assert result.error_code == "text_too_long" and h.world.outbox == {}
 
 
 async def test_a_file_telegram_no_longer_serves_fails_before_any_storage() -> None:
     h = Harness()
     h.telegram.errors = [TelegramFileUnavailable()]
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
     assert result.error_code == "file_unavailable"
-    assert h.log.events == ["begin", "fetch", "fail"]
+    assert h.log.events == ["committed", "fetch", "committed"]
     assert h.sleeps == []  # a final error is not retried
 
 
@@ -402,7 +368,7 @@ async def test_a_download_above_the_limit_fails_as_too_large() -> None:
     h = Harness()
     h.telegram.errors = [AudioTooLarge()]
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
     assert result.error_code == "too_large" and "put" not in h.log.events
 
@@ -411,7 +377,7 @@ async def test_transient_download_errors_are_retried_after_5_and_30_seconds() ->
     h = Harness()
     h.telegram.errors = [TransientIoError(), TransientIoError()]
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
     assert result.outcome is TranscribeOutcome.COMPLETED
     assert h.sleeps == [5.0, 30.0]
@@ -422,11 +388,11 @@ async def test_transient_download_errors_exhaust_into_an_unavailable_failure() -
     h = Harness()
     h.telegram.errors = [TransientIoError() for _ in range(3)]
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
     assert result.error_code == "unavailable"
     assert h.sleeps == [5.0, 30.0]
-    assert h.log.events == ["begin", "fetch", "fetch", "fetch", "fail"]
+    assert h.log.events == ["committed", "fetch", "fetch", "fetch", "committed"]
 
 
 async def test_transient_storage_errors_are_retried_and_then_fail_the_job() -> None:
@@ -435,41 +401,41 @@ async def test_transient_storage_errors_are_retried_and_then_fail_the_job() -> N
     exhausted = Harness()
     exhausted.audio.put_errors = [TransientIoError() for _ in range(3)]
 
-    assert (await retried.sut.execute(JOB_ID)).outcome is TranscribeOutcome.COMPLETED
-    assert (await exhausted.sut.execute(JOB_ID)).error_code == "unavailable"
-    assert "checkpoint" not in exhausted.log.events
+    assert (await retried.run()).outcome is TranscribeOutcome.COMPLETED
+    assert (await exhausted.run()).error_code == "unavailable"
+    voice = exhausted.job().voice
+    assert voice is not None and voice.s3_key is None  # nothing was checkpointed
 
 
 async def test_a_resumed_read_that_keeps_failing_ends_as_unavailable() -> None:
-    h = Harness()
-    h.store.work = work(stage="stored", s3_key=f"voice/{JOB_ID}")
+    h = Harness(voice_job(stage=VoiceStage.STORED, s3_key=f"voice/{JOB_ID}"))
     h.audio.get_errors = [TransientIoError() for _ in range(3)]
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
     assert result.error_code == "unavailable" and h.telegram.calls == []
 
 
 async def test_a_record_that_keeps_crashing_is_failed_instead_of_looping() -> None:
-    h = Harness()
-    h.store.work = work(attempts=4)
+    h = Harness(voice_job(attempts=3))
 
-    result = await h.sut.execute(JOB_ID)
+    result = await h.run()
 
     assert result.error_code == "failed"
-    assert h.log.events == ["begin", "fail"]
+    assert h.log.events == ["committed", "committed"]
+    assert h.telegram.calls == []
 
 
 async def test_a_storage_failure_on_begin_propagates_so_the_entry_stays_pending() -> (
     None
 ):
     h = Harness()
-    h.store.begin_error = OSError("pg down")
+    h.begin_error = OSError("pg down")
 
     with pytest.raises(OSError):
-        await h.sut.execute(JOB_ID)
+        await h.run()
 
-    assert h.log.events == ["begin"]
+    assert h.log.events == []
 
 
 async def test_an_unexpected_recognition_error_propagates_without_a_verdict() -> None:
@@ -477,42 +443,44 @@ async def test_an_unexpected_recognition_error_propagates_without_a_verdict() ->
     h.stt.error = RuntimeError("model crashed")
 
     with pytest.raises(RuntimeError):
-        await h.sut.execute(JOB_ID)
+        await h.run()
 
-    assert h.store.failed == [] and h.store.completed == []
+    assert h.job().status is JobStatus.ACCEPTED and h.world.outbox == {}
 
 
 async def test_store_failure_during_timeout_raises_stuck_worker_error() -> None:
     h = Harness()
     h.stt.error = TranscriptionTimeout()
-    h.store.fail_error = RuntimeError("db connection lost")
+    h.fail_after_calls = 3  # begin and checkpoint pass, the failure record does not
 
     with pytest.raises(StuckWorkerError) as exc_info:
-        await h.sut.execute(JOB_ID)
+        await h.run()
 
     assert exc_info.value.restart_required is True
 
 
 async def test_a_skipped_record_does_not_consume_cold_start() -> None:
-    h = Harness()
-    h.store.work = None
-    sut = h.sut
+    h = Harness(job=None)
 
-    skipped = await sut.execute(JOB_ID)
+    skipped = await h.run()
     assert skipped.outcome is TranscribeOutcome.SKIPPED
 
-    h.store.work = work()
-    done = await sut.execute(JOB_ID)
+    h.world.jobs[JOB.id] = voice_job()
+    done = await h.run()
     assert done.outcome is TranscribeOutcome.COMPLETED
 
-    assert [cold for _, _, cold in h.store.begins] == [True, True]
+    voice = h.job().voice
+    assert voice is not None and voice.cold_start is True
 
 
 async def test_only_the_first_record_of_a_process_is_marked_cold() -> None:
-    h = Harness()
-    sut = h.sut
+    first, second = voice_job(7), voice_job(8)
+    h = Harness(first)
+    h.world.jobs[second.id] = second
 
-    await sut.execute(JOB_ID)
-    await sut.execute(JOB_ID)
+    await h.run(first.id.value)
+    await h.run(second.id.value)
 
-    assert [cold for _, _, cold in h.store.begins] == [True, False]
+    assert h.job(first.id).voice is not None and h.job(second.id).voice is not None
+    assert h.job(first.id).voice.cold_start is True  # type: ignore[union-attr]
+    assert h.job(second.id).voice.cold_start is False  # type: ignore[union-attr]

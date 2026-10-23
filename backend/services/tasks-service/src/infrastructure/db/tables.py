@@ -1,6 +1,6 @@
 """Tasks storage: the board, the consumer inbox and the result outbox."""
 
-from botflow_platform.outbox import outbox_table
+from kernel_platform.outbox import outbox_table
 from sqlalchemy import (
     BigInteger,
     CheckConstraint,

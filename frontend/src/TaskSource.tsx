@@ -2,14 +2,22 @@ import { Box, SvgIcon } from '@mui/material';
 import type { Task } from './api';
 import type { Messages } from './locale';
 
+// Outlined Telegram-style glyphs: a microphone and a chat bubble with a tail.
 const sourceIcons = {
   voice: {
     titleKey: 'taskSourceVoice',
-    path: 'M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21H7v2h10v-2h-4v-3.08A7 7 0 0 0 19 11h-2Z',
+    shape: (
+      <>
+        <rect x="9" y="3" width="6" height="11" rx="3" />
+        <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" />
+      </>
+    ),
   },
   text: {
     titleKey: 'taskSourceText',
-    path: 'M20 2H4a2 2 0 0 0-2 2v18l4-4h14a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2Zm-1 11H5v-2h14v2Zm0-4H5V7h14v2Z',
+    shape: (
+      <path d="M5 4h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-7.5L6 21v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2Z" />
+    ),
   },
 } as const;
 
@@ -34,9 +42,18 @@ export function TaskSource({
       {icon && (
         <SvgIcon
           titleAccess={messages[icon.titleKey]}
-          sx={{ fontSize: 18, color: 'text.primary', flexShrink: 0 }}
+          sx={{
+            fontSize: 14,
+            color: 'text.primary',
+            flexShrink: 0,
+            fill: 'none',
+            stroke: 'currentColor',
+            strokeWidth: 1.8,
+            strokeLinecap: 'round',
+            strokeLinejoin: 'round',
+          }}
         >
-          <path d={icon.path} />
+          {icon.shape}
         </SvgIcon>
       )}
       Telegram

@@ -39,7 +39,7 @@ def worker() -> dict[str, Any]:
 def test_it_runs_the_transcription_command_in_the_stt_runtime_image(
     worker: dict[str, Any],
 ) -> None:
-    assert worker["command"] == ["python", "scripts/worker.py", "transcription"]
+    assert worker["command"] == ["python", "-m", "api.worker", "transcription"]
     assert worker["build"]["target"] == "stt-runtime"
     assert worker["image"].startswith("botflow-whisper-worker:")
     assert worker["restart"] == "unless-stopped"

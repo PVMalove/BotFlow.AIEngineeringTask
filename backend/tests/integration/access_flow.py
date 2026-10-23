@@ -17,16 +17,16 @@ from uuid import UUID, uuid4
 import httpx
 from api.containers import build_bot_command, build_notifications
 from application.commands.handle_bot_command import HandleBotCommandDto
-from botflow_platform.messaging import (
+from infrastructure.identity_gateway import HttpIdentityGateway
+from infrastructure.streams import NOTIFICATION_STREAM
+from kernel_platform.messaging import (
     ACCESS_DECIDED_ROUTING_KEY,
     AUTOMATION_IDENTITY_QUEUE,
     ConfirmedPublisher,
     declare_identity_events,
 )
-from botflow_platform.resources import open_database, open_resources
-from botflow_platform.settings import Settings
-from infrastructure.identity_gateway import HttpIdentityGateway
-from infrastructure.streams import NOTIFICATION_STREAM
+from kernel_platform.resources import open_database, open_resources
+from kernel_platform.settings import Settings
 from sqlalchemy import text
 
 IDENTITY_URL = "http://identity-api:8000"
@@ -291,24 +291,24 @@ class AccessFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(denied.status_code, 403)
         waiting = await admin.get("/api/v1/admin/join-requests")
         self.assertEqual(waiting.status_code, 200)
-        self.assertEqual([m["telegram_id"] for m in waiting.json()], [user])
+        self.assertEqual([m["telegram_id"] for m in waiting.json()["data"]], [user])
         filtered = await admin.get("/api/v1/admin/join-requests?status=pending")
         self.assertEqual(filtered.status_code, 200)
-        self.assertEqual([m["telegram_id"] for m in filtered.json()], [user])
+        self.assertEqual([m["telegram_id"] for m in filtered.json()["data"]], [user])
         invalid = await admin.get("/api/v1/admin/join-requests?status=approved")
         self.assertEqual(invalid.status_code, 422)
 
         approved = await self.decide(admin, member_id, "approve", 1)
 
         self.assertEqual(approved.status_code, 200)
-        self.assertTrue(approved.json()["changed"])
-        self.assertEqual(approved.json()["member"]["status"], "approved")
+        self.assertTrue(approved.json()["data"]["changed"])
+        self.assertEqual(approved.json()["data"]["member"]["status"], "approved")
         session_client = await self.login(user)
         current = await session_client.get("/api/v1/users/me")
         self.assertEqual(current.status_code, 200)
-        self.assertEqual(current.json()["role"], "user")
+        self.assertEqual(current.json()["data"]["role"], "user")
         listed = await admin.get("/api/v1/admin/members")
-        self.assertIn(user, [m["telegram_id"] for m in listed.json()])
+        self.assertIn(user, [m["telegram_id"] for m in listed.json()["data"]])
 
     async def test_reject_then_reapply_and_blocked_cannot_bypass(self) -> None:
         user = USER_FIRST + 1
@@ -316,10 +316,10 @@ class AccessFlow(unittest.IsolatedAsyncioTestCase):
         member_id = await self.applicant(user)
 
         rejected = await self.decide(admin, member_id, "reject", 1)
-        self.assertEqual(rejected.json()["member"]["status"], "rejected")
+        self.assertEqual(rejected.json()["data"]["member"]["status"], "rejected")
         listed = await admin.get("/api/v1/admin/join-requests?status=rejected")
         self.assertEqual(listed.status_code, 200)
-        self.assertEqual([m["telegram_id"] for m in listed.json()], [user])
+        self.assertEqual([m["telegram_id"] for m in listed.json()["data"]], [user])
         self.assertIn("Заявка отправлена", await self.send(user, "/join"))
         self.assertEqual((await self.member(user))[2:], ("pending", 3))
 
@@ -366,7 +366,7 @@ class AccessFlow(unittest.IsolatedAsyncioTestCase):
         )
         forbidden = await plain_user.get("/api/v1/admin/join-requests")
         self.assertEqual(forbidden.status_code, 403)
-        self.assertEqual(forbidden.json(), {"detail": "admin_required"})
+        self.assertEqual(forbidden.json()["error"]["code"], "admin_required")
         self.assertEqual(
             (await plain_user.post(action, json=body, headers=ORIGIN)).status_code, 403
         )
@@ -374,7 +374,7 @@ class AccessFlow(unittest.IsolatedAsyncioTestCase):
             action, json=body, headers={"Origin": "https://foreign.example"}
         )
         self.assertEqual(foreign.status_code, 403)
-        self.assertEqual(foreign.json(), {"detail": "origin_not_allowed"})
+        self.assertEqual(foreign.json()["error"]["code"], "origin_not_allowed")
         self.assertEqual((await self.member(user))[2:], ("pending", 1))
         # The service key is not an admin credential, and a wrong one is refused.
         self.assertEqual(
@@ -404,7 +404,8 @@ class AccessFlow(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual([first.status_code, second.status_code], [200, 200])
         self.assertEqual(
-            sorted([first.json()["changed"], second.json()["changed"]]), [False, True]
+            sorted([first.json()["data"]["changed"], second.json()["data"]["changed"]]),
+            [False, True],
         )
         self.assertEqual((await self.member(user))[2:], ("approved", 2))
         self.assertEqual(
@@ -415,12 +416,12 @@ class AccessFlow(unittest.IsolatedAsyncioTestCase):
             [(1,)],
         )
         repeat = await self.decide(admin_a, member_id, "approve", 1)
-        self.assertEqual(repeat.json()["changed"], False)
+        self.assertEqual(repeat.json()["data"]["changed"], False)
         conflict = await self.decide(admin_a, member_id, "reject", 1)
         self.assertEqual(conflict.status_code, 409)
-        self.assertEqual(conflict.json(), {"detail": "version_conflict"})
+        self.assertEqual(conflict.json()["error"]["code"], "version_conflict")
         invalid = await self.decide(admin_a, member_id, "reject", 2)
-        self.assertEqual(invalid.json(), {"detail": "invalid_transition"})
+        self.assertEqual(invalid.json()["error"]["code"], "invalid_transition")
         self.assertEqual((await self.member(user))[2:], ("approved", 2))
         self.assertEqual(
             await self.sql(
@@ -436,7 +437,7 @@ class AccessFlow(unittest.IsolatedAsyncioTestCase):
 
         own = await self.decide(admin_a, id_a, "block", 1)
         self.assertEqual(
-            (own.status_code, own.json()), (409, {"detail": "cannot_block_self"})
+            (own.status_code, own.json()["error"]["code"]), (409, "cannot_block_self")
         )
         self.assertEqual((await self.member(ADMIN_A))[2:], ("approved", 1))
 
@@ -454,7 +455,7 @@ class AccessFlow(unittest.IsolatedAsyncioTestCase):
             loser = first if first.status_code != 200 else second
             self.assertIn(loser.status_code, (401, 409))
             if loser.status_code == 409:
-                self.assertEqual(loser.json(), {"detail": "last_admin"})
+                self.assertEqual(loser.json()["error"]["code"], "last_admin")
             approved_admins = await self.sql(
                 "SELECT count(*) FROM members WHERE role = 'admin' AND "
                 "status = 'approved' AND telegram_id IN (:a, :b)",

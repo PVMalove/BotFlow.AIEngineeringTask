@@ -6,21 +6,23 @@ from dataclasses import dataclass
 
 import httpx
 from aio_pika.abc import AbstractChannel, AbstractQueue
-from botflow_platform.consumer import QueueConsumer
-from botflow_platform.messaging import ConfirmedPublisher, declare_task_topology
-from botflow_platform.outbox import RelayOutbox, SqlOutboxTx, sql_transactions
-from botflow_platform.resources import Resources, open_resources
-from botflow_platform.settings import Settings
 from dependency_injector import containers, providers
+from kernel_platform.consumer import QueueConsumer
+from kernel_platform.messaging import ConfirmedPublisher, declare_task_topology
+from kernel_platform.outbox import RelayOutbox, SqlOutboxTx, sql_transactions
+from kernel_platform.resources import Resources, open_resources
+from kernel_platform.settings import Settings
 
-from application.commands.change_task_status import ChangeTaskStatus
-from application.commands.create_task import CreateTaskFromCommand
-from application.queries.tasks import GetTask, ListTasks
+from application.commands.change_task_status import ChangeTaskStatusCommandHandler
+from application.commands.create_task import CreateTaskCommandHandler
+from application.queries.get_task import GetTaskQueryHandler
+from application.queries.list_tasks import ListTasksQueryHandler
 from infrastructure.board_signal import RedisBoardSignal
 from infrastructure.db.tables import outbox
 from infrastructure.db.task_reader import SqlTaskReader
-from infrastructure.db.task_store import SqlTaskCommandStore, SqlTaskStatusStore
+from infrastructure.db.unit_of_work import SqlTasksUnitOfWork
 from infrastructure.identity_gateway import HttpIdentityGateway
+from infrastructure.messaging.create_task_consumer import CreateTaskConsumer
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +34,10 @@ class TaskWorker:
 
 
 def build_worker(resources: Resources) -> TaskWorker:
-    create = CreateTaskFromCommand(SqlTaskCommandStore(resources.sessions))
+    def uow() -> SqlTasksUnitOfWork:
+        return SqlTasksUnitOfWork(resources.sessions)
+
+    create = CreateTaskConsumer(CreateTaskCommandHandler(uow))
 
     async def commands_queue(channel: AbstractChannel) -> AbstractQueue:
         _, commands, _ = await declare_task_topology(channel)
@@ -51,9 +56,10 @@ def build_worker(resources: Resources) -> TaskWorker:
 class Services:
     """Use cases the HTTP layer needs, wired to the process resources."""
 
-    list_tasks: ListTasks
-    get_task: GetTask
-    change_task_status: ChangeTaskStatus
+    identity: HttpIdentityGateway
+    list_tasks: ListTasksQueryHandler
+    get_task: GetTaskQueryHandler
+    change_task_status: ChangeTaskStatusCommandHandler
 
 
 async def open_services(resources: Resources) -> AsyncIterator[Services]:
@@ -65,13 +71,18 @@ async def open_services(resources: Resources) -> AsyncIterator[Services]:
         identity = HttpIdentityGateway(client)
         reader = SqlTaskReader(resources.sessions)
         assert resources.redis is not None  # Tasks always opens Redis
-        store = SqlTaskStatusStore(
-            resources.sessions, RedisBoardSignal(resources.redis)
-        )
+        board_signal = RedisBoardSignal(resources.redis)
+
+        def uow() -> SqlTasksUnitOfWork:
+            return SqlTasksUnitOfWork(
+                resources.sessions, event_handlers=[board_signal.handle]
+            )
+
         yield Services(
-            list_tasks=ListTasks(identity, reader),
-            get_task=GetTask(identity, reader),
-            change_task_status=ChangeTaskStatus(identity, reader, store),
+            identity=identity,
+            list_tasks=ListTasksQueryHandler(reader),
+            get_task=GetTaskQueryHandler(reader),
+            change_task_status=ChangeTaskStatusCommandHandler(uow),
         )
 
 

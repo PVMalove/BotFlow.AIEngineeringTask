@@ -1,11 +1,14 @@
-"""Browser-facing protections: session cookie policy and the same-origin check."""
+"""Session cookie policy and the service keys of internal callers."""
 
 import hmac
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
-from fastapi import HTTPException, Request, Response
+from fastapi import Response
+from kernel_domain.result import Result
+
+from domain.errors import IdentityErrors
 
 SESSION_COOKIE = "botflow_session"
 
@@ -37,19 +40,6 @@ class CookiePolicy:
         )
 
 
-def _expected_origin(request: Request) -> str:
-    # The ingress forwards the browser's Host and the scheme it was reached by.
-    scheme = request.headers.get("x-forwarded-proto", request.url.scheme)
-    return f"{scheme}://{request.headers.get('host', '')}".lower()
-
-
-async def require_same_origin(request: Request) -> None:
-    """CSRF guard for state-changing routes: the browser must name our own origin."""
-    origin = request.headers.get("origin", "").lower()
-    if origin != _expected_origin(request):
-        raise HTTPException(status_code=403, detail="origin_not_allowed")
-
-
 class Operation(StrEnum):
     """Internal operations a service key may be limited to."""
 
@@ -64,8 +54,8 @@ class ServiceKeys:
     def __init__(self, keys: Mapping[str, tuple[str, frozenset[Operation]]]) -> None:
         self._keys = dict(keys)
 
-    def authorize(self, presented: str | None, operation: Operation) -> str:
-        """Return the caller name, or raise 401 (unknown key) / 403 (not allowed)."""
+    def authorize(self, presented: str | None, operation: Operation) -> Result[str]:
+        """The caller name, or 401 (unknown key) / 403 (not allowed) as an error."""
         caller: tuple[str, frozenset[Operation]] | None = None
         for key, entry in self._keys.items():
             # Compare against every key so timing does not reveal which matched.
@@ -74,7 +64,7 @@ class ServiceKeys:
             ):
                 caller = entry
         if caller is None:
-            raise HTTPException(status_code=401, detail="service_key_required")
+            return Result[str].fail(IdentityErrors.service_key_required())
         if operation not in caller[1]:
-            raise HTTPException(status_code=403, detail="operation_not_allowed")
-        return caller[0]
+            return Result[str].fail(IdentityErrors.operation_not_allowed())
+        return Result[str].ok(caller[0])

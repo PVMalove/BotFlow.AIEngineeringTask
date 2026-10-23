@@ -11,13 +11,13 @@ import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
-from botflow_platform.retry import RetryPolicy
+from kernel_platform.clock import utcnow
+from kernel_platform.retry import RetryPolicy
 
-from application.commands.create_task_message import create_task_message
 from application.ports import (
     AudioMissing,
     AudioStore,
@@ -29,55 +29,17 @@ from application.ports import (
     StuckWorkerError,
     TelegramFiles,
     TelegramFileUnavailable,
-    Transcript,
     TranscriptionTimeout,
     TransientIoError,
-    VoiceStore,
     VoiceWork,
 )
-from domain.jobs import JobKind, VoiceStage
+from domain.notices import VOICE_FAILURES
+from domain.unit_of_work import AutomationUnitOfWork
+from domain.value_objects.job_id import JobId
+from domain.value_objects.job_status import VoiceStage
 
 MAX_ATTEMPTS = 3  # processing attempts of one record before it is failed
 MAX_TEXT = 4096  # what Tasks accepts as a task text
-
-# error_code -> what the author reads. Every notice says no task was created.
-FAILURES: dict[str, str] = {
-    "empty_audio": (
-        "Не удалось распознать речь: запись пустая или в ней нет слов. "
-        "Задача не создана. Запишите сообщение ещё раз."
-    ),
-    "corrupted_audio": (
-        "Не удалось прочитать голосовое сообщение: файл повреждён. "
-        "Задача не создана. Отправьте сообщение ещё раз."
-    ),
-    "too_long": (
-        "Голосовое сообщение длиннее 60 секунд. "
-        "Задача не создана. Отправьте более короткое."
-    ),
-    "too_large": (
-        "Голосовое сообщение больше 5 МиБ. Задача не создана. Отправьте более короткое."
-    ),
-    "timeout": (
-        "Распознавание заняло слишком много времени. "
-        "Задача не создана. Отправьте сообщение покороче."
-    ),
-    "file_unavailable": (
-        "Telegram больше не отдаёт этот файл. "
-        "Задача не создана. Отправьте сообщение ещё раз."
-    ),
-    "unavailable": (
-        "Сервисы распознавания временно недоступны. "
-        "Задача не создана. Повторите отправку позже."
-    ),
-    "text_too_long": (
-        "Распознанный текст слишком длинный для задачи. "
-        "Задача не создана. Отправьте более короткое сообщение."
-    ),
-    "failed": (
-        "Не удалось обработать голосовое сообщение. "
-        "Задача не создана. Повторите отправку позже."
-    ),
-}
 
 _FINAL_ERRORS: tuple[tuple[type[Exception], str], ...] = (
     (TelegramFileUnavailable, "file_unavailable"),
@@ -107,26 +69,24 @@ class TranscribeResult:
         return self.error_code == "timeout"
 
 
-def _code_of(error: Exception) -> str:
-    for kind, code in _FINAL_ERRORS:
-        if isinstance(error, kind):
-            return code
-    raise error
+@dataclass(frozen=True)
+class TranscribeVoiceCommand:
+    job_id: UUID
 
 
-class TranscribeVoice:
+class TranscribeVoiceCommandHandler:
     def __init__(
         self,
-        store: VoiceStore,
+        uow_factory: Callable[[], AutomationUnitOfWork],
         telegram: TelegramFiles,
         audio: AudioStore,
         stt: SpeechToText,
         *,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        clock: Callable[[], datetime] = utcnow,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         policy: RetryPolicy | None = None,
     ) -> None:
-        self._store = store
+        self._uow_factory = uow_factory
         self._telegram = telegram
         self._audio = audio
         self._stt = stt
@@ -135,10 +95,10 @@ class TranscribeVoice:
         self._policy = policy or RetryPolicy()
         self._served = False
 
-    async def execute(self, job_id: UUID) -> TranscribeResult:
+    async def execute(self, command: TranscribeVoiceCommand) -> TranscribeResult:
         """Store failures and unexpected errors propagate: the entry stays pending."""
         cold_start = not self._served
-        work = await self._store.begin(job_id, self._clock(), cold_start)
+        work = await self._begin(command.job_id, cold_start)
         if work is None:
             return TranscribeResult(TranscribeOutcome.SKIPPED)
         self._served = True
@@ -173,26 +133,7 @@ class TranscribeVoice:
             return await self._fail(work, "empty_audio", started, finished)
         if len(text) > MAX_TEXT:
             return await self._fail(work, "text_too_long", started, finished)
-        message = create_task_message(
-            job_id=work.job_id,
-            bot_id=work.bot_id,
-            chat_id=work.chat_id,
-            message_id=work.message_id,
-            author_id=work.author_id,
-            author_telegram_id=work.author_telegram_id,
-            author_name=work.author_name,
-            text=text,
-            received_at=work.received_at,
-            source_type=JobKind.VOICE,
-        )
-        done = await self._store.complete(
-            work,
-            Transcript(text, transcript.language),
-            message,
-            started,
-            finished,
-            self._clock(),
-        )
+        done = await self._complete(work, transcript.language, text, started, finished)
         return TranscribeResult(
             TranscribeOutcome.COMPLETED if done else TranscribeOutcome.SKIPPED
         )
@@ -207,12 +148,8 @@ class TranscribeVoice:
         key = await self._retry(
             lambda: self._audio.put(work.job_id, audio, work.mime_type)
         )
-        await self._store.checkpoint(
-            work.job_id,
-            key,
-            len(audio),
-            hashlib.sha256(audio).hexdigest(),
-            self._clock(),
+        await self._checkpoint(
+            work.job_id, key, len(audio), hashlib.sha256(audio).hexdigest()
         )
         return audio
 
@@ -238,9 +175,88 @@ class TranscribeVoice:
     ) -> TranscribeResult:
         if started is not None and finished is None:
             finished = self._clock()
-        failed = await self._store.fail(
-            work, code, FAILURES[code], self._clock(), started, finished
-        )
+        failed = await self._record_failure(work, code, started, finished)
         if not failed:
             return TranscribeResult(TranscribeOutcome.SKIPPED)
         return TranscribeResult(TranscribeOutcome.FAILED, code)
+
+    async def _begin(self, job_id: UUID, cold_start: bool) -> VoiceWork | None:
+        """Count this attempt; None for an unknown job or one already finished."""
+        async with self._uow_factory() as uow:
+            job = await uow.jobs.get(JobId(job_id), lock=True)
+            if job is None or job.voice is None:
+                return None
+            if not job.begin_voice_attempt(self._clock(), cold_start):
+                return None
+            await uow.jobs.update(job)
+            await uow.commit()
+        return VoiceWork(
+            job_id=job_id,
+            bot_id=job.bot_id,
+            chat_id=job.chat_id,
+            message_id=job.message_id,
+            author_id=job.author_id,
+            author_telegram_id=job.author_telegram_id,
+            author_name=job.author_name,
+            received_at=job.received_at,
+            file_id=job.voice.file_id,
+            mime_type=job.voice.mime_type,
+            stage=job.voice.stage.value,
+            s3_key=job.voice.s3_key,
+            attempts=job.voice.attempts,
+        )
+
+    async def _checkpoint(
+        self, job_id: UUID, key: str, audio_bytes: int, sha256: str
+    ) -> None:
+        async with self._uow_factory() as uow:
+            job = await uow.jobs.get(JobId(job_id), lock=True)
+            if job is not None and job.checkpoint_audio(
+                key, audio_bytes, sha256, self._clock()
+            ):
+                await uow.jobs.update(job)
+                await uow.commit()
+
+    async def _complete(
+        self,
+        work: VoiceWork,
+        language: str | None,
+        text: str,
+        started: datetime,
+        finished: datetime,
+    ) -> bool:
+        """Text, stage and the CreateTask outbox row in ONE transaction."""
+        async with self._uow_factory() as uow:
+            job = await uow.jobs.get(JobId(work.job_id), lock=True)
+            if job is None or not job.complete_transcription(
+                text, language, started, finished, self._clock()
+            ):
+                return False
+            await uow.jobs.update(job)
+            await uow.commit()
+        return True
+
+    async def _record_failure(
+        self,
+        work: VoiceWork,
+        code: str,
+        started: datetime | None,
+        finished: datetime | None,
+    ) -> bool:
+        """Job, voice record and author notice in ONE transaction; slot freed."""
+        async with self._uow_factory() as uow:
+            job = await uow.jobs.get(JobId(work.job_id), lock=True)
+            if job is None or not job.fail_voice(
+                code, VOICE_FAILURES[code], self._clock(), started, finished
+            ):
+                return False
+            await uow.jobs.update(job)
+            await uow.commit()
+        return True
+
+
+def _code_of(error: Exception) -> str:
+    for kind, code in _FINAL_ERRORS:
+        if isinstance(error, kind):
+            return code
+    raise error

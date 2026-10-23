@@ -1,6 +1,9 @@
 """Internal member queries and login code issuance endpoints."""
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, Depends
+from kernel_platform.http.cache import no_store
+from kernel_platform.http.envelope import ApiResponse
+from kernel_platform.http.match import match_result
 
 from api.dependencies import (
     FindMemberDI,
@@ -10,15 +13,14 @@ from api.dependencies import (
 )
 from api.schemas import FindMemberRequest, IssueCodeRequest, JoinRequestBody
 from api.security import Operation
-from application.queries.members import member_view
 from contracts.views import JoinRequestView, LoginCodeView, MemberView
 
-router = APIRouter(tags=["internal"])
+router = APIRouter(tags=["internal"], dependencies=[Depends(no_store)])
 
 
 @router.get(
     "/internal/v1/members/by-telegram/{telegram_id}",
-    response_model=MemberView,
+    response_model=ApiResponse[MemberView],
     summary="Поиск участника по Telegram ID",
     description=(
         "Служебный эндпоинт для внутренних сервисов: возвращает статус "
@@ -27,22 +29,16 @@ router = APIRouter(tags=["internal"])
     dependencies=[service_operation(Operation.FIND_MEMBER)],
 )
 async def find_member(
-    telegram_id: int,
-    response: Response,
-    handler: FindMemberDI,
-) -> MemberView:
+    telegram_id: int, handler: FindMemberDI
+) -> ApiResponse[MemberView]:
     """Найти участника по Telegram ID."""
     query = FindMemberRequest(telegram_id=telegram_id).to_query()
-    member = await handler.execute(query)
-    if member is None:
-        raise HTTPException(status_code=404, detail="member_not_found")
-    response.headers["Cache-Control"] = "no-store"
-    return member
+    return match_result(await handler.execute(query))
 
 
 @router.post(
     "/internal/v1/login-codes",
-    response_model=LoginCodeView,
+    response_model=ApiResponse[LoginCodeView],
     summary="Выпуск одноразового кода авторизации",
     description=(
         "Служебный эндпоинт для Telegram-бота: выпускает одноразовый 5-минутный "
@@ -51,18 +47,15 @@ async def find_member(
     dependencies=[service_operation(Operation.ISSUE_LOGIN_CODE)],
 )
 async def issue_login_code(
-    body: IssueCodeRequest,
-    response: Response,
-    handler: IssueLoginCodeDI,
-) -> LoginCodeView:
+    body: IssueCodeRequest, handler: IssueLoginCodeDI
+) -> ApiResponse[LoginCodeView]:
     """Выпустить одноразовый код для входа в веб-панель."""
-    response.headers["Cache-Control"] = "no-store"
-    return await handler.execute(body.to_command())
+    return match_result(await handler.execute(body.to_command()))
 
 
 @router.post(
     "/internal/v1/join-requests",
-    response_model=JoinRequestView,
+    response_model=ApiResponse[JoinRequestView],
     summary="Заявка на доступ из Telegram",
     description=(
         "Служебный эндпоинт для Telegram-бота: создаёт заявку (ожидающего участника), "
@@ -71,16 +64,10 @@ async def issue_login_code(
     dependencies=[service_operation(Operation.SUBMIT_JOIN_REQUEST)],
 )
 async def submit_join_request(
-    body: JoinRequestBody,
-    response: Response,
-    handler: SubmitJoinRequestDI,
-) -> JoinRequestView:
+    body: JoinRequestBody, handler: SubmitJoinRequestDI
+) -> ApiResponse[JoinRequestView]:
     """Принять заявку на доступ; решение о допуске принимает только Identity."""
-    result = await handler.execute(body.to_command())
-    response.headers["Cache-Control"] = "no-store"
-    return JoinRequestView(
-        outcome=result.outcome.value, member=member_view(result.member)
-    )
+    return match_result(await handler.execute(body.to_command()))
 
 
 __all__ = ["router"]

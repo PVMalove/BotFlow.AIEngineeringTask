@@ -16,7 +16,12 @@ async function board(page: Page) {
   let task = { ...initial };
   const patches: unknown[] = [];
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ json: { id: 'owner', role: 'user', status: 'approved' } }),
+    route.fulfill({
+      json: {
+        data: { id: 'owner', role: 'user', status: 'approved' },
+        meta: {},
+      },
+    }),
   );
   await page.route('**/api/v1/tasks?**', (route) =>
     route.fulfill({
@@ -92,7 +97,10 @@ test('rereads the task after a refused drop and shows the server status without 
     if (route.request().method() === 'PATCH') {
       patches++;
       refused = true;
-      return route.fulfill({ status: 403, json: { detail: 'forbidden' } });
+      return route.fulfill({
+        status: 403,
+        json: { error: { code: 'forbidden', message: 'forbidden' } },
+      });
     }
     await route.fulfill({ json: { data: fresh } });
   });
@@ -184,7 +192,9 @@ test('keeps the version observed at drag start when REST refreshes the same card
       patches.push(route.request().postDataJSON());
       return route.fulfill({
         status: 409,
-        json: { detail: 'version_conflict' },
+        json: {
+          error: { code: 'version_conflict', message: 'version_conflict' },
+        },
       });
     }
     return route.fulfill({ json: { data: { ...initial, version: 3 } } });

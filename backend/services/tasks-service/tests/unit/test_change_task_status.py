@@ -1,141 +1,149 @@
-"""ChangeTaskStatus at its command seam: who may change what, and what is delegated."""
+"""ChangeTaskStatus at its command seam: who may change what, and what is stored."""
 
-from datetime import UTC, datetime
+from datetime import timedelta
 from itertools import permutations
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
+from conftest import AUTHOR, BASE, Board, FakeTasksUnitOfWork
+from kernel_domain.errors import ErrorType
+from kernel_platform.security.actor import Actor, ActorRole
 
-from application.commands.change_task_status import ChangeTaskStatus
-from application.ports import (
-    Forbidden,
-    NotApproved,
-    TaskNotFound,
-    Unauthenticated,
-    VersionConflict,
+from application.commands.change_task_status import (
+    ChangeTaskStatusCommand,
+    ChangeTaskStatusCommandHandler,
 )
-from domain.tasks import Actor, Role, Task, TaskStatus
+from domain.entities.task import Task
+from domain.events.task_domain_event import TaskStatusChanged
+from domain.value_objects.task_status import TaskStatus
 
-NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-AUTHOR = uuid4()
-
-
-def task(status: TaskStatus = TaskStatus.PENDING, version: int = 1) -> Task:
-    return Task(uuid4(), "text", status, version, AUTHOR, "Ann", NOW, NOW)
+NOW = BASE + timedelta(hours=1)
 
 
-class Identity:
-    def __init__(self, actor: Actor) -> None:
-        self.actor = actor
-        self.failure: Exception | None = None
-
-    async def require_approved(self, token: str) -> Actor:
-        if self.failure:
-            raise self.failure
-        return self.actor
-
-
-class Reader:
-    def __init__(self, *tasks: Task) -> None:
-        self.tasks = {t.id: t for t in tasks}
-
-    async def list_page(self, *args: object) -> list[Task]:
-        raise NotImplementedError
-
-    async def get(self, task_id: UUID) -> Task | None:
-        return self.tasks.get(task_id)
-
-
-class Store:
+class Env:
     def __init__(self) -> None:
-        self.calls: list[tuple[UUID, TaskStatus, int]] = []
-        self.failure: Exception | None = None
+        self.board = Board()
+        self.units: list[FakeTasksUnitOfWork] = []
+        self.sut = ChangeTaskStatusCommandHandler(self._uow, clock=lambda: NOW)
 
-    async def change(
-        self, task_id: UUID, target: TaskStatus, expected_version: int
-    ) -> Task:
-        self.calls.append((task_id, target, expected_version))
-        if self.failure:
-            raise self.failure
-        return task(target, expected_version + 1)
+    def _uow(self) -> FakeTasksUnitOfWork:
+        unit = FakeTasksUnitOfWork(self.board)
+        self.units.append(unit)
+        return unit
 
 
-def use_case(actor: Actor, *tasks: Task) -> tuple[ChangeTaskStatus, Identity, Store]:
-    identity, store = Identity(actor), Store()
-    return ChangeTaskStatus(identity, Reader(*tasks), store), identity, store
+def command(
+    task: Task,
+    actor: Actor,
+    target: TaskStatus = TaskStatus.COMPLETED,
+    version: int = 1,
+) -> ChangeTaskStatusCommand:
+    return ChangeTaskStatusCommand(task.id.value, target, version, actor)
 
 
 @pytest.mark.parametrize(
     "actor",
-    [Actor(AUTHOR, Role.USER), Actor(uuid4(), Role.ADMIN), Actor(AUTHOR, Role.ADMIN)],
+    [
+        Actor(AUTHOR, ActorRole.USER),
+        Actor(uuid4(), ActorRole.ADMIN),
+        Actor(AUTHOR, ActorRole.ADMIN),
+    ],
 )
 async def test_the_author_and_any_admin_may_change_the_status(actor: Actor) -> None:
-    card = task()
-    sut, _, store = use_case(actor, card)
+    env = Env()
+    task = env.board.add(1)
 
-    result = await sut.execute("tok", card.id, TaskStatus.COMPLETED, 1)
+    result = await env.sut.execute(command(task, actor))
 
-    assert result.status is TaskStatus.COMPLETED
-    assert store.calls == [(card.id, TaskStatus.COMPLETED, 1)]
+    assert result.is_ok and result.value.status == "completed"
+    assert result.value.version == 2
+    stored = env.board.tasks[task.id]
+    assert (stored.status, stored.version, stored.updated_at) == (
+        TaskStatus.COMPLETED,
+        2,
+        NOW,
+    )
+    (event,) = env.board.events
+    assert isinstance(event, TaskStatusChanged)
 
 
 async def test_a_plain_user_cannot_change_a_foreign_task() -> None:
-    card = task()
-    sut, _, store = use_case(Actor(uuid4(), Role.USER), card)
+    env = Env()
+    task = env.board.add(1)
 
-    with pytest.raises(Forbidden):
-        await sut.execute("tok", card.id, TaskStatus.COMPLETED, 1)
+    result = await env.sut.execute(command(task, Actor(uuid4(), ActorRole.USER)))
 
-    assert store.calls == []  # the server, not the client, refuses
+    assert result.is_err and result.error.type is ErrorType.FORBIDDEN
+    assert result.error.code == "forbidden"
+    assert env.board.tasks[task.id].status is TaskStatus.PENDING  # the server refuses
+    assert not env.units[0].committed
 
 
 async def test_a_missing_task_is_not_found_before_any_write() -> None:
-    sut, _, store = use_case(Actor(AUTHOR, Role.ADMIN))
+    env = Env()
+    task = env.board.add(1)
+    del env.board.tasks[task.id]
 
-    with pytest.raises(TaskNotFound):
-        await sut.execute("tok", uuid4(), TaskStatus.COMPLETED, 1)
+    result = await env.sut.execute(command(task, Actor(AUTHOR, ActorRole.ADMIN)))
 
-    assert store.calls == []
+    assert result.is_err and result.error.type is ErrorType.NOT_FOUND
+    assert not env.units[0].committed
 
 
 @pytest.mark.parametrize("source, target", list(permutations(TaskStatus, 2)))
 async def test_every_transition_between_the_three_statuses_is_allowed(
     source: TaskStatus, target: TaskStatus
 ) -> None:
-    card = task(source)
-    sut, _, _ = use_case(Actor(AUTHOR, Role.USER), card)
+    env = Env()
+    task = env.board.add(1, status=source)
 
-    result = await sut.execute("tok", card.id, target, 1)
+    result = await env.sut.execute(command(task, Actor(AUTHOR, ActorRole.USER), target))
 
-    assert result.status is target
-
-
-async def test_a_version_conflict_from_the_store_propagates() -> None:
-    card = task()
-    sut, _, store = use_case(Actor(AUTHOR, Role.USER), card)
-    store.failure = VersionConflict()
-
-    with pytest.raises(VersionConflict):
-        await sut.execute("tok", card.id, TaskStatus.COMPLETED, 1)
+    assert result.is_ok and result.value.status == target.value
 
 
-@pytest.mark.parametrize("token", [None, ""])
-async def test_a_missing_session_is_unauthenticated(token: str | None) -> None:
-    card = task()
-    sut, _, store = use_case(Actor(AUTHOR, Role.USER), card)
+async def test_a_stale_version_is_a_conflict_and_changes_nothing() -> None:
+    env = Env()
+    task = env.board.add(1, version=3)
 
-    with pytest.raises(Unauthenticated):
-        await sut.execute(token, card.id, TaskStatus.COMPLETED, 1)
+    result = await env.sut.execute(
+        command(task, Actor(AUTHOR, ActorRole.USER), version=2)
+    )
 
-    assert store.calls == []
+    assert result.is_err and result.error.type is ErrorType.CONFLICT
+    assert env.board.tasks[task.id].version == 3
+    assert not env.units[0].committed
 
 
-async def test_an_unapproved_member_changes_nothing() -> None:
-    card = task()
-    sut, identity, store = use_case(Actor(AUTHOR, Role.USER), card)
-    identity.failure = NotApproved()
+async def test_a_no_op_with_the_current_version_stores_and_signals_nothing() -> None:
+    env = Env()
+    task = env.board.add(1, version=3, status=TaskStatus.COMPLETED)
 
-    with pytest.raises(NotApproved):
-        await sut.execute("tok", card.id, TaskStatus.COMPLETED, 1)
+    result = await env.sut.execute(
+        command(task, Actor(AUTHOR, ActorRole.USER), version=3)
+    )
 
-    assert store.calls == []
+    assert result.is_ok and result.value.version == 3
+    assert env.board.events == []
+    assert not env.units[0].committed
+
+
+async def test_a_writer_that_lost_the_race_gets_a_conflict_and_no_event() -> None:
+    """The repository's version check fails after this handler loaded the task."""
+    env = Env()
+    task = env.board.add(1)
+
+    def another_session_wins() -> None:
+        env.board.tasks[task.id].version += 1
+
+    def uow() -> FakeTasksUnitOfWork:
+        unit = FakeTasksUnitOfWork(env.board)
+        unit.before_update = another_session_wins
+        return unit
+
+    sut = ChangeTaskStatusCommandHandler(uow, clock=lambda: NOW)
+
+    result = await sut.execute(command(task, Actor(AUTHOR, ActorRole.USER)))
+
+    assert result.is_err and result.error.code == "version_conflict"
+    assert env.board.events == []

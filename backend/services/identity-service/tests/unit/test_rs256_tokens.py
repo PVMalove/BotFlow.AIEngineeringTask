@@ -7,8 +7,10 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from kernel_domain.result import Result
 
-from domain.entities.auth import AuthSession, InvalidSession
+from application.ports import TokenClaims
+from domain.entities.auth_session import AuthSession
 from infrastructure.security.jwt import AUDIENCE, ISSUER, Rs256Tokens
 
 
@@ -28,7 +30,13 @@ def pem() -> str:
 
 def session(lifetime: timedelta = timedelta(hours=8)) -> AuthSession:
     now = datetime.now(UTC)
-    return AuthSession(uuid4(), uuid4(), created_at=now, expires_at=now + lifetime)
+    return AuthSession(
+        uuid4(), member_id=uuid4(), created_at=now, expires_at=now + lifetime
+    )
+
+
+def assert_invalid(result: Result[TokenClaims]) -> None:
+    assert result.is_err and result.error.code == "unauthenticated"
 
 
 def test_token_carries_session_claims_for_8_hours(pem: str) -> None:
@@ -43,22 +51,20 @@ def test_token_carries_session_claims_for_8_hours(pem: str) -> None:
     assert claims["sub"] == str(issued.member_id)
     assert claims["jti"] == str(issued.id)
     assert claims["exp"] - claims["iat"] == 8 * 3600
-    verified = Rs256Tokens(pem).verify(token)
+    verified = Rs256Tokens(pem).verify(token).value
     assert (verified.session_id, verified.member_id) == (issued.id, issued.member_id)
 
 
 def test_token_signed_by_another_key_is_rejected(pem: str) -> None:
     forged = Rs256Tokens(new_pem()).issue(session())
 
-    with pytest.raises(InvalidSession):
-        Rs256Tokens(pem).verify(forged)
+    assert_invalid(Rs256Tokens(pem).verify(forged))
 
 
 def test_expired_token_is_rejected(pem: str) -> None:
     token = Rs256Tokens(pem).issue(session(lifetime=timedelta(seconds=-5)))
 
-    with pytest.raises(InvalidSession):
-        Rs256Tokens(pem).verify(token)
+    assert_invalid(Rs256Tokens(pem).verify(token))
 
 
 @pytest.mark.parametrize(
@@ -78,8 +84,7 @@ def test_token_with_wrong_claims_is_rejected(pem: str, claims: dict[str, str]) -
     payload = {k: v for k, v in {**payload, **claims}.items() if v is not None}
     token = jwt.encode(payload, pem, algorithm="RS256")
 
-    with pytest.raises(InvalidSession):
-        Rs256Tokens(pem).verify(token)
+    assert_invalid(Rs256Tokens(pem).verify(token))
 
 
 def test_unsigned_token_is_rejected(pem: str) -> None:
@@ -97,10 +102,8 @@ def test_unsigned_token_is_rejected(pem: str) -> None:
         algorithm="none",
     )
 
-    with pytest.raises(InvalidSession):
-        Rs256Tokens(pem).verify(token)
+    assert_invalid(Rs256Tokens(pem).verify(token))
 
 
 def test_garbage_is_rejected(pem: str) -> None:
-    with pytest.raises(InvalidSession):
-        Rs256Tokens(pem).verify("a.b.c")
+    assert_invalid(Rs256Tokens(pem).verify("a.b.c"))

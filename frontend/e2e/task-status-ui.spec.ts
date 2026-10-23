@@ -21,7 +21,10 @@ for (const { sourceType, ru, hy } of [
     async ({ page }) => {
       await page.route('**/api/v1/users/me', (route) =>
         route.fulfill({
-          json: { id: 'owner', role: 'user', status: 'approved' },
+          json: {
+            data: { id: 'owner', role: 'user', status: 'approved' },
+            meta: {},
+          },
         }),
       );
       await page.route('**/api/v1/tasks?**', (route) =>
@@ -86,11 +89,14 @@ test('saves the selected status once and moves the card without duplicates', asy
   await page.route('**/api/v1/users/me', (route) =>
     route.fulfill({
       json: {
-        id: 'owner',
-        telegram_id: 42,
-        display_name: 'Malove',
-        role: 'user',
-        status: 'approved',
+        data: {
+          id: 'owner',
+          telegram_id: 42,
+          display_name: 'Malove',
+          role: 'user',
+          status: 'approved',
+        },
+        meta: {},
       },
     }),
   );
@@ -160,10 +166,13 @@ for (const { outcome, expected, expectedStatus } of [
       await page.route('**/api/v1/users/me', (route) =>
         route.fulfill({
           json: {
-            id: 'owner',
-            role: 'user',
-            status: 'approved',
-            display_name: 'Malove',
+            data: {
+              id: 'owner',
+              role: 'user',
+              status: 'approved',
+              display_name: 'Malove',
+            },
+            meta: {},
           },
         }),
       );
@@ -185,13 +194,18 @@ for (const { outcome, expected, expectedStatus } of [
           if (outcome === 'denied')
             return route.fulfill({
               status: 403,
-              json: { detail: 'forbidden' },
+              json: { error: { code: 'forbidden', message: 'forbidden' } },
             });
           task = { ...task, status: 'completed', version: 2 };
           if (outcome === 'conflict')
             return route.fulfill({
               status: 409,
-              json: { detail: 'version_conflict' },
+              json: {
+                error: {
+                  code: 'version_conflict',
+                  message: 'version_conflict',
+                },
+              },
             });
           return route.abort('failed');
         }
@@ -246,15 +260,18 @@ test('keeps an uncertain task blocked across navigation until manual reread succ
   await page.route('**/api/v1/users/me', (route) =>
     route.fulfill({
       json: {
-        id: 'owner',
-        role: 'admin',
-        status: 'approved',
-        display_name: 'Malove',
+        data: {
+          id: 'owner',
+          role: 'admin',
+          status: 'approved',
+          display_name: 'Malove',
+        },
+        meta: {},
       },
     }),
   );
   await page.route('**/api/v1/admin/**', (route) =>
-    route.fulfill({ json: [] }),
+    route.fulfill({ json: { data: [], meta: {} } }),
   );
   await page.route('**/api/v1/tasks?**', (route) => {
     if (uncertain && readsFail) return route.fulfill({ status: 503 });
@@ -371,7 +388,9 @@ test('ignores a late failed save after logout and lets the same member save in a
     finish = resolve;
   });
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill(signedIn ? { json: member } : { status: 401 }),
+    route.fulfill(
+      signedIn ? { json: { data: member, meta: {} } } : { status: 401 },
+    ),
   );
   await page.route('**/api/v1/auth/logout', (route) => {
     signedIn = false;
@@ -379,10 +398,10 @@ test('ignores a late failed save after logout and lets the same member save in a
   });
   await page.route('**/api/v1/auth/exchange', (route) => {
     signedIn = true;
-    return route.fulfill({ json: member });
+    return route.fulfill({ json: { data: member, meta: {} } });
   });
   await page.route('**/api/v1/admin/**', (route) =>
-    route.fulfill({ json: [] }),
+    route.fulfill({ json: { data: [], meta: {} } }),
   );
   await page.route('**/api/v1/tasks?**', (route) =>
     route.fulfill({
@@ -458,7 +477,12 @@ test('lets a regular user read a foreign task without status actions', async ({
   page,
 }) => {
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ json: { id: 'other', role: 'user', status: 'approved' } }),
+    route.fulfill({
+      json: {
+        data: { id: 'other', role: 'user', status: 'approved' },
+        meta: {},
+      },
+    }),
   );
   await page.route('**/api/v1/tasks?**', (route) =>
     route.fulfill({
@@ -497,10 +521,15 @@ test('blocks duplicate submissions across navigation until the response complete
   });
   let patches = 0;
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ json: { id: 'admin', role: 'admin', status: 'approved' } }),
+    route.fulfill({
+      json: {
+        data: { id: 'admin', role: 'admin', status: 'approved' },
+        meta: {},
+      },
+    }),
   );
   await page.route('**/api/v1/admin/**', (route) =>
-    route.fulfill({ json: [] }),
+    route.fulfill({ json: { data: [], meta: {} } }),
   );
   await page.route('**/api/v1/tasks?**', (route) =>
     route.fulfill({
@@ -559,7 +588,12 @@ test('drags to another column once and never opens the task from a drag', async 
   let task = { ...original };
   const patches: unknown[] = [];
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ json: { id: 'owner', role: 'user', status: 'approved' } }),
+    route.fulfill({
+      json: {
+        data: { id: 'owner', role: 'user', status: 'approved' },
+        meta: {},
+      },
+    }),
   );
   await page.route('**/api/v1/tasks?**', (route) =>
     route.fulfill({
@@ -636,7 +670,10 @@ test.describe('touch input', () => {
     let patches = 0;
     await page.route('**/api/v1/users/me', (route) =>
       route.fulfill({
-        json: { id: 'owner', role: 'user', status: 'approved' },
+        json: {
+          data: { id: 'owner', role: 'user', status: 'approved' },
+          meta: {},
+        },
       }),
     );
     await page.route('**/api/v1/tasks?**', (route) =>

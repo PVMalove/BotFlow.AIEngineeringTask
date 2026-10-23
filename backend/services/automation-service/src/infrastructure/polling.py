@@ -13,7 +13,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from aiogram import Bot, Dispatcher
-from botflow_platform.retry import Rng, jittered
+from kernel_platform.retry import Rng, jittered
 from sqlalchemy.exc import DBAPIError, TimeoutError
 
 ALLOWED_UPDATES = ["message", "edited_message"]

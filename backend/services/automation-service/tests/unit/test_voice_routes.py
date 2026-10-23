@@ -1,22 +1,22 @@
 """Telegram routing contract for voice messages."""
 
 import json
-from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from aiogram import Bot
 from aiogram.types import Update
+from conftest import FakeAutomationUnitOfWork, World
+from kernel_domain.result import Result
 
-from application.commands.accept_text import AcceptTextDto
-from application.commands.accept_voice import AcceptVoiceDto, AcceptVoiceMessage
+from application.commands.accept_text import AcceptTextCommand
+from application.commands.accept_voice import (
+    AcceptVoiceCommand,
+    AcceptVoiceCommandHandler,
+)
 from application.commands.handle_bot_command import HandleBotCommand
 from application.ports import (
-    Accepted,
-    AcceptOutcome,
-    NewVoiceJob,
-    OutboxMessage,
     TelegramMember,
 )
 from infrastructure.telegram import UNSUPPORTED, create_dispatcher
@@ -33,15 +33,15 @@ VOICE = {
 
 
 class Accept:
-    async def execute(self, command: AcceptTextDto) -> None:
+    async def execute(self, command: AcceptTextCommand) -> None:
         raise AssertionError("a voice message is no text")
 
 
 class AcceptVoice:
     def __init__(self) -> None:
-        self.commands: list[AcceptVoiceDto] = []
+        self.commands: list[AcceptVoiceCommand] = []
 
-    async def execute(self, command: AcceptVoiceDto) -> None:
+    async def execute(self, command: AcceptVoiceCommand) -> None:
         self.commands.append(command)
 
 
@@ -57,8 +57,8 @@ class Identity:
     async def find_member(self, telegram_id: int) -> TelegramMember | None:
         return TelegramMember(USER, "member", "approved", 1, uuid4())
 
-    async def issue_login_code(self, telegram_id: int) -> str:
-        return "A" * 32
+    async def issue_login_code(self, telegram_id: int) -> Result[str]:
+        return Result[str].ok("A" * 32)
 
     async def submit_join_request(self, *args: Any) -> Any:
         raise AssertionError("not used")
@@ -169,26 +169,16 @@ async def test_other_media_is_still_unsupported_and_the_reply_names_voice() -> N
     assert "голос" in UNSUPPORTED.lower()
 
 
-class RecordingJobs:
-    def __init__(self) -> None:
-        self.accepted: list[tuple[NewVoiceJob, OutboxMessage]] = []
-
-    async def accept_voice(self, job: NewVoiceJob, message: OutboxMessage) -> Accepted:
-        self.accepted.append((job, message))
-        return Accepted(AcceptOutcome.ACCEPTED, job.id, False)
-
-    async def mark_acked(self, job_id: UUID, at: datetime) -> None:
-        return None
-
-
 async def test_through_the_real_use_case_no_token_or_file_url_is_persisted() -> None:
     messages = Messages()
-    jobs = RecordingJobs()
+    world = World()
     dispatcher = create_dispatcher(
         HandleBotCommand(Identity(), messages, Inbox()),
         Accept(),  # type: ignore[arg-type]
         messages,
-        AcceptVoiceMessage(Identity(), jobs, messages),
+        AcceptVoiceCommandHandler(
+            Identity(), lambda: FakeAutomationUnitOfWork(world), messages
+        ),
     )
     update = message_update(voice=VOICE)
 
@@ -197,7 +187,8 @@ async def test_through_the_real_use_case_no_token_or_file_url_is_persisted() -> 
             bot, update, received_at=datetime(2026, 1, 1, tzinfo=UTC)
         )
 
-    ((job, message),) = jobs.accepted
-    stored = json.dumps([asdict(job), asdict(message)], default=str)
+    (job,) = world.jobs.values()
+    assert job.voice is not None
+    stored = json.dumps([vars(job.voice), list(world.outbox.values())], default=str)
     assert TOKEN not in stored and "api.telegram.org" not in stored
     assert job.message_date - datetime.fromtimestamp(1_700_000_000, UTC) == timedelta(0)

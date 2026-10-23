@@ -6,8 +6,14 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, Update, User
 
-from application.commands.accept_text import AcceptTextDto, AcceptTextMessage
-from application.commands.accept_voice import AcceptVoiceDto, AcceptVoiceMessage
+from application.commands.accept_text import (
+    AcceptTextCommand,
+    AcceptTextCommandHandler,
+)
+from application.commands.accept_voice import (
+    AcceptVoiceCommand,
+    AcceptVoiceCommandHandler,
+)
 from application.commands.handle_bot_command import (
     HandleBotCommand,
     HandleBotCommandDto,
@@ -34,9 +40,9 @@ def applicant_name(user: User) -> str:
 
 def create_dispatcher(
     command: HandleBotCommand,
-    accept: AcceptTextMessage | None = None,
+    accept: AcceptTextCommandHandler | None = None,
     messenger: Messenger | None = None,
-    accept_voice: AcceptVoiceMessage | None = None,
+    accept_voice: AcceptVoiceCommandHandler | None = None,
 ) -> Dispatcher:
     dispatcher = Dispatcher()
 
@@ -69,7 +75,7 @@ def create_dispatcher(
         if message.from_user is None or message.text is None:
             return
         await accept.execute(
-            AcceptTextDto(
+            AcceptTextCommand(
                 bot_id=bot.id,
                 chat_id=message.chat.id,
                 message_id=message.message_id,
@@ -90,7 +96,7 @@ def create_dispatcher(
             if message.from_user is None or message.voice is None:
                 return
             await accept_voice.execute(
-                AcceptVoiceDto(
+                AcceptVoiceCommand(
                     bot_id=bot.id,
                     chat_id=message.chat.id,
                     message_id=message.message_id,

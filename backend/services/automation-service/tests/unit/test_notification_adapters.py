@@ -1,13 +1,10 @@
-"""Broker adapters: stream entries to intents, and ack/reject/nack of events."""
+"""Stream adapter: notification stream entries to intents."""
 
 from uuid import UUID, uuid4
 
-import pytest
-from botflow_platform.streams import StreamEntry
+from kernel_platform.streams import StreamEntry
 
-from application.commands.process_identity_event import InvalidEvent
 from application.ports import QueuedIntent
-from infrastructure.messaging import IdentityEventConsumer
 from infrastructure.streams import RedisNotificationQueue
 
 
@@ -56,55 +53,3 @@ async def test_entries_map_to_intents_and_junk_maps_to_none() -> None:
         QueuedIntent("2-0", None),
         QueuedIntent("3-0", None),
     ]
-
-
-class Message:
-    message_id = "m1"
-    type = "member.access-decided"
-    body = b"{}"
-
-    def __init__(self) -> None:
-        self.outcome: tuple[str, bool | None] | None = None
-
-    async def ack(self) -> None:
-        self.outcome = ("ack", None)
-
-    async def reject(self, requeue: bool) -> None:
-        self.outcome = ("reject", requeue)
-
-    async def nack(self, requeue: bool) -> None:
-        self.outcome = ("nack", requeue)
-
-
-class Process:
-    def __init__(self, failure: Exception | None = None) -> None:
-        self.failure = failure
-        self.calls: list[tuple[str | None, str | None, bytes]] = []
-
-    async def execute(
-        self, message_id: str | None, kind: str | None, body: bytes
-    ) -> bool:
-        self.calls.append((message_id, kind, body))
-        if self.failure:
-            raise self.failure
-        return True
-
-
-@pytest.mark.parametrize(
-    ("failure", "outcome"),
-    [
-        (None, ("ack", None)),
-        (InvalidEvent(), ("reject", False)),
-        (ConnectionError("database down"), ("nack", True)),
-    ],
-)
-async def test_a_message_is_acknowledged_only_after_it_is_stored(
-    failure: Exception | None, outcome: tuple[str, bool | None]
-) -> None:
-    message, process = Message(), Process(failure)
-    sut = IdentityEventConsumer(None, process, retry_delay=0)  # type: ignore[arg-type]
-
-    await sut.handle(message)  # type: ignore[arg-type]
-
-    assert process.calls == [("m1", "member.access-decided", b"{}")]
-    assert message.outcome == outcome

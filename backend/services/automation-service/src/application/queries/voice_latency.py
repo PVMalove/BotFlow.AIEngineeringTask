@@ -54,12 +54,6 @@ class Timing:
     total: float | None  # update -> task, queue wait excluded
 
 
-def _seconds(start: datetime | None, end: datetime | None) -> float | None:
-    if start is None or end is None:
-        return None
-    return (end - start).total_seconds()
-
-
 def timing(record: VoiceRecord) -> Timing:
     completed = record.status == "completed"
     end = record.completed_at if completed else None
@@ -107,14 +101,6 @@ _STAGES: tuple[tuple[str, str, Callable[[Timing], float | None]], ...] = (
     ("handoff", "Передача до TaskCreated", lambda t: t.handoff),
     ("total", "Итого update -> задача", lambda t: t.total),
 )
-
-
-def _stat(values: list[float]) -> Stat | None:
-    if not values:
-        return None
-    ordered = sorted(values)
-    rank = math.ceil(0.95 * len(ordered)) - 1  # nearest rank
-    return Stat(len(ordered), median(ordered), ordered[rank], ordered[-1])
 
 
 def analyze(
@@ -194,3 +180,17 @@ def render(report: LatencyReport) -> str:
         f"пустая очередь ({queue_text}), длина аудио {audio}."
     )
     return "\n".join(lines)
+
+
+def _seconds(start: datetime | None, end: datetime | None) -> float | None:
+    if start is None or end is None:
+        return None
+    return (end - start).total_seconds()
+
+
+def _stat(values: list[float]) -> Stat | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = math.ceil(0.95 * len(ordered)) - 1  # nearest rank
+    return Stat(len(ordered), median(ordered), ordered[rank], ordered[-1])

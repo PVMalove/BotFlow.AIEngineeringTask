@@ -9,8 +9,8 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from botflow_platform.outbox import OutboxRow, RelayOutbox
-from botflow_platform.streams import RedisStream
+from kernel_platform.outbox import OutboxRow, RelayOutbox
+from kernel_platform.streams import RedisStream
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import ResponseError
 from redis.exceptions import TimeoutError as RedisTimeoutError

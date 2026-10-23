@@ -23,24 +23,55 @@
 
 ## Внутренние слои
 
-- `domain`: сущности, значения и инварианты, без ORM/HTTP/DI импортов.
-- `application`: команды/запросы и порты; зависимости передаются конструкторами.
-- `infrastructure`: репозитории, UoW, outbox/inbox, брокеры, S3 и Telegram/STT адаптеры.
-- `api`: HTTP-маршруты и схемы; `scripts/`: точки входа bot, worker и bootstrap.
+- `domain`: агрегаты (`Entity[Id]` с `create`/`reconstitute`), value objects, доменные события
+  (`DomainEvent`), реестр ошибок `domain/errors.py` и порты репозиториев/UoW; без ORM/HTTP/DI импортов.
+  Ожидаемые отказы возвращаются как `Result`, не исключениями; события копятся в агрегате (`pull_events`).
+- `application`: команды/запросы и их handlers (возвращают `Result[View]`), порты; зависимости
+  передаются конструкторами.
+- `infrastructure`: репозитории, UoW, staging событий в outbox, брокеры, S3 и Telegram/STT адаптеры.
+- `api`: входящие адаптеры — HTTP-маршруты и схемы запросов (`.to_command()`/`.to_query()`),
+  а также процессы `worker`, `bot`, `bootstrap` (`python -m api.worker`); endpoint тонкий:
+  зависимость аутентификации, handler, `match_result`/`match_page`.
 - `api/containers.py`: composition root сервиса, lifecycle ресурсов.
 - `contracts`: независимые от фреймворка View на frozen dataclasses для BFF.
 - `core`: кросс-срезная политика сервиса; `common`: локальные утилиты.
 
 Слои лежат прямо в `backend/services/<service>/src/`, без промежуточного
 пакета с именем сервиса. Каждый сервис запускается с собственным `src` в пути
-импортов; исходники других сервисов в этот процесс не подключаются. CLI-точки
-входа находятся в `scripts/`, тесты разделены на `unit/`, `integration/`, `e2e/`,
+импортов; исходники других сервисов в этот процесс не подключаются. Процессы bootstrap, worker и bot — в слое `api`; служебные
+CLI (`voice_latency`, `whisper_validate`) находятся в `scripts/`, тесты разделены на `unit/`, `integration/`, `e2e/`,
 `performance/`. Рядом с `src/` предусмотрены `k8s/`, `docs/` и `ci/`.
+
+Агрегаты: tasks — `Task`; identity — `Member`; automation — `Job` (текст/голос, с частью
+`VoiceMessage`) и `NotificationIntent`. Репозиторий отдаёт и сохраняет агрегат и регистрирует его в
+UoW (`track`); при `commit` UoW забирает события (`pull_events`), в той же транзакции раскладывает
+их в outbox/намерения (`stage_*_event` в `infrastructure/db`), а после commit передаёт обработчикам
+(сигнал `board.changed`). Разбор сообщений брокера (`CreateTask`, `TaskCreated`, события Identity)
+выполняют consumers в `infrastructure/messaging`, команды получают уже готовый DTO.
 
 CQRS локальный, без отдельной read DB/универсального dispatcher. UoW коммитит
 бизнес-изменение и outbox/inbox вместе; репозитории не коммитят. Сессии БД
 изолированы по операции, rollback — по умолчанию. Длительный Whisper не держит
 DB-транзакцию и не блокирует ingress, уведомления или heartbeat брокера.
+
+Общие библиотеки — `backend/libs`: `kernel-domain` (`Result`, `Error`, `Entity`,
+`DomainEvent`), `kernel-platform` (HTTP-конверт и обработчики ошибок, пагинация, `Actor`, протокол `UnitOfWork` и
+`SqlAlchemyUnitOfWork` в отдельном модуле — с outbox-staging и обработчиками событий после commit,
+outbox, messaging, общие `utcnow`, конверт сообщения и циклы воркеров),
+`observability` (request id, JSON-логи, access-log), `test-support` (фикстуры тестов).
+
+HTTP-контракт: успех — `{data, meta}`; ошибка — `{error: {code, message, details?, request_id?}}`
+(`code` — стабильный snake_case из `domain/errors.py`; статус выводится из типа `Error`:
+validation 400, unauthorized 401, forbidden 403, not_found 404, conflict 409, rate_limited 429
+с `Retry-After`). Ошибку тела запроса, не прошедшую схему, отдаёт FastAPI как 422
+`validation_error`; значение, отклонённое доменным правилом, — 400 с кодом правила.
+
+Ожидаемый исход бизнес-операции — `Result`; технический сбой (БД, Identity) — исключение
+(`IdentityUnavailable`, `DBAPIError`, `OSError`), которое сервис перечисляет в
+`unavailable_error_types` и которое отвечает 503 `service_unavailable` с `Retry-After`. Любое
+другое необработанное исключение — 500 `internal_error` без деталей; `request_id` и заголовок
+`X-Request-ID` есть и у него. Изменение `change_status` на уже установленный статус с актуальной
+версией — успех без изменений (`Result.ok(False)`), событие не создаётся.
 
 Референс — [ProductsFlow](https://github.com/PVMalove/ProductsFlow). Подходы
 адаптированы к контекстам BotFlow; наличие workers само по себе не определяет
@@ -101,13 +132,14 @@ expected_version; сравнение и UPDATE атомарны. Stale всег�
 (требует `Origin`, совпадающий с адресом ingress, иначе 403 `origin_not_allowed`):
 обычный участник чужой задачи получает 403 `forbidden`, устаревшая версия —
 409 `version_conflict`; все ошибки tasks-service (401/403/404/400/409/503) имеют вид
-`{detail, message, request_id}` и заголовок `X-Request-ID` (принятый корректный id возвращается, иначе выдаётся
-новый). При 409 клиент перечитывает карточку. UPDATE содержит условия
-`version = expected AND status <> target`; ноль строк разбирается чтением:
-нет задачи — 404, версия актуальна и статус уже целевой — 200 без изменений,
-иначе 409. Сигнал `board.changed` отправляется после commit и только при
-реальном изменении, публикация ограничена таймаутом 1 с; её потеря не отменяет
-изменение.
+`{error: {code, message, request_id}}` и заголовок `X-Request-ID` (принятый корректный id
+возвращается, иначе выдаётся новый). При 409 клиент перечитывает карточку. Агрегат
+`Task.change_status(target, expected_version)` сравнивает версию с загруженной: устаревшая — 409
+даже при совпадающем статусе, актуальная версия и статус уже целевой — 200 без изменений и без
+события. Реальное изменение повышает версию, добавляет `TaskStatusChanged`, а репозиторий пишет
+`UPDATE … WHERE version = :loaded` (ноль строк — 409, конкурентный писатель проиграл).
+Сигнал `board.changed` — обработчик `TaskStatusChanged` после commit; публикация ограничена
+таймаутом 1 с, её потеря не отменяет изменение.
 
 ## Панель и realtime
 
@@ -395,18 +427,18 @@ outbox TaskCreated. Идентификаторы задачи и результ�
 другой `message_id` с тем же источником не создаёт ни второй задачи, ни второго
 результата. Ack — только после commit.
 
-**Retry, ошибка, replay.** `RelayOutbox` (`botflow_platform.outbox`) берёт готовые строки
+**Retry, ошибка, replay.** `RelayOutbox` (`kernel_platform.outbox`) берёт готовые строки
 `FOR UPDATE SKIP LOCKED`, публикует с confirm и пишет исход в той же транзакции:
 `attempts`, `next_attempt_at`, `last_error` (только имя класса исключения). До трёх
 попыток с паузами 5 и 30 с ±20 %. Недоступность брокера (ошибки соединения,
 таймаут confirm) попытку не расходует (ADR-0007). После третьей ошибки в той же
 транзакции `on_exhausted` помечает задание `failed` с сохранённой ошибкой: слот
 свободен. Оператор повторяет исходное задание командой
-`python scripts/worker.py replay <job_id>`: у той же строки outbox (прежний id) сбрасываются
+`python -m api.worker replay <job_id>`: у той же строки outbox (прежний id) сбрасываются
 попытки, задание снова `accepted`. Поздний TaskCreated для `failed` задания допустим
 (`failed` → `completed`). При исчерпании попыток outbox публикации `TaskCreated` на стороне
 Tasks оператор повторяет отправку результата аналогичной командой Tasks worker:
-`python scripts/worker.py replay <job_id>`. Consumer (`QueueConsumer`) подтверждает сообщение только после
+`python -m api.worker replay <job_id>`. Consumer (`QueueConsumer`) подтверждает сообщение только после
 commit; при временной ошибке пауза с jitter и `nack(requeue=True)` без busy loop;
 невалидное сообщение — `reject(requeue=False)` без DLX (ADR-0021).
 
@@ -527,7 +559,7 @@ Whisper оставляют запись в stream без `XACK`: её забер
 файл), `unavailable` (временные ошибки исчерпаны), `text_too_long` (> 4096 символов,
 текст задачи не усекается), `failed`. Заблокированному автору итог подавляется
 прежним `delivery_verdict`. Оператор повторяет упавшее задание командой
-`python scripts/worker.py replay <job_id>`: запись снова `accepted`, читается из
+`python -m api.worker replay <job_id>`: запись снова `accepted`, читается из
 MinIO (если объект уже есть) или из Telegram, старое уведомление об ошибке удаляется.
 
 **Таймаут и перезапуск.** Decode идёт в daemon-потоке с таймаутом 120 с (вдвое больше

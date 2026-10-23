@@ -1,6 +1,6 @@
 # Локальная инфраструктура и проверки #2
 
-Общие технические адаптеры находятся в `botflow_platform.resources`. У каждого
+Общие технические адаптеры находятся в `kernel_platform.resources`. У каждого
 сервиса свой `src/api/containers.py` с `Container`: при старте HTTP-процесса
 открываются его PostgreSQL и RabbitMQ, у Tasks/Automation также Redis, у Automation — S3-клиент. FastAPI
 lifespan и `providers.Resource` закрывают их при остановке. `AsyncExitStack`
@@ -25,8 +25,8 @@ Commit должен быть явным; закрытие сессии отка�
 `infrastructure/`. Сущности и порты будут заполнены бизнес-задачами.
 
 В корне каждого сервиса находятся `tests/{unit,integration,e2e,performance}/`,
-`k8s/`, `docs/`, `ci/`, `scripts/`. CLI-точки входа bootstrap, worker и Telegram
-bot находятся в `scripts/`; bootstrap всех трёх сервисов, бот (login, заявки и
+`k8s/`, `docs/`, `ci/`, `scripts/`. Процессы bootstrap, worker и Telegram
+bot находятся в слое `api` (`python -m api.bootstrap`, `api.worker`, `api.bot`); bootstrap всех трёх сервисов, бот (login, заявки и
 текст), `identity-worker`, `tasks-worker` и `automation-worker` работают,
 остальные точки входа явно сообщают об отсутствии реализации. Каталоги для будущих артефактов не означают готовность Kubernetes,
 нагрузочных тестов или бизнес-функций.
@@ -34,8 +34,9 @@ bot находятся в `scripts/`; bootstrap всех трёх сервисо
 Сервисы — virtual projects uv (`package = false`): workspace устанавливает их
 зависимости, но не смешивает одноимённые пакеты `api`, `domain` и другие слои в
 `site-packages`. Проверки каждого сервиса выполняются отдельным процессом из
-его каталога; pytest и mypy получают только его `src`. Общая техническая
-библиотека по-прежнему устанавливается как `botflow_platform`.
+его каталога; pytest и mypy получают только его `src`. Общие библиотеки
+(`kernel_domain`, `kernel_platform`, `observability`, `test_support`) устанавливаются
+в workspace как обычные пакеты.
 
 Docker-образ копирует только исходники выбранного сервиса в `/srv/src`, задаёт
 `PYTHONPATH=/srv/src` и запускает `uvicorn api.main:app`. Smoke использует
@@ -177,7 +178,7 @@ ingress этого маршрута пока нет, поэтому до сре�
 
 ## Текстовый путь и Tasks (#9)
 
-`tasks-bootstrap` применяет миграции Tasks (`scripts/bootstrap.py migrate`).
+`tasks-bootstrap` применяет миграции Tasks (`python -m api.bootstrap migrate`).
 `tasks-worker` (БД, RabbitMQ, Redis) принимает CreateTask и переносит TaskCreated в
 RabbitMQ; `automation-worker` дополнительно переносит CreateTask из outbox Automation,
 принимает результат и создаёт уведомление. `tasks-api` обращается к `identity-api`
@@ -186,7 +187,7 @@ RabbitMQ; `automation-worker` дополнительно переносит Crea
 ```bash
 docker compose --profile bootstrap run --rm tasks-bootstrap
 docker compose --profile workers up -d identity-worker tasks-worker automation-worker
-docker compose --profile workers exec automation-worker python scripts/worker.py replay <job_id>
+docker compose --profile workers exec automation-worker python -m api.worker replay <job_id>
 ```
 
 Список и карточки доступны через ingress: `GET /api/v1/tasks`, `GET /api/v1/tasks/{id}`
@@ -211,7 +212,7 @@ make whisper-build                       # образ stt-runtime (нужна с
 make whisper-prepare WHISPER_MODEL=turbo # веса в том (единственный шаг с сетью)
 docker compose build whisper-worker
 docker compose --profile workers up -d automation-worker whisper-worker
-docker compose --profile workers exec automation-worker python scripts/worker.py replay <job_id>
+docker compose --profile workers exec automation-worker python -m api.worker replay <job_id>
 make voice-latency ARGS="--last 20"      # задержка update -> задача по данным Automation
 ```
 
@@ -224,3 +225,11 @@ SHA-256 весов и загрузки модели; до этого healthcheck
 PostgreSQL/Redis/RabbitMQ/MinIO без Whisper и без Telegram (`VoiceTaskFlow`); качество
 RU/hy и живой Telegram проверяются отдельно (#17).
 
+
+## Тесты на PostgreSQL
+
+Интеграционные тесты tasks-service с реальной БД (`tests/integration`) пропускаются, пока не
+задан `BOTFLOW_TEST_DATABASE_URL` — URL одноразовой БД, например
+`postgresql+asyncpg://user:password@localhost:5432/test`. Тесты создают и очищают свои таблицы,
+поэтому указывать рабочую БД нельзя. Без переменной `make test` их не запускает; полный путь
+через PostgreSQL, RabbitMQ, Redis и MinIO проверяют `make smoke` и `make e2e`.
