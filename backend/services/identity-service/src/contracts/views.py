@@ -20,6 +20,7 @@ class MemberView:
     role: str
     status: str
     access_version: int
+    display_name: str | None = None
 
     @classmethod
     def from_domain(cls, member: Member) -> "MemberView":
@@ -29,6 +30,7 @@ class MemberView:
             role=member.role.value,
             status=member.status.value,
             access_version=member.access_version,
+            display_name=member.display_name,
         )
 
 

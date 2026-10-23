@@ -17,6 +17,7 @@ from application.commands.create_task import (
 )
 from domain.events.task_domain_event import TaskCreated
 from domain.value_objects.task_id import TaskId
+from domain.value_objects.task_source import TaskSource
 from infrastructure.db.replay import replay_task_created
 from infrastructure.messaging.create_task_consumer import CreateTaskConsumer
 
@@ -62,6 +63,18 @@ async def test_a_valid_command_stores_the_task_with_its_source_and_author() -> N
     )
     assert task.author_telegram_id == 456
     assert task.created_at == NOW
+
+
+@pytest.mark.parametrize("source_type", [TaskSource.VOICE, TaskSource.TEXT, None])
+async def test_the_command_preserves_the_source_type_or_unknown_legacy_source(
+    source_type: TaskSource | None,
+) -> None:
+    board = Board()
+
+    await handler(board).execute(new_command(source_type=source_type))
+
+    (task,) = board.tasks.values()
+    assert task.source_type is source_type
 
 
 async def test_the_created_event_names_the_task_and_the_job() -> None:
@@ -161,6 +174,18 @@ async def test_a_valid_envelope_becomes_a_stored_task() -> None:
     assert board.inbox == {"m-1"}
 
 
+@pytest.mark.parametrize("source_type", ["voice", "text", None])
+async def test_the_envelope_source_type_reaches_the_task(
+    source_type: str | None,
+) -> None:
+    board = Board()
+
+    await consumer(board).handle("m-1", "CreateTask", envelope(source_type=source_type))
+
+    (task,) = board.tasks.values()
+    assert task.source_type == source_type
+
+
 @pytest.mark.parametrize(
     "type_, body",
     [
@@ -171,6 +196,7 @@ async def test_a_valid_envelope_becomes_a_stored_task() -> None:
         ("CreateTask", envelope(text="x" * 4097)),
         ("CreateTask", envelope(author_id="nope")),
         ("CreateTask", envelope(chat_id="1")),
+        ("CreateTask", envelope(source_type="photo")),
         ("CreateTask", envelope(author_name="")),
         ("CreateTask", envelope(author_name="n" * 65)),
     ],

@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.entities.task import Task
 from domain.value_objects.task_id import TaskId
+from domain.value_objects.task_source import TaskSource
 from domain.value_objects.task_status import TaskStatus
 from infrastructure.db.tables import tasks
 
@@ -50,4 +51,5 @@ def to_task(row: Row[tuple[object, ...]]) -> Task:
         correlation_id=row.correlation_id,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        source_type=TaskSource(row.source_type) if row.source_type else None,
     )

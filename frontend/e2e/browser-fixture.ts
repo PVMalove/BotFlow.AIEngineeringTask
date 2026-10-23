@@ -8,7 +8,8 @@ type Action =
   | 'expire'
   | 'revoke'
   | 'board'
-  | 'board-change';
+  | 'board-change'
+  | 'dnd-board';
 
 export function fixture(action: Action): { code?: string } {
   const raw = process.env.BOTFLOW_E2E_COMPOSE;

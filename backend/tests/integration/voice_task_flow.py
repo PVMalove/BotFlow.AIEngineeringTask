@@ -548,6 +548,7 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
         browser = await self.login(AUTHOR_A)
         card = await browser.get(f"/api/v1/tasks/{job['task_id']}")
         self.assertEqual(card.status_code, 200)
+        self.assertEqual(card.json()["data"]["source_type"], "voice")
         data = card.json()["data"]
         self.assertEqual((data["text"], data["author_id"]), (RU_TEXT, str(member_id)))
 

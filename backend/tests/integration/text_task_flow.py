@@ -359,6 +359,7 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
         browser = await self.login(AUTHOR_A)
         card = await browser.get(f"/api/v1/tasks/{task_id}")
         self.assertEqual(card.status_code, 200)
+        self.assertEqual(card.json()["data"]["source_type"], "text")
         data = card.json()["data"]
         self.assertEqual(
             (data["text"], data["status"], data["version"], data["author_id"]),

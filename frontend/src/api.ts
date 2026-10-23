@@ -3,6 +3,7 @@ export interface Member {
   telegram_id: number;
   role: 'admin' | 'user';
   status: string;
+  display_name?: string | null;
 }
 
 export interface AdminMember extends Member {
@@ -22,6 +23,7 @@ export interface Task {
   version: number;
   author_id: string;
   author_name: string;
+  source_type?: 'text' | 'voice' | null;
   created_at: string;
   updated_at: string;
 }
@@ -49,6 +51,20 @@ export function listTasks(
   return send(`/api/v1/tasks?${params}`, { signal });
 }
 export type AccessList = 'pending' | 'rejected' | 'members';
+export function getTask(id: string): Promise<Task> {
+  return request(`/api/v1/tasks/${encodeURIComponent(id)}`);
+}
+
+export function changeTaskStatus(
+  task: Task,
+  status: TaskStatus,
+): Promise<Task> {
+  return request(`/api/v1/tasks/${encodeURIComponent(task.id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status, expected_version: task.version }),
+  });
+}
 export const accessPageSize = 20;
 
 export class ApiError extends Error {

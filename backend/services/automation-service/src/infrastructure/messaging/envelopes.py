@@ -7,6 +7,8 @@ from uuid import UUID, uuid5
 from kernel_platform.envelope import ENVELOPE_VERSION
 from kernel_platform.messaging import TASK_CREATE_ROUTING_KEY
 
+from domain.value_objects.job_status import JobKind
+
 CREATE_TASK = "CreateTask"
 TRANSCRIBE_VOICE = "TranscribeVoice"
 VOICE_ROUTING_KEY = "voice.transcribe"
@@ -36,6 +38,7 @@ def create_task_envelope(
     author_telegram_id: int,
     author_name: str,
     text: str,
+    source_type: JobKind,
     received_at: datetime,
 ) -> tuple[UUID, str, dict[str, Any]]:
     """Outbox id, routing key and envelope of the CreateTask command."""
@@ -49,6 +52,7 @@ def create_task_envelope(
         "author_telegram_id": author_telegram_id,
         "author_name": author_name,
         "text": text,
+        "source_type": source_type.value,
     }
     return (
         entry_id,

@@ -6,6 +6,7 @@ from uuid import UUID
 from kernel_domain.domain_event import DomainEvent
 
 from domain.value_objects.job_id import JobId
+from domain.value_objects.job_status import JobKind
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -43,6 +44,7 @@ class TextJobAccepted(JobSource):
     event_type: str = "job.text-accepted"
 
     text: str
+    source_type: JobKind = JobKind.TEXT
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -59,6 +61,7 @@ class VoiceTranscribed(JobSource):
     event_type: str = "job.voice-transcribed"
 
     text: str
+    source_type: JobKind = JobKind.VOICE
 
 
 @dataclass(frozen=True, kw_only=True)

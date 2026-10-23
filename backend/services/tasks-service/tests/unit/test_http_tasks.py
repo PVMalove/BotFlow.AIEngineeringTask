@@ -20,6 +20,7 @@ from application.ports import IdentityUnavailable
 from application.queries.get_task import GetTaskQueryHandler
 from application.queries.list_tasks import ListTasksQueryHandler
 from domain.entities.task import Task
+from domain.value_objects.task_source import TaskSource
 from domain.value_objects.task_status import TaskStatus
 
 COOKIES = {"botflow_session": "session-token"}
@@ -105,6 +106,7 @@ async def test_the_list_returns_the_whole_board_newest_first_with_authorship(
         "author_name": "Ann (@ann)",
         "created_at": "2026-01-01T12:02:00Z",
         "updated_at": "2026-01-01T12:02:00Z",
+        "source_type": None,
     }
     assert body["data"][1]["author_name"] == "Bob"  # tasks of other authors too
     assert body["meta"] == {"next_cursor": None, "has_more": False}
@@ -452,3 +454,24 @@ async def test_the_largest_integer_version_is_accepted(
     response = await patch(client, task, "completed", version=2**31 - 1)
 
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize("source_type", ["voice", "text", None])
+async def test_source_type_is_preserved_in_list_get_and_status_patch(
+    env: Env, client: httpx.AsyncClient, source_type: str | None
+) -> None:
+    task = env.board.add(
+        1, source_type=TaskSource(source_type) if source_type else None
+    )
+
+    listed = await client.get("/api/v1/tasks")
+    card = await client.get(f"/api/v1/tasks/{task.id.value}")
+    changed = await client.patch(
+        f"/api/v1/tasks/{task.id.value}",
+        json={"status": "in_progress", "expected_version": 1},
+    )
+
+    assert listed.json()["data"][0]["source_type"] == source_type
+    assert card.json()["data"]["source_type"] == source_type
+    assert changed.status_code == 200
+    assert changed.json()["data"]["source_type"] == source_type

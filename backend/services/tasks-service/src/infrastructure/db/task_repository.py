@@ -39,6 +39,7 @@ class SqlTaskRepository:
             .values(
                 id=task.id.value,
                 source_key=task.source_key,
+                source_type=task.source_type.value if task.source_type else None,
                 correlation_id=task.correlation_id,
                 text=task.text,
                 status=task.status.value,

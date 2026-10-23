@@ -187,6 +187,7 @@ class FakeAutomationUnitOfWork:
                     author_telegram_id=event.author_telegram_id,
                     author_name=event.author_name,
                     text=event.text,
+                    source_type=event.source_type,
                     received_at=event.received_at,
                 )
                 data.outbox[entry_id] = ("CreateTask", envelope)

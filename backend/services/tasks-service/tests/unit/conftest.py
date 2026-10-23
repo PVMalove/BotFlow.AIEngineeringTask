@@ -165,4 +165,5 @@ def _copy(task: Task) -> Task:
         correlation_id=task.correlation_id,
         created_at=task.created_at,
         updated_at=task.updated_at,
+        source_type=task.source_type,
     )

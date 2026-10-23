@@ -11,6 +11,7 @@ from application.commands.create_task import (
     CreateTaskCommand,
     CreateTaskCommandHandler,
 )
+from domain.value_objects.task_source import TaskSource
 
 COMMAND_TYPE = "CreateTask"
 
@@ -46,6 +47,12 @@ def _parse(message_id: str, body: bytes) -> CreateTaskCommand:
             author_id=UUID(payload["author_id"]),
             author_telegram_id=as_int(payload["author_telegram_id"]),
             author_name=as_str(payload["author_name"]),
+            source_type=_source_type(payload.get("source_type")),
         )
     except (ValueError, KeyError, TypeError, AttributeError):
         raise InvalidMessage from None
+
+
+def _source_type(value: object) -> TaskSource | None:
+    """Absent for older senders; any other value than a known kind is invalid."""
+    return None if value is None else TaskSource(as_str(value))

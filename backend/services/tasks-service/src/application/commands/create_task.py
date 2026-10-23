@@ -13,6 +13,7 @@ from domain.entities.task import Task
 from domain.unit_of_work import TasksUnitOfWork
 from domain.value_objects.source_key import source_key
 from domain.value_objects.task_id import TaskId
+from domain.value_objects.task_source import TaskSource
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class CreateTaskCommand:
     author_id: UUID
     author_telegram_id: int
     author_name: str
+    source_type: TaskSource | None = None  # absent in messages of older senders
 
 
 class CreateTaskCommandHandler:
@@ -51,6 +53,7 @@ class CreateTaskCommandHandler:
             source_key=source,
             correlation_id=command.correlation_id,
             now=self._clock(),
+            source_type=command.source_type,
         )
         if created.is_err:
             return Result[bool].fail(created.error)

@@ -8,6 +8,7 @@ from kernel_domain.result import Result
 from domain.errors import TaskErrors
 from domain.events.task_domain_event import TaskCreated, TaskStatusChanged
 from domain.value_objects.task_id import TaskId
+from domain.value_objects.task_source import TaskSource
 from domain.value_objects.task_status import TaskStatus
 
 MAX_TEXT = 4096
@@ -35,6 +36,7 @@ class Task(Entity[TaskId]):
         correlation_id: UUID,
         created_at: datetime,
         updated_at: datetime,
+        source_type: TaskSource | None = None,
     ) -> None:
         super().__init__(id)
         self.text = text
@@ -47,6 +49,7 @@ class Task(Entity[TaskId]):
         self.correlation_id = correlation_id
         self.created_at = created_at
         self.updated_at = updated_at
+        self.source_type = source_type
 
     @classmethod
     def create(
@@ -60,6 +63,7 @@ class Task(Entity[TaskId]):
         source_key: str,
         correlation_id: UUID,
         now: datetime,
+        source_type: TaskSource | None = None,
     ) -> Result["Task"]:
         error = _validate(text=text, author_name=author_name)
         if error is not None:
@@ -76,6 +80,7 @@ class Task(Entity[TaskId]):
             correlation_id=correlation_id,
             created_at=now,
             updated_at=now,
+            source_type=source_type,
         )
         task.add_domain_event(
             TaskCreated(
@@ -99,6 +104,7 @@ class Task(Entity[TaskId]):
         correlation_id: UUID,
         created_at: datetime,
         updated_at: datetime,
+        source_type: TaskSource | None = None,
     ) -> "Task":
         return cls(
             id,
@@ -112,6 +118,7 @@ class Task(Entity[TaskId]):
             correlation_id=correlation_id,
             created_at=created_at,
             updated_at=updated_at,
+            source_type=source_type,
         )
 
     def change_status(

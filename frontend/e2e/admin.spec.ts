@@ -39,8 +39,10 @@ test('manages real join decisions and revokes and restores a regular user access
   test.setTimeout(120_000);
   fixture('join');
   await login(page, loginCode());
-  const listResponse = page.waitForResponse((response) =>
-    response.url().includes('/api/v1/admin/join-requests?'),
+  const listResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/admin/join-requests?') &&
+      new URL(response.url()).searchParams.get('status') === 'pending',
   );
   await page.getByRole('link', { name: 'Управление доступом' }).click();
   await checkRequestList(await listResponse);
@@ -52,17 +54,17 @@ test('manages real join decisions and revokes and restores a regular user access
     .getByRole('button', { name: 'Отклонить', exact: true })
     .click();
   await expect(applicant).toHaveCount(0);
-  await page.getByRole('tab', { name: 'Отклонённые', exact: true }).click();
+  await page.getByRole('tab', { name: /^Отклонённые \(/ }).click();
   await expect(applicant).toContainText('Отклонён');
 
   fixture('join');
-  await page.getByRole('tab', { name: 'Заявки', exact: true }).click();
+  await page.getByRole('tab', { name: /^Заявки \(/ }).click();
   await expect(applicant).toContainText('Ожидает решения');
   await applicant
     .getByRole('button', { name: 'Одобрить', exact: true })
     .click();
   await expect(applicant).toHaveCount(0);
-  await page.getByRole('tab', { name: 'Участники', exact: true }).click();
+  await page.getByRole('tab', { name: /^Участники \(/ }).click();
   await expect(applicant).toContainText('Допущен');
 
   const userContext = await browser.newContext({ baseURL });
@@ -115,7 +117,7 @@ test('manages real join decisions and revokes and restores a regular user access
     await expect(
       page.getByRole('heading', { name: 'Մուտքի կառավարում' }),
     ).toBeVisible();
-    await page.getByRole('tab', { name: 'Մասնակիցներ', exact: true }).click();
+    await page.getByRole('tab', { name: /^Մասնակիցներ \(/ }).click();
     await applicant
       .getByRole('button', { name: 'Ապաարգելափակել', exact: true })
       .click();
@@ -136,8 +138,10 @@ test('rereads a real concurrent decision without overwriting it', async ({
   test.setTimeout(60_000);
   fixture('join');
   await login(page, loginCode());
-  const listResponse = page.waitForResponse((response) =>
-    response.url().includes('/api/v1/admin/join-requests?'),
+  const listResponse = page.waitForResponse(
+    (response) =>
+      response.url().includes('/api/v1/admin/join-requests?') &&
+      new URL(response.url()).searchParams.get('status') === 'pending',
   );
   await page.goto('/admin');
   await checkRequestList(await listResponse);
@@ -162,6 +166,6 @@ test('rereads a real concurrent decision without overwriting it', async ({
     .click();
   await expect(page.getByRole('alert')).toContainText('Данные изменились');
   await expect(applicant).toHaveCount(0);
-  await page.getByRole('tab', { name: 'Отклонённые', exact: true }).click();
+  await page.getByRole('tab', { name: /^Отклонённые \(/ }).click();
   await expect(applicant).toContainText('Отклонён');
 });

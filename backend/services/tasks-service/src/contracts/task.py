@@ -17,6 +17,7 @@ class TaskView:
     author_name: str
     created_at: datetime
     updated_at: datetime
+    source_type: str | None = None
 
     @classmethod
     def from_domain(cls, task: Task) -> "TaskView":
@@ -29,4 +30,5 @@ class TaskView:
             author_name=task.author_name,
             created_at=task.created_at,
             updated_at=task.updated_at,
+            source_type=task.source_type.value if task.source_type else None,
         )
