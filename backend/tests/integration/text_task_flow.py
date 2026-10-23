@@ -35,8 +35,11 @@ from application.commands.replay_job import (
     ReplayJobCommandHandler,
     ReplayOutcome,
 )
+from application.queries.job_status import render, view_of
 from domain.entities.job import Job
+from domain.job_limits import JobLimits
 from domain.value_objects.job_id import JobId
+from infrastructure.db.job_status_reader import read_job_status
 from infrastructure.db.relay_hooks import fail_job
 from infrastructure.db.tables import outbox
 from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
@@ -66,6 +69,14 @@ AUTHORS = (6_100_000_001, 6_100_000_099)
 LIMIT_AUTHORS = 6_200_000_001
 UNBOUND_ROUTING_KEY = "task.unbound"  # no queue is bound: the broker returns it
 POLICY = RetryPolicy(jitter=0.0)
+
+
+async def job_status(db: object, job_id: UUID) -> dict[str, str]:
+    """The operator status of a job as `key=value` fields (what the CLI prints)."""
+    async with db.sessions() as session:  # type: ignore[attr-defined]
+        record = await read_job_status(session, job_id)
+    assert record is not None
+    return dict(line.split("=", 1) for line in render(view_of(record)).splitlines())
 
 
 class TelegramPort:
@@ -635,6 +646,34 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
             [(0,)],
         )
 
+        shown = await job_status(self.automation_db, job_id)
+        self.assertEqual(
+            (shown["status"], shown["delivery_attempts"], shown["max_attempts"]),
+            ("failed", "3", "3"),
+        )
+        self.assertEqual(
+            (shown["error_code"], shown["next_attempt_at"], shown["task_created"]),
+            ("delivery_failed", "-", "no"),
+        )
+        self.assertNotIn("Позвонить маме", "".join(shown.values()))
+
+        # The limit applies again: with the slot taken, the replay is refused.
+        await self.send_text(AUTHOR_B, 11, "Вторая задача")
+        refused = await ReplayJobCommandHandler(
+            self.uow, JobLimits(per_author=1)
+        ).execute(ReplayJobCommand(job_id))
+        self.assertTrue(refused.is_err)
+        self.assertEqual(refused.error.code, "job_limit")
+        self.assertEqual((await self.job(AUTHOR_B, 10))[1], "failed")
+        self.assertEqual(
+            await self.rows(
+                self.automation_db,
+                "SELECT attempts, next_attempt_at FROM outbox WHERE id = :id",
+                id=entry,
+            ),
+            [(3, None)],
+        )
+
         # The operator fixed the cause and replays the original job.
         await self.rows_exec(
             "UPDATE outbox SET routing_key = :k WHERE id = :id",
@@ -645,10 +684,16 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.job(AUTHOR_B, 10))[1], "accepted")
 
         async def completed() -> bool:
-            return (await self.job(AUTHOR_B, 10))[1] == "completed"
+            return (await self.job(AUTHOR_B, 10))[1] == "completed" and (
+                await self.job(AUTHOR_B, 11)
+            )[1] == "completed"
 
         await self.pump(flow, pipeline, completed)
         self.assertEqual(len(await self.tasks_with_text("Позвонить маме")), 1)
+        self.assertEqual(len(await self.tasks_with_text("Вторая задача")), 1)
+        self.assertEqual(
+            (await job_status(self.automation_db, job_id))["task_created"], "yes"
+        )
         self.assertEqual(await self.replay(job_id), ReplayOutcome.UNCHANGED)
 
         # Another copy of the same command (a new message id) makes no second task.
@@ -679,6 +724,56 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
             await asyncio.sleep(0.2)
         self.assertTrue(await copy_consumed())
         self.assertEqual(len(await self.tasks_with_text("Позвонить маме")), 1)
+
+    async def test_a_replay_after_the_task_was_created_makes_no_second_task(
+        self,
+    ) -> None:
+        await self.put_member(AUTHOR_C)
+        await self.send_text(AUTHOR_C, 20, "Оплатить счёт")
+        job_id = JobId.from_source(BOT_ID, AUTHOR_C, 20).value
+        entry = outbox_id_for(job_id)
+        # The broker took the command, but its confirm was lost: the retries ran out.
+        lost = "publish failed: TimeoutError"
+        await self.rows_exec(
+            "UPDATE outbox SET attempts = 3, next_attempt_at = NULL, last_error = :e "
+            "WHERE id = :id",
+            e=lost,
+            id=entry,
+        )
+        await self.rows_exec(
+            "UPDATE jobs SET status = 'failed', last_error = :e WHERE id = :id",
+            e=lost,
+            id=job_id,
+        )
+        resources, flow, pipeline = await self.start_flow()
+        (payload,) = await self.rows(
+            self.automation_db,
+            "SELECT payload::text FROM outbox WHERE id = :id",
+            id=entry,
+        )
+        await ConfirmedPublisher(resources.rabbitmq, declare_task_topology).publish(
+            TASK_CREATE_ROUTING_KEY,
+            payload[0].encode(),
+            message_id=str(entry),
+            type="CreateTask",
+        )
+
+        async def completed() -> bool:
+            return (await self.job(AUTHOR_C, 20))[1] == "completed"
+
+        await self.pump(flow, pipeline, completed)  # the late result wins
+
+        outbox_sql = "SELECT attempts, next_attempt_at, published_at FROM outbox"
+        stored = await self.rows(self.automation_db, outbox_sql)
+        for _ in range(2):  # the command repeated after the task was committed
+            self.assertEqual(await self.replay(job_id), ReplayOutcome.UNCHANGED)
+        await flow.relay.execute()
+        self.assertEqual(await self.rows(self.automation_db, outbox_sql), stored)
+        self.assertEqual(stored, [(3, None, None)])  # the exhausted row is untouched
+        self.assertEqual(len(await self.tasks_with_text("Оплатить счёт")), 1)
+        self.assertEqual((await self.job(AUTHOR_C, 20))[0], job_id)
+        shown = await job_status(self.automation_db, job_id)
+        self.assertEqual((shown["status"], shown["task_created"]), ("completed", "yes"))
 
     async def replay(self, job_id: UUID) -> ReplayOutcome:
         result = await ReplayJobCommandHandler(self.uow).execute(

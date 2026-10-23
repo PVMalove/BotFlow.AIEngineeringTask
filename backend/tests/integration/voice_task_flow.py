@@ -39,6 +39,11 @@ from application.commands.accept_voice import (
 from application.commands.handle_bot_command import HandleBotCommandDto
 from application.commands.job_acceptance import Accepted, JobAcceptance
 from application.commands.record_task_result import RecordTaskResultCommandHandler
+from application.commands.replay_job import (
+    ReplayJobCommand,
+    ReplayJobCommandHandler,
+    ReplayOutcome,
+)
 from application.commands.transcribe_voice import TranscribeVoiceCommandHandler
 from application.ports import (
     AudioTooLong,
@@ -74,7 +79,7 @@ from kernel_platform.retry import RetryPolicy
 from kernel_platform.settings import Settings
 from kernel_platform.streams import RedisStream
 from sqlalchemy import text
-from text_task_flow import TelegramPort
+from text_task_flow import TelegramPort, job_status
 
 IDENTITY_URL = "http://identity-api:8000"
 INGRESS_URL = "http://frontend:8080"
@@ -898,6 +903,73 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             job["s3_key"], f"voice/{JobId.from_source(BOT_ID, AUTHOR_A, 1).value}"
         )
+
+    # ---- error, replay and restart ------------------------------------------------
+
+    async def test_a_failed_voice_job_replays_from_the_stored_object_into_one_task(
+        self,
+    ) -> None:
+        await self.put_member(AUTHOR_A)
+        # The first recognition ends with a final error; the replayed one succeeds.
+        self.stt.script[RU_AUDIO] = [CorruptedAudio(), Transcript(RU_TEXT, "ru")]
+        sent = await self.send_voice(AUTHOR_A, 1)
+        job_id = JobId.from_source(BOT_ID, AUTHOR_A, 1).value
+        voice, tasks, pipeline = await self.start_flow()
+        self.start_worker()
+
+        async def failure_told() -> bool:
+            return bool(self.notifications.to(AUTHOR_A))
+
+        await self.pump(voice, tasks, pipeline, failure_told)
+
+        shown = await job_status(self.automation_db, job_id)
+        self.assertEqual(
+            (shown["kind"], shown["status"], shown["stage"]),
+            ("voice", "failed", "failed"),
+        )
+        self.assertEqual(
+            (shown["processing_attempts"], shown["error_code"], shown["max_attempts"]),
+            ("1", "corrupted_audio", "3"),
+        )
+        self.assertNotIn(RU_TEXT, "".join(shown.values()))
+        self.assertIsNotNone((await self.job(AUTHOR_A, 1))["s3_key"])  # checkpoint kept
+
+        handler = ReplayJobCommandHandler(self.uow)
+        replayed = await handler.execute(ReplayJobCommand(job_id))
+        self.assertEqual(replayed.value, ReplayOutcome.REPLAYED)
+        job = await self.job(AUTHOR_A, 1)
+        self.assertEqual(
+            (job["id"], job["status"], job["stage"]), (job_id, "accepted", "stored")
+        )
+        self.assertEqual(job["attempts"], 0)
+
+        async def task_told() -> bool:
+            return len(self.notifications.to(AUTHOR_A)) == 2
+
+        await self.pump(voice, tasks, pipeline, task_told)
+
+        self.assertEqual(self.files.calls, [sent.file_id])  # the stored object was used
+        self.assertEqual(len(self.stt.heard), 2)
+        self.assertEqual(len(await self.tasks_with_text(RU_TEXT)), 1)
+        job = await self.job(AUTHOR_A, 1)
+        self.assertEqual((job["status"], job["stage"]), ("completed", "done"))
+        self.assertEqual(
+            (await handler.execute(ReplayJobCommand(job_id))).value,
+            ReplayOutcome.UNCHANGED,
+        )
+
+        # A restarted worker meets the old stream entry again: no second task.
+        await self.resources.redis.xadd(  # type: ignore[union-attr]
+            VOICE_STREAM, {"job_id": str(job_id), "outbox_id": str(uuid4())}
+        )
+        for _ in range(100):
+            (group,) = await self.resources.redis.xinfo_groups(VOICE_STREAM)  # type: ignore[union-attr]
+            if group["pending"] == 0 and group["lag"] == 0:
+                break
+            await asyncio.sleep(0.1)
+        self.assertEqual((group["pending"], group["lag"]), (0, 0))
+        self.assertEqual(len(self.stt.heard), 2)
+        self.assertEqual(len(await self.tasks_with_text(RU_TEXT)), 1)
 
     # ---- recognition holds no transaction and blocks nothing ---------------------
 
