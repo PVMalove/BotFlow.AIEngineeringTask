@@ -77,8 +77,16 @@ async def _serve(
             task.cancel()
         await asyncio.gather(reader, sender, return_exceptions=True)
     for task in done:
-        with suppress(WebSocketDisconnect, TimeoutError):
+        try:
             task.result()
+        except WebSocketDisconnect:
+            pass
+        except TimeoutError:
+            # A client that does not read: say why before letting go, and do not
+            # wait on it again (the close frame can stall behind the same buffer).
+            with suppress(TimeoutError):
+                async with asyncio.timeout(SEND_TIMEOUT):
+                    await websocket.close(code=TRY_AGAIN_LATER)
 
 
 @router.websocket("/ws/board")

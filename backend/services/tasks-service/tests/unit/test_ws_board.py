@@ -1,5 +1,6 @@
 """WS /ws/board: Origin and live Identity access decide every frame."""
 
+import asyncio
 from collections.abc import Iterator
 from typing import Any
 
@@ -9,11 +10,13 @@ from kernel_domain.result import Result
 from kernel_platform.security.actor import Actor, ActorRole
 from kernel_platform.security.errors import AuthErrors
 from starlette.testclient import TestClient
+from starlette.types import Message, Scope
 from starlette.websockets import WebSocketDisconnect
 from support.fakes import AUTHOR, FakeBoardFeed, TrackedApp, connected
 
 from api.containers import Services
 from api.dependencies import get_services
+from api.endpoints import board_ws
 from api.endpoints.board_ws import router
 from api.main import create_tasks_app
 from application.ports import BoardFeedUnavailable, IdentityUnavailable
@@ -229,6 +232,50 @@ def test_a_redis_that_fails_while_listening_closes_with_try_again_later(
             socket.receive_json()
 
     assert closed.value.code == TRY_AGAIN_LATER
+    assert feed.unsubscribed == 1
+
+
+async def test_a_client_that_does_not_read_is_closed_with_try_again_later(
+    monkeypatch: pytest.MonkeyPatch, identity: Identity, feed: FakeBoardFeed
+) -> None:
+    """Driven at the ASGI level: only there can a frame be made to stall."""
+    monkeypatch.setattr(board_ws, "SEND_TIMEOUT", 0.05)
+    feed.script = [True]
+    app = create_tasks_app()
+
+    async def override() -> Services:
+        return services(identity, feed)
+
+    app.dependency_overrides[get_services] = override
+    scope: Scope = {
+        "type": "websocket",
+        "scheme": "ws",
+        "path": "/ws/board",
+        "query_string": b"",
+        "root_path": "",
+        "server": ("testserver", 80),
+        "subprotocols": [],
+        "headers": [(k.encode(), v.encode()) for k, v in HEADERS.items()]
+        + [(b"host", b"testserver")],
+    }
+    sent: list[Message] = []
+    inbox: list[Message] = [{"type": "websocket.connect"}]
+
+    async def receive() -> Message:
+        if inbox:
+            return inbox.pop(0)
+        await asyncio.Event().wait()  # the client says nothing and reads nothing
+        raise AssertionError
+
+    async def send(message: Message) -> None:
+        if message["type"] == "websocket.send":
+            await asyncio.sleep(30)  # the frame never reaches the client
+        sent.append(message)
+
+    await asyncio.wait_for(app(scope, receive, send), 2)
+
+    closes = [m["code"] for m in sent if m["type"] == "websocket.close"]
+    assert closes == [TRY_AGAIN_LATER]
     assert feed.unsubscribed == 1
 
 
