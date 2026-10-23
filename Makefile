@@ -139,9 +139,12 @@ run: compose-check ## Поднять HTTP-каркас; healthchecks прове�
 
 up_dev: run ## Синоним локального запуска
 
-demo: setup ## Пока отказывает: миграции и бизнес-bootstrap ещё не реализованы
+demo: compose-check ## Демонстрация: проверка допуска, сборка образов incl. Whisper, миграции, admin, bucket/topology, API, bot, workers, SPA; повтор сохраняет данные
+	$(PYTHON) scripts/demo_preflight.py --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)"
+	$(PYTHON) scripts/compose_build.py --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" --profile workers
+	$(MAKE) setup
 	$(MAKE) bootstrap-admin
-	$(MAKE) run
+	$(COMPOSE) --profile workers up -d --wait --wait-timeout 300
 
-down: compose-check ## Остановить Compose с сохранением данных в томах
-	$(COMPOSE) down
+down: compose-check ## Остановить все сервисы, включая bot и workers, с сохранением данных в томах
+	$(COMPOSE) --profile workers down

@@ -18,8 +18,8 @@ async function openBoard(page: Page) {
   await page.clock.pauseAt(new Date());
 }
 
-function createTask() {
-  const task = fixture('realtime-task');
+function createTask(action: 'realtime-task' | 'voice-task' = 'realtime-task') {
+  const task = fixture(action);
   if (!task.task_id || !task.text)
     throw new Error('Expected a committed task from the real worker');
   return { id: task.task_id, text: task.text };
@@ -160,4 +160,40 @@ test('reconnect rereads tasks and status changes committed while the real socket
   await expect(page.locator(`[data-task-id="${original.id}"]`)).toHaveCount(1);
   await expect(page.locator(`[data-task-id="${missed.id}"]`)).toHaveCount(1);
   expect(reloads).toBe(0);
+});
+
+test('a voice-sourced task from the real worker reaches the board with its source in RU and HY', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  fixture('reset');
+  await openBoard(page);
+  const task = createTask('voice-task');
+
+  await waitForCard(page, 'Ожидает', task.id);
+  const card = page.locator(`[data-task-id="${task.id}"]`);
+  await expect(card).toContainText(task.text);
+  await expect(
+    card.getByRole('img', { name: 'Голос', exact: true }),
+  ).toBeVisible();
+
+  await page.getByRole('button', { name: 'Հայերեն', exact: true }).click();
+  await expect(
+    card.getByRole('img', { name: 'Ձայն', exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  // The installed clock stays paused after a reload: drain it as the board loads.
+  const reloaded = page.locator(`[data-task-id="${task.id}"]`);
+  await expect
+    .poll(async () => {
+      await page.clock.runFor(50);
+      return reloaded.count();
+    })
+    .toBe(1);
+  await expect(
+    reloaded.getByRole('img', {
+      name: 'Ձայն',
+      exact: true,
+    }),
+  ).toBeVisible();
 });

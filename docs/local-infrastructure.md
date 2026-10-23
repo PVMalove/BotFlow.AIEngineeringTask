@@ -126,9 +126,10 @@ runtime-сеть и внешние порты приложения не меня
 сеть. MinIO собирается из закреплённого официального commit, Go-модули проверяются
 по upstream `go.sum`.
 
-GitHub Actions запускает проверки и сборку существующего приложения. Smoke
-подтверждает инфраструктуру и сценарий входа; управление задачами и фоновые
-задания добавляются в следующих задачах.
+GitHub Actions (job `check-build-smoke` workflow `CI`) запускает `make check`, `make test`,
+`make build` и `make e2e`. E2E подтверждает вход, заявки и admin, текстовую и голосовую
+задачу на доске, права и 409, Drag & Drop (мышь, клавиатура, touch), realtime/reconnect,
+RU/HY, reload и узкий экран на реальных PostgreSQL/RabbitMQ/Redis/MinIO с подменой Telegram и STT.
 
 
 ## Первый admin и Telegram-вход (#5)

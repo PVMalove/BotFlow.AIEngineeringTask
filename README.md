@@ -18,14 +18,11 @@
 повторы, дедупликация и восстановление после рестарта. Расширенные процедуры
 аварийного восстановления и эксплуатации отложены: [ADR-0021](docs/adr/0021-proportionate-reliability.md).
 
-**Состояние:** инфраструктурный каркас с DI lifecycle, изолированным smoke и CI. Есть манифесты/lockfiles,
-Dockerfiles, Compose, HTTP-оболочки сервисов и начальная страница React.
-Оболочка использует общую MUI тему BotFlow и локальные шрифты; переключатель
-«Русский / Հայերեն» сохраняет выбор в браузере и обновляет язык документа.
-Создание задач, авторизация, брокерные обработчики, миграции бизнес-данных
-и STT-адаптер ещё не реализованы. `/health/live` проверяет процесс;
-`/health/ready` возвращает 503 до подключения бизнес-адаптеров. Bootstrap и
-workers завершаются явной ошибкой до реализации, а не имитируют обработку.
+**Состояние:** реализованы вход через Telegram, заявки и управление допуском, текстовый и голосовой
+путь Telegram → задача, Kanban с Drag & Drop, realtime доски и replay упавшего задания (#5–#15, #18).
+Три сервиса (Identity, Tasks, Automation) со своими PostgreSQL, RabbitMQ, Redis и MinIO запускаются
+через Compose. Полный изолированный E2E, `make demo` и CI gate описаны ниже (#16).
+Живая приёмка с настоящим ботом и качество Whisper на hy проверяются отдельно (#17).
 
 ## Стек
 
@@ -176,8 +173,9 @@ make init            # создаёт .secrets, существующие зна�
 make compose-check   # проверка конфигурации без печати секретов
 make build           # сборка стартовых образов
 make infra           # PostgreSQL, Redis, RabbitMQ, MinIO
-make run             # HTTP-оболочки и начальная страница на localhost:8080
-make down            # остановка с сохранением томов
+make run             # только HTTP-оболочки и SPA на localhost:8080, без bot и workers
+make demo            # полный стенд: допуск, миграции, admin, bucket, API, bot, workers, SPA
+make down            # остановка всех сервисов, включая bot и workers, с сохранением томов
 make smoke           # собственные PG/RabbitMQ/Redis/MinIO, DI/S3, down/up; очистка тестовых томов
 make job-status JOB=<uuid>   # безопасное состояние одного задания: статус, попытки, код ошибки
 make job-replay JOB=<uuid>   # повтор упавшего задания с прежним id; лимит проверяется заново
@@ -222,11 +220,16 @@ Telegram-адаптер. Проверяются восстановление с�
 настоящий RabbitMQ и tasks-worker, проверяют появление и смену статуса на открытой
 доске через Redis/WS без reload. После разрыва WS изменения восстанавливаются
 перечитыванием REST при reconnect; Pub/Sub не хранит журнал пропущенных событий.
+Голосовая задача (source_type=voice) доходит до доски через тот же настоящий
+RabbitMQ/tasks-worker; её маркер «Голос»/«Ձայն» проверяется после смены языка и reload.
+Путь голоса от Telegram-файла до MinIO и распознавания проверяет backend-часть
+`make smoke`/`make e2e` на подмене Bot API и STT.
+Пустой или частично пропущенный набор браузерных проверок (`expected = 0`, `skipped > 0`,
+`test.only`) считается провалом, а не успехом.
 Chromium готовится явно:
 `npm --prefix frontend exec -- playwright install chromium` (в Ubuntu CI добавляется
-`--with-deps`). Эти проверки не подтверждают создание задач, живой Telegram
-long polling или качество STT. Tasks bootstrap и фоновые обработчики задач
-ещё не реализованы; Identity bootstrap и миграции входа работают.
+`--with-deps`). Проверки не используют живой Telegram long polling и настоящий Whisper:
+внешние порты подменены, публичного test-login нет.
 
 Веб-вход доступен через Compose ingress: отправьте боту `/login` в личном чате,
 вставьте 32-символьный код на `/login`. Он одноразовый и действует 5 минут.
@@ -253,9 +256,42 @@ long polling или качество STT. Tasks bootstrap и фоновые об
 Для разработки только интерфейса: `npm --prefix frontend run dev`; настоящий вход
 требует единого origin SPA/API через Compose ingress.
 
-GitHub Actions выполняет установку по lockfiles, `make check`, `make test`,
-`make build` и изолированный smoke с браузерной проверкой через `make e2e`.
+GitHub Actions (workflow `CI`, job `check-build-smoke`) выполняет установку по lockfiles,
+`make check`, `make test`, `make build` и изолированный smoke с браузерной проверкой через
+`make e2e`. Required check для защиты веток — `CI / check-build-smoke`. HA, CD и disaster
+recovery не добавляются.
 Подробности lifecycle, изоляции и диагностики: [локальная инфраструктура](docs/local-infrastructure.md).
+
+## Демонстрационный запуск (#16)
+
+`make demo` готовит и запускает полный стенд на данных обычного проекта `botflow`
+(тома `botflow_*`); тестовые данные `make e2e` и `make smoke` его не затрагивают.
+
+Что нужно один раз:
+
+```bash
+cp .env.example .env            # задайте INITIAL_ADMIN_TELEGRAM_ID — числовой Telegram ID первого admin
+make init                       # .secrets; существующие значения не перезаписываются
+# запишите токен бота из BotFather в .secrets/telegram_bot_token (файл не коммитится)
+make whisper-prepare            # единственный шаг с сетью: веса модели в том botflow_whisper_models
+```
+
+Модель `turbo` занимает около 1.5 GiB; `WHISPER_MODEL` в `.env` выбирает другую.
+Затем `make demo`: проверка допуска (`scripts/demo_preflight.py`), сборка образов, включая Whisper
+(при проблемах DNS сборки — `BOTFLOW_BUILD_NETWORK=host make demo`), миграции трёх БД,
+приватный bucket MinIO, первоначальный admin, API/SPA, telegram-bot и workers.
+Топологию RabbitMQ идемпотентно объявляют сами tasks/automation-процессы при старте.
+SPA открывается на `http://localhost:8080`; `/login` боту выдаёт код входа.
+
+- Повтор `make demo` не сбрасывает данные и не возвращает права отозванному admin.
+- `make down` останавливает контейнеры и сохраняет тома; следующий `make demo`
+  возвращает пользователей и задачи. Тома удаляются только вручную и в `make demo`/`make down` не входят.
+- Ошибка допуска печатает все проблемы сразу: пустой `INITIAL_ADMIN_TELEGRAM_ID`,
+  пустой `telegram_bot_token`, нет тома Whisper. Значения секретов не выводятся.
+- `whisper-worker` готов, когда вес проверен и модель загружена (до 2 минут и более на холодном CPU).
+  Задержка голоса и качество hy ограничены: см. `backend/services/automation-service/docs/whisper-validation.md`.
+- Ограничения: один узел, без HA, backup/restore и автоматического retention.
+  Живой бот проверяется вручную в #17, E2E на настоящий Telegram и Whisper не опирается.
 
 Архитектурные детали и принятые компромиссы: [docs/architecture.md](docs/architecture.md),
 [ADR](docs/adr/).

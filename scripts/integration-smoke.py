@@ -59,6 +59,10 @@ def report_browser_result(output: bytes) -> None:
             visit(suite.get("suites", []))
 
     visit(report.get("suites", []))
+    # An empty or partly skipped run must not look like a passing gate.
+    if stats["expected"] == 0 or stats["skipped"]:
+        print("FAIL: browser run is empty or has skipped tests", flush=True)
+        raise subprocess.CalledProcessError(1, "playwright")
 
 
 def main() -> int:

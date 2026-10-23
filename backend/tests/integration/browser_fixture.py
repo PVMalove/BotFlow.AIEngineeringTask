@@ -111,10 +111,12 @@ async def board_fixture(action: str, author_id: UUID) -> None:
             await session.commit()
 
 
-async def realtime_task(author_id: UUID) -> dict[str, str]:
+async def realtime_task(author_id: UUID, kind: JobKind) -> dict[str, str]:
     """Publish the production command through real RabbitMQ to tasks-worker."""
     job_id = uuid4()
     task_text = f"Realtime #35 / Թարմացում {job_id}"
+    if kind is JobKind.VOICE:
+        task_text = f"Голос #16 / Ձայն {job_id}"
     telegram_id = int(os.environ["INITIAL_ADMIN_TELEGRAM_ID"])
     message_id, routing, envelope = create_task_envelope(
         job_id=job_id,
@@ -125,7 +127,7 @@ async def realtime_task(author_id: UUID) -> dict[str, str]:
         author_telegram_id=telegram_id,
         author_name="Анна / Աննա",
         text=task_text,
-        source_type=JobKind.TEXT,
+        source_type=kind,
         received_at=datetime.now(UTC),
     )
     async with open_resources(Settings(service="automation")) as resources:
@@ -157,14 +159,24 @@ async def run(action: str) -> dict[str, str]:
         raise RuntimeError("Browser fixtures require an isolated test project")
 
     async with open_database(Settings(service="identity")) as identity:
-        if action in {"reset", "board", "board-change", "dnd-board", "realtime-task"}:
+        if action in {
+            "reset",
+            "board",
+            "board-change",
+            "dnd-board",
+            "realtime-task",
+            "voice-task",
+        }:
             async with identity.sessions() as session:
                 author_id = await session.scalar(
                     text("SELECT id FROM members WHERE telegram_id = :telegram"),
                     {"telegram": int(os.environ["INITIAL_ADMIN_TELEGRAM_ID"])},
                 )
-            if action == "realtime-task":
-                return await realtime_task(author_id)
+            if action in {"realtime-task", "voice-task"}:
+                return await realtime_task(
+                    author_id,
+                    JobKind.VOICE if action == "voice-task" else JobKind.TEXT,
+                )
             await board_fixture(action, author_id)
             if action != "reset":
                 return {"status": "ok"}
@@ -250,6 +262,7 @@ if __name__ == "__main__":
             "board-change",
             "dnd-board",
             "realtime-task",
+            "voice-task",
         ],
     )
     arguments = parser.parse_args()
