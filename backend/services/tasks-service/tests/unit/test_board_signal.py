@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import UTC, datetime
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -90,13 +91,38 @@ async def test_a_hung_redis_does_not_hold_the_caller() -> None:
     )
 
 
+class FakeResult:
+    def scalar_one_or_none(self) -> bool:
+        return True  # the outbox row was staged
+
+
+class FakeSession:
+    """A session that accepts the outbox insert and the commit, nothing else."""
+
+    def __init__(self) -> None:
+        self.committed = False
+
+    async def execute(self, statement: Any) -> FakeResult:
+        return FakeResult()
+
+    async def commit(self) -> None:
+        self.committed = True
+
+    async def rollback(self) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
+
+
 async def test_the_worker_and_the_api_share_a_factory_that_signals_after_commit() -> (
     None
 ):
     redis = AsyncMock()
+    session = FakeSession()
     resources = Resources(
         engine=MagicMock(),
-        sessions=MagicMock(return_value=AsyncMock()),
+        sessions=MagicMock(return_value=session),
         rabbitmq=MagicMock(),
         redis=redis,
     )
@@ -115,5 +141,6 @@ async def test_the_worker_and_the_api_share_a_factory_that_signals_after_commit(
         uow.track(task)
         await uow.commit()
 
+    assert session.committed
     redis.publish.assert_awaited_once()
     assert redis.publish.await_args.args[0] == CHANNEL
