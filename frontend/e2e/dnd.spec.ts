@@ -14,6 +14,15 @@ async function prepare(page: Page) {
   await expect(card).toHaveCount(1);
   const id = await card.getAttribute('data-task-id');
   if (!id) throw new Error('Expected a real task');
+  // Let the initial realtime refresh and font loading finish: layout shifts move the
+  // handle after its bounding box is measured and the pointer then misses it.
+  await expect(
+    page.getByText('Обновления подключены', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Обновить доску', exact: true }),
+  ).toBeEnabled();
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
   const patches: unknown[] = [];
   page.on('request', (request) => {
     if (request.method() === 'PATCH' && request.url().endsWith('/tasks/' + id))
