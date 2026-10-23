@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID, uuid5
 
 from kernel_domain.value_object import ValueObject
@@ -18,5 +17,5 @@ class TaskId(ValueObject):
         """The task of one Telegram message; unique per source."""
         return cls(uuid5(_TASK_NAMESPACE, source_key))
 
-    def _equality_components(self) -> tuple[Any, ...]:
+    def _equality_components(self) -> tuple[UUID]:
         return (self.value,)

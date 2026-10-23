@@ -8,16 +8,19 @@ transaction and, once it is committed, handed to the in-process event handlers.
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from types import TracebackType
-from typing import Any, Self
+from typing import Protocol, Self
 
 from kernel_domain.domain_event import DomainEvent
-from kernel_domain.entity import Entity
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger(__name__)
 
 OutboxStager = Callable[[AsyncSession, DomainEvent], Awaitable[None]]
 EventHandler = Callable[[DomainEvent], Awaitable[None]]
+
+
+class EventSource(Protocol):
+    def pull_events(self) -> list[DomainEvent]: ...
 
 
 class SqlAlchemyUnitOfWork:
@@ -37,7 +40,7 @@ class SqlAlchemyUnitOfWork:
         self._stage_outbox = stage_outbox
         self._event_handlers = tuple(event_handlers)
         self._session: AsyncSession | None = None
-        self._tracked: list[Entity[Any]] = []
+        self._tracked: list[EventSource] = []
         self._committed = False
 
     async def __aenter__(self) -> Self:
@@ -63,7 +66,7 @@ class SqlAlchemyUnitOfWork:
             await session.close()
             self._session = None
 
-    def track(self, entity: Entity[Any]) -> None:
+    def track(self, entity: EventSource) -> None:
         if entity not in self._tracked:
             self._tracked.append(entity)
 

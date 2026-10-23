@@ -3,13 +3,23 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import MetaData
 from sqlalchemy.dialects import postgresql
+from sqlalchemy.orm import DeclarativeBase
 
-from kernel_platform.outbox import SqlOutboxTx, outbox_table
+from kernel_platform.outbox import OutboxColumns, SqlOutboxTx
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-TABLE = outbox_table(MetaData())
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class OutboxModel(OutboxColumns, Base):
+    __tablename__ = "outbox"
+
+
+TABLE = Base.metadata.tables["outbox"]
 
 
 class Session:

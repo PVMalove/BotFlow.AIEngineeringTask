@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID, uuid4
 
 from kernel_domain.value_object import ValueObject
@@ -13,5 +12,5 @@ class MemberId(ValueObject):
     def new_id(cls) -> "MemberId":
         return cls(uuid4())
 
-    def _equality_components(self) -> tuple[Any, ...]:
+    def _equality_components(self) -> tuple[UUID]:
         return (self.value,)

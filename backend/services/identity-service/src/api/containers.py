@@ -20,7 +20,8 @@ from application.queries.members import (
     FindMemberByTelegramQueryHandler,
     ListMembersQueryHandler,
 )
-from infrastructure.db.unit_of_work import SqlRateLimiter, SqlUnitOfWork
+from infrastructure.db.rate_limiter import SqlRateLimiter
+from infrastructure.db.unit_of_work import SqlUnitOfWork
 from infrastructure.security.jwt import Rs256Tokens
 
 # Only the loopback HTTP profiles may use a cookie without the Secure attribute.

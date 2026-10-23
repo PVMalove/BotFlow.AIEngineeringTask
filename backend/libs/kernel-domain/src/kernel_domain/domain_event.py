@@ -1,7 +1,6 @@
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -23,6 +22,6 @@ class DomainEvent:
         """The id of the aggregate that raised the event."""
         raise NotImplementedError
 
-    def to_payload(self) -> dict[str, Any]:
+    def to_payload(self) -> dict[str, object]:
         """JSON-compatible fields of the event."""
         raise NotImplementedError

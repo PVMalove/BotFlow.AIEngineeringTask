@@ -5,6 +5,7 @@ import { boardTasks } from './tasks';
 const task: Task = {
   id: '00000000-0000-0000-0000-000000000001',
   text: 'Текст / Տեքստ',
+  source_type: null,
   author_id: 'author',
   author_name: 'Анна',
   status: 'pending',

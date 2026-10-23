@@ -59,7 +59,9 @@ export default function App() {
                 B.
               </Box>
               <Box sx={{ minWidth: 0 }}>
-                <Typography variant="h1">BotFlow</Typography>
+                <Typography variant="h1">
+                  {messages.defaultBoardName}
+                </Typography>
               </Box>
             </Stack>
             <ToggleButtonGroup
@@ -101,16 +103,16 @@ export default function App() {
               <ToggleButton
                 value="ru"
                 lang="ru"
-                aria-label="Русский"
-                title="Русский"
+                aria-label={messages.languageRussian}
+                title={messages.languageRussian}
               >
                 RU
               </ToggleButton>
               <ToggleButton
                 value="hy"
                 lang="hy"
-                aria-label="Հայերեն"
-                title="Հայերեն"
+                aria-label={messages.languageArmenian}
+                title={messages.languageArmenian}
               >
                 ՀԱՅ
               </ToggleButton>

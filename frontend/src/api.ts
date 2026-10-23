@@ -2,14 +2,12 @@ export interface Member {
   id: string;
   telegram_id: number;
   role: 'admin' | 'user';
-  status: string;
-  display_name?: string | null;
-}
-
-export interface AdminMember extends Member {
   status: 'pending' | 'approved' | 'rejected' | 'blocked';
   display_name: string | null;
   access_version: number;
+}
+
+export interface AdminMember extends Member {
   created_at: string;
   status_changed_at: string | null;
 }
@@ -23,7 +21,7 @@ export interface Task {
   version: number;
   author_id: string;
   author_name: string;
-  source_type?: 'text' | 'voice' | null;
+  source_type: 'text' | 'voice' | null;
   created_at: string;
   updated_at: string;
 }

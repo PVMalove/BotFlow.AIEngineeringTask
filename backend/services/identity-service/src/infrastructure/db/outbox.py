@@ -1,4 +1,4 @@
-"""The identity outbox table as the relay's repository."""
+"""The identity OutboxModel table as the relay's repository."""
 
 from datetime import datetime
 from uuid import UUID
@@ -7,7 +7,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.outbox import OutboxEntry
-from infrastructure.db.tables import outbox
+from infrastructure.db.models import OutboxModel
 
 
 class SqlOutbox:
@@ -15,8 +15,8 @@ class SqlOutbox:
         self._session = session
 
     async def add(self, entry: OutboxEntry) -> None:
-        await self._session.execute(
-            outbox.insert().values(
+        self._session.add(
+            OutboxModel(
                 id=entry.id,
                 type=entry.type,
                 payload=entry.payload,
@@ -25,13 +25,16 @@ class SqlOutbox:
                 next_attempt_at=entry.next_attempt_at,
             )
         )
+        await self._session.flush()
 
     async def claim_due(self, now: datetime, limit: int) -> list[OutboxEntry]:
         # SKIP LOCKED lets several relays run without publishing a row twice.
-        rows = await self._session.execute(
-            select(outbox)
-            .where(outbox.c.published_at.is_(None), outbox.c.next_attempt_at <= now)
-            .order_by(outbox.c.created_at, outbox.c.id)
+        rows = await self._session.scalars(
+            select(OutboxModel)
+            .where(
+                OutboxModel.published_at.is_(None), OutboxModel.next_attempt_at <= now
+            )
+            .order_by(OutboxModel.created_at, OutboxModel.id)
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
@@ -50,14 +53,16 @@ class SqlOutbox:
 
     async def mark_published(self, entry_id: UUID, now: datetime) -> None:
         await self._session.execute(
-            update(outbox).where(outbox.c.id == entry_id).values(published_at=now)
+            update(OutboxModel)
+            .where(OutboxModel.id == entry_id)
+            .values(published_at=now)
         )
 
     async def reschedule(
         self, entry_id: UUID, attempts: int, next_attempt_at: datetime | None
     ) -> None:
         await self._session.execute(
-            update(outbox)
-            .where(outbox.c.id == entry_id)
+            update(OutboxModel)
+            .where(OutboxModel.id == entry_id)
             .values(attempts=attempts, next_attempt_at=next_attempt_at)
         )

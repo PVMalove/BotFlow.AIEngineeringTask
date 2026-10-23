@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID, uuid5
 
 from kernel_domain.value_object import ValueObject
@@ -16,5 +15,5 @@ class IntentId(ValueObject):
         """One result notification per job, whichever message reports the result."""
         return cls(uuid5(_RESULT_INTENT_NAMESPACE, str(job_id)))
 
-    def _equality_components(self) -> tuple[Any, ...]:
+    def _equality_components(self) -> tuple[UUID]:
         return (self.value,)

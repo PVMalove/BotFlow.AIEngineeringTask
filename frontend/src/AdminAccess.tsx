@@ -1,3 +1,4 @@
+import { isAccessDenied } from './errors';
 import {
   Alert,
   Avatar,
@@ -82,16 +83,13 @@ export function AdminAccess({
     onSettled: async (_data, error) => {
       await client.cancelQueries({ queryKey: key });
       await client.invalidateQueries({ queryKey: key });
-      if (error instanceof ApiError && [401, 403].includes(error.status)) {
+      if (isAccessDenied(error)) {
         await client.invalidateQueries({ queryKey: ['session'] });
       }
     },
   });
   useEffect(() => {
-    if (
-      members.error instanceof ApiError &&
-      [401, 403].includes(members.error.status)
-    ) {
+    if (isAccessDenied(members.error)) {
       void client.invalidateQueries({ queryKey: ['session'] });
     }
   }, [client, members.error]);

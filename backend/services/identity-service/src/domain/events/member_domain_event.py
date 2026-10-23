@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID
 
 from kernel_domain.domain_event import DomainEvent
@@ -21,7 +20,7 @@ class MemberEvent(DomainEvent):
     def aggregate_id(self) -> UUID:
         return self.member_id.value
 
-    def to_payload(self) -> dict[str, Any]:
+    def to_payload(self) -> dict[str, object]:
         return {
             "member_id": str(self.member_id.value),
             "telegram_id": self.telegram_id,

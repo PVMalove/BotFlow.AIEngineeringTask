@@ -1,10 +1,12 @@
 """Operator view of one job: attempts, a whitelisted error code, no message content."""
 
-import re
 from datetime import UTC, datetime
+from uuid import uuid4
 
 import pytest
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import Table, Uuid
+from sqlalchemy.sql import visitors
+from sqlalchemy.sql.elements import BindParameter, ColumnClause
 
 from application.queries.job_status import (
     JobStatusRecord,
@@ -13,9 +15,8 @@ from application.queries.job_status import (
     view_of,
 )
 from domain.notices import VOICE_FAILURES
-from infrastructure.db.job_status_reader import STATUS_QUERY
+from infrastructure.db.job_status_reader import status_query
 
-asyncpg_dialect = create_async_engine("postgresql+asyncpg://").dialect
 DUE = datetime(2026, 1, 1, 12, 0, 5, tzinfo=UTC)
 
 
@@ -105,24 +106,44 @@ def test_a_stale_delivery_error_of_a_published_row_is_not_reported() -> None:
     assert error_code_of(record(published=True, outbox_error="publish failed")) is None
 
 
-def test_the_status_query_reads_no_text_file_id_object_key_or_author_name() -> None:
-    sql = STATUS_QUERY.text
+def test_status_projection_contains_only_safe_columns() -> None:
+    query = status_query(uuid4())
+    selected = {
+        (column.table.name, column.name)
+        for expression in query.selected_columns
+        for column in visitors.iterate(expression)
+        if isinstance(column, ColumnClause) and isinstance(column.table, Table)
+    }
+    assert selected == {
+        ("jobs", "kind"),
+        ("jobs", "status"),
+        ("jobs", "task_id"),
+        ("jobs", "last_error"),
+        ("voice_jobs", "stage"),
+        ("voice_jobs", "attempts"),
+        ("voice_jobs", "error_code"),
+        ("outbox", "attempts"),
+        ("outbox", "next_attempt_at"),
+        ("outbox", "published_at"),
+        ("outbox", "last_error"),
+    }
 
-    for forbidden in (
-        r"\.text\b",
-        "file_id",
-        "file_unique_id",
-        "s3_key",
-        "author_name",
-    ):
-        assert not re.search(forbidden, sql), forbidden
-    assert "payload" not in sql
 
+def test_uuid_parameters_inherit_the_mapped_column_type() -> None:
+    from infrastructure.messaging.envelopes import (
+        outbox_id_for,
+        transcribe_outbox_id_for,
+    )
 
-def test_the_status_query_casts_every_uuid_bind_for_asyncpg() -> None:
-    # A bare $n inside CASE reaches PostgreSQL untyped, resolves to text, and
-    # `uuid = text` fails: each id bind must carry a ::UUID cast.
-    sql = str(STATUS_QUERY.compile(dialect=asyncpg_dialect))
-
-    assert len(re.findall(r"\$\d+::UUID", sql)) == 3
-    assert not re.search(r"\$\d+(?!\d|::UUID)", sql)
+    job_id = uuid4()
+    parameters = {
+        bind.value: bind.type
+        for bind in visitors.iterate(status_query(job_id))
+        if isinstance(bind, BindParameter) and isinstance(bind.value, type(job_id))
+    }
+    assert set(parameters) == {
+        job_id,
+        outbox_id_for(job_id),
+        transcribe_outbox_id_for(job_id),
+    }
+    assert all(isinstance(type_, Uuid) for type_ in parameters.values())

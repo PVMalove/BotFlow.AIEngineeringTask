@@ -141,6 +141,23 @@ def main() -> int:
                     "before",
                 ),
                 ("migrations and initial admin", BOOTSTRAP, "before"),
+                (
+                    "schema drift checks",
+                    tuple(
+                        [
+                            "run",
+                            "--rm",
+                            "--no-deps",
+                            f"{service}-bootstrap",
+                            "alembic",
+                            "-c",
+                            "src/infrastructure/db/alembic.ini",
+                            "check",
+                        ]
+                        for service in ("identity", "tasks", "automation")
+                    ),
+                    "before",
+                ),
                 # Relays the Identity outbox to RabbitMQ for the access checks. It is
                 # absent after the restart: those checks only read persisted state.
                 (

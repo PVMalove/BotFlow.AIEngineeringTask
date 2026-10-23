@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID
 
 from kernel_domain.domain_event import DomainEvent
@@ -19,7 +18,7 @@ class TaskEvent(DomainEvent):
     def aggregate_id(self) -> UUID:
         return self.task_id.value
 
-    def to_payload(self) -> dict[str, Any]:
+    def to_payload(self) -> dict[str, object]:
         return {"task_id": str(self.task_id.value)}
 
 
@@ -30,7 +29,7 @@ class TaskCreated(TaskEvent):
     correlation_id: UUID  # the Automation job that asked for the task
     source_key: str
 
-    def to_payload(self) -> dict[str, Any]:
+    def to_payload(self) -> dict[str, object]:
         return {
             **super().to_payload(),
             "job_id": str(self.correlation_id),
@@ -46,7 +45,7 @@ class TaskStatusChanged(TaskEvent):
     status: TaskStatus
     version: int
 
-    def to_payload(self) -> dict[str, Any]:
+    def to_payload(self) -> dict[str, object]:
         return {
             **super().to_payload(),
             "previous_status": self.previous_status.value,

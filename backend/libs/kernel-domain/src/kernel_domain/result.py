@@ -1,3 +1,5 @@
+from typing import cast
+
 from kernel_domain.errors import Error
 
 
@@ -33,7 +35,7 @@ class Result[T]:
         """The value of a successful result; asking a failed one raises ValueError."""
         if not self._is_ok:
             raise ValueError("Result в состоянии ошибки не несёт значения")
-        return self._value  # type: ignore[return-value]
+        return cast(T, self._value)
 
     @property
     def error(self) -> Error:

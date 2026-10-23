@@ -2,18 +2,13 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, Column, DateTime, MetaData, Table
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-metadata = MetaData()
+from infrastructure.db.models import Base
 
-telegram_updates = Table(
-    "telegram_updates",
-    metadata,
-    Column("update_id", BigInteger, primary_key=True, autoincrement=False),
-    Column("received_at", DateTime(timezone=True), nullable=False),
-)
+metadata = Base.metadata
+telegram_updates = metadata.tables["telegram_updates"]
 
 
 class SqlUpdateInbox:

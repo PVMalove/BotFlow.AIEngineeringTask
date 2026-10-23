@@ -18,22 +18,21 @@ from uuid import UUID
 
 from aiormq.exceptions import ChannelInvalidStateError
 from sqlalchemy import (
-    Column,
     ColumnElement,
     DateTime,
     Index,
     Integer,
-    MetaData,
     Table,
     Text,
     Uuid,
+    literal_column,
     or_,
     select,
-    text,
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
 from kernel_platform.clock import Clock, utcnow
 from kernel_platform.retry import RetryPolicy
@@ -51,27 +50,31 @@ class OutboxRow:
     correlation_id: UUID | None = None
 
 
-def outbox_table(metadata: MetaData) -> Table:
-    return Table(
-        "outbox",
-        metadata,
-        Column("id", Uuid, primary_key=True),
-        Column("type", Text, nullable=False),
-        Column("routing_key", Text, nullable=False),
-        Column("correlation_id", Uuid),
-        Column("payload", JSONB, nullable=False),
-        Column("created_at", DateTime(timezone=True), nullable=False),
-        Column("attempts", Integer, nullable=False, server_default=text("0")),
-        Column("next_attempt_at", DateTime(timezone=True)),
-        Column("published_at", DateTime(timezone=True)),
-        Column("last_error", Text),
-        Index(
-            "outbox_unpublished",
-            "next_attempt_at",
-            postgresql_where=text("published_at IS NULL"),
-        ),
-        Index("outbox_correlation", "correlation_id"),
-    )
+class OutboxColumns:
+    """The shared Tasks/Automation schema; each service maps it in its own metadata."""
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
+    type: Mapped[str] = mapped_column(Text)
+    routing_key: Mapped[str] = mapped_column(Text)
+    correlation_id: Mapped[UUID | None] = mapped_column(Uuid)
+    payload: Mapped[dict[str, object]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, server_default=literal_column("0"))
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    @declared_attr.directive
+    @classmethod
+    def __table_args__(cls) -> tuple[Index, Index]:
+        return (
+            Index(
+                "outbox_unpublished",
+                "next_attempt_at",
+                postgresql_where=cls.published_at.is_(None),
+            ),
+            Index("outbox_correlation", "correlation_id"),
+        )
 
 
 async def enqueue(

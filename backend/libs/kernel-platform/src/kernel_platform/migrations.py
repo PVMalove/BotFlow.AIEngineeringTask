@@ -5,7 +5,7 @@ from pathlib import Path
 
 from alembic import command, context
 from alembic.config import Config
-from sqlalchemy import MetaData, text
+from sqlalchemy import MetaData, func, select
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -45,9 +45,7 @@ def configure_environment(metadata: MetaData, settings: Settings) -> None:
 
 
 def _upgrade(connection: Connection, config: Config) -> None:
-    connection.execute(
-        text("SELECT pg_advisory_xact_lock(:key)"), {"key": _MIGRATION_LOCK_KEY}
-    )
+    connection.execute(select(func.pg_advisory_xact_lock(_MIGRATION_LOCK_KEY)))
     config.attributes["connection"] = connection
     command.upgrade(config, "head")
 

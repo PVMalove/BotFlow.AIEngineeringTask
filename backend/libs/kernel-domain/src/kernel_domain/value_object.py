@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import Any
 
 
 class ValueObject(ABC):
@@ -17,6 +16,6 @@ class ValueObject(ABC):
         return hash((type(self), self._equality_components()))
 
     @abstractmethod
-    def _equality_components(self) -> tuple[Any, ...]:
+    def _equality_components(self) -> tuple[object, ...]:
         """The values that make up the object, in a fixed order."""
         ...

@@ -66,7 +66,7 @@ export function TaskSource({
           {icon.shape}
         </SvgIcon>
       )}
-      Telegram
+      {messages.sourceTelegram}
     </Box>
   );
 }

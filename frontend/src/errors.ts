@@ -10,3 +10,7 @@ export function errorMessage(error: unknown, messages: Messages) {
   if (error.status >= 500) return messages.serviceUnavailable;
   return messages.requestFailed;
 }
+
+export function isAccessDenied(error: unknown): boolean {
+  return error instanceof ApiError && [401, 403].includes(error.status);
+}

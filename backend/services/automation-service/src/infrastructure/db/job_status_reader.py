@@ -1,48 +1,66 @@
-"""Safe columns of one job for the operator status command (reads only)."""
+"""Minimal projection for the operator status command (reads only)."""
 
+from datetime import datetime
+from typing import cast
 from uuid import UUID
 
-from sqlalchemy import Uuid, bindparam, text
+from sqlalchemy import Select, and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.queries.job_status import JobStatusRecord
+from infrastructure.db.models import JobModel, OutboxModel, VoiceJobModel
 from infrastructure.messaging.envelopes import outbox_id_for, transcribe_outbox_id_for
 
-# Never selected: jobs.text, voice_jobs.file_id/file_unique_id/s3_key, author_name,
-# outbox.payload. A voice job that has no transcript yet is handed over by its
-# TranscribeVoice row; a transcribed one (and a text job) by its CreateTask row.
-STATUS_QUERY = text(
-    """
-    SELECT j.kind, j.status, j.task_id IS NOT NULL, j.last_error,
-           v.stage, v.attempts, v.error_code,
-           o.attempts, o.next_attempt_at, o.published_at IS NOT NULL, o.last_error
-    FROM jobs j
-    LEFT JOIN voice_jobs v ON v.job_id = j.id
-    LEFT JOIN outbox o ON o.id = CASE
-        WHEN v.stage IS NOT NULL AND v.stage <> 'done' THEN :transcribe_id
-        ELSE :create_id END
-    WHERE j.id = :job_id
-    """
-).bindparams(
-    # Typed binds: untyped ones inside CASE reach PostgreSQL as text and
-    # `uuid = text` fails; the asyncpg dialect renders a ::UUID cast for them.
-    bindparam("job_id", type_=Uuid),
-    bindparam("create_id", type_=Uuid),
-    bindparam("transcribe_id", type_=Uuid),
-)
+type StatusQuery = Select[
+    str,
+    str,
+    bool,
+    str | None,
+    str | None,
+    int | None,
+    str | None,
+    int | None,
+    datetime | None,
+    bool,
+    str | None,
+]
+
+
+def status_query(job_id: UUID) -> StatusQuery:
+    # Each UUID is compared with a mapped UUID column, so asyncpg receives typed
+    # parameters. Never load an entity here: its private content must stay in DB.
+    processing = VoiceJobModel.stage.is_not(None) & (VoiceJobModel.stage != "done")
+    creating = VoiceJobModel.stage.is_(None) | (VoiceJobModel.stage == "done")
+    query = (
+        select(
+            JobModel.kind,
+            JobModel.status,
+            JobModel.task_id.is_not(None),
+            JobModel.last_error,
+            VoiceJobModel.stage,
+            VoiceJobModel.attempts,
+            VoiceJobModel.error_code,
+            OutboxModel.attempts,
+            OutboxModel.next_attempt_at,
+            OutboxModel.published_at.is_not(None),
+            OutboxModel.last_error,
+        )
+        .outerjoin(JobModel.voice)
+        .outerjoin(
+            OutboxModel,
+            or_(
+                and_(processing, OutboxModel.id == transcribe_outbox_id_for(job_id)),
+                and_(creating, OutboxModel.id == outbox_id_for(job_id)),
+            ),
+        )
+        .where(JobModel.id == job_id)
+    )
+    # select overloads infer only ten columns and do not infer outer-join NULLs.
+    return cast(StatusQuery, query)
 
 
 async def read_job_status(
     session: AsyncSession, job_id: UUID
 ) -> JobStatusRecord | None:
-    row = (
-        await session.execute(
-            STATUS_QUERY,
-            {
-                "job_id": job_id,
-                "create_id": outbox_id_for(job_id),
-                "transcribe_id": transcribe_outbox_id_for(job_id),
-            },
-        )
-    ).one_or_none()
-    return JobStatusRecord(*row) if row else None
+    row = (await session.execute(status_query(job_id))).one_or_none()
+    return JobStatusRecord(*row._tuple()) if row else None
