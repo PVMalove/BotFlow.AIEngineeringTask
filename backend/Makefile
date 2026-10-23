@@ -65,6 +65,7 @@ lint_all: check_all ## Синоним check_all
 format_all: _require-members _require-env ## Отформатировать все backend-пакеты
 	@set -eu; for member in $(ALL_MEMBERS); do $(MAKE) -C "$(BACKEND_DIR)" format pkg="$$member"; done
 
+# Each service owns flat src packages; never collect all services in one Python process.
 test_all: _require-members _require-env ## Протестировать все backend-пакеты
 	@set -eu; for member in $(ALL_MEMBERS); do $(MAKE) -C "$(BACKEND_DIR)" test pkg="$$member"; done
 

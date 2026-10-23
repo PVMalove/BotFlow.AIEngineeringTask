@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main, integration/botflow, "feature/**"]
+  pull_request:
+    branches: [main, integration/botflow]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-build-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.21"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: make deps
+      - run: make check
+      - run: make test
+      - run: make init
+      - run: make build
+      - run: npm --prefix frontend exec -- playwright install --with-deps chromium
+      # make e2e owns the isolated resource smoke, restart checks and browser shell checks.
+      - run: make e2e

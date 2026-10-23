@@ -7,11 +7,17 @@ COMPOSE_FILE ?= $(ROOT_DIR)/docker-compose.yml
 COMPOSE = docker compose --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)"
 NPM ?= npm
 PYTHON ?= python3
+UV ?= uv
 
 .PHONY: init infra help deps check lint format test qa build setup demo run up_dev down \
 	compose-check bootstrap-admin backend-check backend-test backend-format \
 	frontend-check frontend-test frontend-format frontend-build e2e \
 	_require-frontend-files _require-frontend-env _require-compose
+
+.PHONY: smoke job-status job-replay _require-job voice-latency scripts-check scripts-test whisper-build whisper-prepare whisper-verify whisper-corpus-check whisper-bench
+
+WHISPER_MODEL ?= turbo
+export WHISPER_MODEL
 
 help: ## Показать команды разработки BotFlow
 	@$(PYTHON) -c "import pathlib,re; text=pathlib.Path(r'$(ROOT_DIR)/Makefile').read_text(); print('\n'.join(f'{m[1]:<20} {m[2]}' for m in re.finditer(r'^([a-zA-Z0-9_-]+):.*?## (.+)$$',text,re.M)))"
@@ -56,13 +62,50 @@ frontend-build: _require-frontend-env ## Production-сборка Vite SPA
 e2e: _require-frontend-env ## Playwright; test:e2e обязан подготовить изолированное тестовое окружение
 	$(NPM) --prefix "$(FRONTEND_DIR)" run test:e2e
 
-check: backend-check frontend-check ## Проверить backend и frontend без автоисправлений
+scripts-check:
+	$(UV) run --project "$(BACKEND_DIR)" --locked --no-sync ruff check scripts backend/tests
+	$(UV) run --project "$(BACKEND_DIR)" --locked --no-sync ruff format --check scripts backend/tests
+
+scripts-test:
+	$(UV) run --project "$(BACKEND_DIR)" --locked --no-sync pytest scripts/tests
+
+check: backend-check frontend-check scripts-check ## Проверить backend/frontend и служебные скрипты без автоисправлений
 
 lint: check ## Синоним check, без автоформатирования
 
 format: backend-format frontend-format ## Явно отформатировать backend и frontend
 
-test: backend-test frontend-test ## Запустить backend- и компонентные frontend-тесты
+test: backend-test frontend-test scripts-test ## Запустить backend/frontend и тесты служебных скриптов
+
+smoke: ## Настоящие ресурсы/DI/S3 и down/up в отдельном Compose-проекте; удаляет только свои тестовые тома
+	$(PYTHON) scripts/integration-smoke.py
+
+_require-job:
+	$(if $(JOB),,$(error Укажите JOB: make job-status JOB=<uuid задания>))
+
+job-status: compose-check _require-job ## Безопасное состояние одного задания (без текста и секретов): JOB=<uuid>
+	$(COMPOSE) --profile workers exec -T automation-worker python -m api.worker status "$(JOB)"
+
+job-replay: compose-check _require-job ## Повторить упавшее задание с прежним id, лимит проверяется заново: JOB=<uuid>
+	$(COMPOSE) --profile workers exec -T automation-worker python -m api.worker replay "$(JOB)"
+
+voice-latency: compose-check ## Задержка голосового пути update -> задача по данным Automation: ARGS="--last 20"
+	$(COMPOSE) run --rm --no-deps automation-bootstrap python scripts/voice_latency.py $(ARGS)
+
+whisper-build: ## Собрать образ stt-runtime для локальной проверки Whisper; скачивает пакеты
+	$(PYTHON) scripts/whisper-validation.py build
+
+whisper-prepare: ## Скачать и проверить веса в постоянный том (единственный шаг с сетью): WHISPER_MODEL, WHISPER_MODELS_VOLUME
+	$(PYTHON) scripts/whisper-validation.py prepare
+
+whisper-verify: ## Проверить SHA-256 и загрузить модель в память без сети; том read-only
+	$(PYTHON) scripts/whisper-validation.py verify
+
+whisper-corpus-check: ## Проверить корпус из .local/whisper/corpus (read-only, без сети)
+	$(PYTHON) scripts/whisper-validation.py corpus-check
+
+whisper-bench: ## Cold/warm прогон корпуса без сети; результат в .local/whisper/results.json
+	$(PYTHON) scripts/whisper-validation.py bench
 
 qa: ## Полная последовательность проверок, сборки образов и Playwright
 	$(MAKE) check
@@ -80,7 +123,7 @@ compose-check: _require-compose ## Проверить Compose без вывод�
 	$(COMPOSE) config --quiet
 
 build: compose-check ## Собрать Docker-образы frontend/API/workers
-	$(COMPOSE) build
+	$(PYTHON) scripts/compose_build.py --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)"
 
 setup: compose-check ## Поднять инфраструктуру и выполнить миграции/bootstrap без запуска приложения
 	$(COMPOSE) up -d --wait identity-db tasks-db automation-db redis rabbitmq minio
@@ -89,16 +132,19 @@ setup: compose-check ## Поднять инфраструктуру и выпо�
 	$(COMPOSE) run --rm --no-deps automation-bootstrap
 
 bootstrap-admin: compose-check ## Явно назначить первоначального admin по INITIAL_ADMIN_TELEGRAM_ID
-	$(COMPOSE) run --rm identity-bootstrap bootstrap-admin
+	$(COMPOSE) run --rm identity-bootstrap python -m api.bootstrap admin
 
 run: compose-check ## Поднять HTTP-каркас; healthchecks проверяют liveness
 	$(COMPOSE) up -d --wait
 
 up_dev: run ## Синоним локального запуска
 
-demo: setup ## Полный запуск после реализации миграций и bootstrap
+demo: compose-check ## Демонстрация: проверка допуска, сборка образов incl. Whisper, миграции, admin, bucket/topology, API, bot, workers, SPA; повтор сохраняет данные
+	$(PYTHON) scripts/demo_preflight.py --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)"
+	$(PYTHON) scripts/compose_build.py --project-directory "$(ROOT_DIR)" -f "$(COMPOSE_FILE)" --profile workers
+	$(MAKE) setup
 	$(MAKE) bootstrap-admin
-	$(MAKE) run
+	$(COMPOSE) --profile workers up -d --wait --wait-timeout 300
 
-down: compose-check ## Остановить Compose с сохранением данных в томах
-	$(COMPOSE) down
+down: compose-check ## Остановить все сервисы, включая bot и workers, с сохранением данных в томах
+	$(COMPOSE) --profile workers down

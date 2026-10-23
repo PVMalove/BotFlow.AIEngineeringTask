@@ -23,16 +23,55 @@
 
 ## Внутренние слои
 
-- `domain`: сущности, значения и инварианты, без ORM/HTTP/DI импортов.
-- `application`: команды/запросы и порты; зависимости передаются конструкторами.
-- `infrastructure`: репозитории, UoW, outbox/inbox, брокеры, S3 и Telegram/STT адаптеры.
-- `api`, `bot`, `worker`, `bootstrap`: точки входа и управление процессами.
-- `containers.py`: отдельный composition root сервиса, lifecycle ресурсов.
+- `domain`: агрегаты (`Entity[Id]` с `create`/`reconstitute`), value objects, доменные события
+  (`DomainEvent`), реестр ошибок `domain/errors.py` и порты репозиториев/UoW; без ORM/HTTP/DI импортов.
+  Ожидаемые отказы возвращаются как `Result`, не исключениями; события копятся в агрегате (`pull_events`).
+- `application`: команды/запросы и их handlers (возвращают `Result[View]`), порты; зависимости
+  передаются конструкторами.
+- `infrastructure`: репозитории, UoW, staging событий в outbox, брокеры, S3 и Telegram/STT адаптеры.
+- `api`: входящие адаптеры — HTTP-маршруты и схемы запросов (`.to_command()`/`.to_query()`),
+  а также процессы `worker`, `bot`, `bootstrap` (`python -m api.worker`); endpoint тонкий:
+  зависимость аутентификации, handler, `match_result`/`match_page`.
+- `api/containers.py`: composition root сервиса, lifecycle ресурсов.
+- `contracts`: независимые от фреймворка View на frozen dataclasses для BFF.
+- `core`: кросс-срезная политика сервиса; `common`: локальные утилиты.
+
+Слои лежат прямо в `backend/services/<service>/src/`, без промежуточного
+пакета с именем сервиса. Каждый сервис запускается с собственным `src` в пути
+импортов; исходники других сервисов в этот процесс не подключаются. Процессы bootstrap, worker и bot — в слое `api`; служебные
+CLI (`voice_latency`, `whisper_validate`) находятся в `scripts/`, тесты разделены на `unit/`, `integration/`, `e2e/`,
+`performance/`. Рядом с `src/` предусмотрены `k8s/`, `docs/` и `ci/`.
+
+Агрегаты: tasks — `Task`; identity — `Member`; automation — `Job` (текст/голос, с частью
+`VoiceMessage`) и `NotificationIntent`. Репозиторий отдаёт и сохраняет агрегат и регистрирует его в
+UoW (`track`); при `commit` UoW забирает события (`pull_events`), в той же транзакции раскладывает
+их в outbox/намерения (`stage_*_event` в `infrastructure/db`), а после commit передаёт обработчикам
+(сигнал `board.changed`). Разбор сообщений брокера (`CreateTask`, `TaskCreated`, события Identity)
+выполняют consumers в `infrastructure/messaging`, команды получают уже готовый DTO.
 
 CQRS локальный, без отдельной read DB/универсального dispatcher. UoW коммитит
 бизнес-изменение и outbox/inbox вместе; репозитории не коммитят. Сессии БД
 изолированы по операции, rollback — по умолчанию. Длительный Whisper не держит
 DB-транзакцию и не блокирует ingress, уведомления или heartbeat брокера.
+
+Общие библиотеки — `backend/libs`: `kernel-domain` (`Result`, `Error`, `Entity`,
+`DomainEvent`), `kernel-platform` (HTTP-конверт и обработчики ошибок, пагинация, `Actor`, протокол `UnitOfWork` и
+`SqlAlchemyUnitOfWork` в отдельном модуле — с outbox-staging и обработчиками событий после commit,
+outbox, messaging, общие `utcnow`, конверт сообщения и циклы воркеров),
+`observability` (request id, JSON-логи, access-log), `test-support` (фикстуры тестов).
+
+HTTP-контракт: успех — `{data, meta}`; ошибка — `{error: {code, message, details?, request_id?}}`
+(`code` — стабильный snake_case из `domain/errors.py`; статус выводится из типа `Error`:
+validation 400, unauthorized 401, forbidden 403, not_found 404, conflict 409, rate_limited 429
+с `Retry-After`). Ошибку тела запроса, не прошедшую схему, отдаёт FastAPI как 422
+`validation_error`; значение, отклонённое доменным правилом, — 400 с кодом правила.
+
+Ожидаемый исход бизнес-операции — `Result`; технический сбой (БД, Identity) — исключение
+(`IdentityUnavailable`, `DBAPIError`, `OSError`), которое сервис перечисляет в
+`unavailable_error_types` и которое отвечает 503 `service_unavailable` с `Retry-After`. Любое
+другое необработанное исключение — 500 `internal_error` без деталей; `request_id` и заголовок
+`X-Request-ID` есть и у него. Изменение `change_status` на уже установленный статус с актуальной
+версией — успех без изменений (`Result.ok(False)`), событие не создаётся.
 
 Референс — [ProductsFlow](https://github.com/PVMalove/ProductsFlow). Подходы
 адаптированы к контекстам BotFlow; наличие workers само по себе не определяет
@@ -89,13 +128,61 @@ expected_version; сравнение и UPDATE атомарны. Stale всег�
 версии no-op не увеличивает её. Потерянный ответ — перечитать карточку без
 автоматического повторения команды.
 
+Контракт `PATCH /api/v1/tasks/{id}` с телом `{status, 1 ≤ expected_version ≤ 2^31−1}`
+(требует `Origin`, совпадающий с адресом ingress, иначе 403 `origin_not_allowed`):
+обычный участник чужой задачи получает 403 `forbidden`, устаревшая версия —
+409 `version_conflict`; все ошибки tasks-service (401/403/404/400/409/503) имеют вид
+`{error: {code, message, request_id}}` и заголовок `X-Request-ID` (принятый корректный id
+возвращается, иначе выдаётся новый). При 409 клиент перечитывает карточку. Агрегат
+`Task.change_status(target, expected_version)` сравнивает версию с загруженной: устаревшая — 409
+даже при совпадающем статусе, актуальная версия и статус уже целевой — 200 без изменений и без
+события. Реальное изменение повышает версию, добавляет `TaskStatusChanged`, а репозиторий пишет
+`UPDATE … WHERE version = :loaded` (ноль строк — 409, конкурентный писатель проиграл).
+Сигнал `board.changed` — обработчик `TaskCreated` и `TaskStatusChanged` после commit; его
+подключает единая фабрика UoW `tasks_unit_of_work` и для tasks-api, и для tasks-worker. Публикация
+ограничена таймаутом 1 с, её потеря не отменяет ни создание, ни изменение. Дубликат сообщения
+создания (inbox) события не рождает, значит и сигнала.
+
 ## Панель и realtime
 
-React SPA, Material UI, TanStack Query. Три колонки, явный переключатель статуса,
+React SPA, Material UI, TanStack Query. Три колонки, явный переключатель статуса и Drag & Drop между колонками на
+@dnd-kit/core через ту же mutation с expected_version,
 на узком экране вертикальное расположение. До 50 карточек/колонку, новая сверху,
 история через «Показать ещё». Reconnect, focus и периодический refresh раз
 в 30 секунд активной вкладки закрывают потерю Pub/Sub-сигнала. Сигнал во время
 fetch не должен потеряться; старый ответ не перезаписывает свежую версию.
+
+### Контракт WS `/ws/board`
+
+Tasks-api отдаёт `/ws/board` (nginx `/ws/` проксирует его без rewrite). Кадры — только JSON
+`{"type":"board.changed"}` (перечитать REST; данных задач и `task_id` нет) и `{"type":"ping"}`
+(heartbeat раз в 25 с, меньше `proxy_read_timeout 75s`).
+
+- При подключении, до `accept`: Origin сверяется с хостом и схемой, с которой пришёл браузер
+  (`X-Forwarded-Proto` из nginx; `ws`/`wss` читаются как `http`/`https`), cookie обязана быть,
+  Identity подтверждает допуск прямо сейчас. Подписка на Redis подтверждается раньше `accept`,
+  поэтому сигнал после REST-обновления клиента не теряется в окне подключения.
+- Перед каждым кадром, сигналом и heartbeat, допуск у Identity проверяется заново; старые claims
+  не используются. Заблокированный участник не получает новых кадров и отключается не позже
+  чем через интервал heartbeat. Уже начатую отправку отозвать нельзя.
+- Отказ на подключении виден клиенту как HTTP 403, а не как код закрытия. Origin, cookie,
+  Identity и подписка Redis проверяются до `accept`, поэтому чужой/отсутствующий Origin, нет
+  cookie, отказ Identity, недоступный Identity и недоступный Redis дают один и тот же сбой
+  рукопожатия (HTTP 403, `InvalidStatus` у клиента `websockets`; браузер сообщает лишь, что
+  соединение не открылось). Различить «доступа нет» и «временно недоступно» на connect
+  нельзя. Следующий фронтенд-слайс обязан считать любой сбой рукопожатия поводом для
+  reconnect с backoff и перечитывания REST, а «нет доступа» узнавать из REST (401/403), а не из
+  WebSocket. Коды `1008` и `1013` существуют только для закрытия после `accept`.
+  Тестовый клиент Starlette показывает отказ до `accept` как код 1008/1013; реальный сокет —
+  нет (проверено в `tests/integration/test_board_realtime.py` на живом uvicorn).
+- Коды закрытия после `accept`: `1008` — доступа нет (Identity отказал перед кадром, например
+  после блокировки); клиент не переподключается вслепую, а перепроверяет сессию. `1013` —
+  Identity или Redis недоступны, либо клиент не принял кадр за `SEND_TIMEOUT` (5 с); клиент
+  переподключается с backoff и перечитывает REST.
+- Соединение не держит сессию БД: маршрут зависит только от Identity (HTTP) и Redis. Подписка
+  Redis на каждое соединение, всплеск сигналов сворачивается в один кадр.
+- Pub/Sub не журнал и не гарантирует доставку: пропущенный сигнал не воспроизводится и не
+  считается ошибкой хранилища, его закрывают reconnect, focus и refresh раз в 30 секунд.
 
 Веб-интерфейс на русском и армянском: «Русский / Հայերեն», выбор сохраняется
 локально. Переводятся элементы UI и ошибки, а не текст задач. Светлая доска,
@@ -139,11 +226,14 @@ MinIO собирается из официального commit 9e49d5e7a648f00e
 обязательны перед рабочим использованием.
 
 Compose содержит постоянные тома, secret-файлы, инфраструктуру и HTTP-оболочки.
-Профили `bootstrap`/`workers` показывают состав процессов. Сейчас эти точки
-входа и Alembic env отказывают явно: бизнес-обработчики/metadata ещё отсутствуют.
-HTTP liveness не является бизнес-readiness; `/health/ready` возвращает 503.
-Whisper/PyTorch/ffmpeg и подготовка ключей RS256 подключаются после проверки
-совместимости. Автоматического ложного успешного bootstrap нет.
+Профиль `bootstrap` применяет миграции Identity, Tasks и Automation; отдельная команда
+Identity идемпотентно создаёт первого admin. Профиль `bot` запускает собственный
+long polling для `/start`, `/login`, `/join` и текстовых сообщений. Профиль
+`workers` запускает `identity-worker` (relay outbox), `tasks-worker` (создание
+задач) и `automation-worker` (relay CreateTask, результат задачи и уведомления).
+HTTP liveness не является
+бизнес-readiness; `/health/ready` возвращает 503. Локальная проверка Whisper
+описана отдельно; она не включается в обычный runtime приложения.
 
 Скрипт `make init` создаёт локальные credentials без перезаписи. Каталог
 `.secrets` доступен только владельцу; файлы читаются назначенными контейнерами.
@@ -160,11 +250,423 @@ Telegram/Whisper в CI заменяются на портах. Живая про
 Telegram и RU/hy корпус; тестовые подмены не доказывают качество распознавания.
 Исчерпывающая fault-матрица, retention и restore не являются gate первой версии.
 
-Полный QA пока не готов: бизнес-тесты и изолированное E2E окружение отсутствуют.
-Пустые наборы не считаются успешными. Приложение не заявляет рабочие auth,
-фоновые задания, HA или серверный CD на основании одного каркаса.
+Изолированное E2E окружение проверяет инфраструктуру и двуязычный веб-вход.
+Вход проверяется через Telegram-порт, реальные HTTP Identity/nginx и PostgreSQL:
+обмен кода, срок действия, повтор, гонки, лимиты, cookie, текущий участник и logout.
+Telegram в CI заменён на порту отправки сообщений; реальный long polling
+требует отдельной проверки с токеном владельца. Текстовый путь задач описан в
+разделе #9, голосовой — в разделе #14; изменение статуса и WS ещё не реализованы, и зелёные проверки
+текстового пути их готовность не подтверждают.
 
 Состояния workflow, envelope сообщений, конкретные timeout/lease/reclaim,
 rate limits, ключи/ротация, миграции и реальные тесты уточняются при реализации
 в соответствии с [ADR](adr/). Принятые решения сохраняются независимо от
 инструмента оркестрации разработки.
+
+
+## Реализованный вход через Telegram (#5)
+
+Identity хранит `members`, `login_codes`, `auth_sessions` и `rate_limits`.
+Bootstrap `migrate` выполняет Alembic под транзакционной advisory-блокировкой;
+`admin` создаёт запись по `INITIAL_ADMIN_TELEGRAM_ID` только при её отсутствии.
+Повтор не меняет роль, статус или существующие сессии.
+
+Automation проверяет допуск по `/internal/v1/members/by-telegram/{telegram_id}`
+и получает код через `/internal/v1/login-codes`. Ключ Automation разрешает только
+эти операции, а nginx закрывает `/internal/`. Обработчик принимает команды только
+в личном чате и сохраняет `update_id` в своей БД до выполнения. Повтор update
+не отправляет второй код. При ошибке доставки пользователь отправляет новую
+`/login`: автоматически повторять отправку уже выданного кода бот не пытается.
+
+Код — 32 случайных URL-safe символа; PostgreSQL хранит SHA-256, TTL — 5 минут.
+Новая выдача под блокировкой участника отменяет предыдущий код. Обмен через
+`POST /api/v1/auth/exchange` атомарно погашает код и создаёт сессию на 8 часов.
+JWT использует только RS256, проверяет issuer/audience/обязательные claims;
+приватный RSA-ключ доступен только Identity API. `/api/v1/users/me` каждый раз
+перепроверяет сессию и текущий допуск в БД. Logout отзывает сессию, refresh нет.
+
+Cookie `botflow_session`: HttpOnly, SameSite=Strict, Path=/, Max-Age=28800;
+Secure отключён только для окружений `local` и `test` на loopback HTTP.
+POST exchange/logout требуют Origin, совпадающий с адресом ingress.
+Лимиты в PostgreSQL: 5 выдач в минуту на Telegram ID и 30 обменов на peer ingress;
+X-Forwarded-For не используется, поэтому лимит обмена общий за этим ingress.
+429 содержит Retry-After: 60; ошибка хранения в защищённой операции даёт 503.
+
+## Веб-сессия (#6)
+
+React Router защищает оболочку доски и переводит неавторизованного пользователя
+на `/login`. TanStack Query загружает текущего участника через `/api/v1/users/me`;
+до ответа защищённое содержимое скрыто. Проверка повторяется при возвращении
+на вкладку, восстановлении сети и каждые 30 секунд активной вкладки. 401 убирает
+участника и кеш защищённых данных; ошибка сети/Identity скрывает оболочку и
+показывает локализованный повтор запроса, не предоставляя доступ по старому ответу.
+
+Форма обменивает код через JSON POST `/api/v1/auth/exchange`; logout отправляет
+POST `/api/v1/auth/logout`. Fetch использует same-origin cookie и no-store;
+Origin браузера проверяет Identity, отдельного CSRF-токена в этом контракте нет.
+JWT остаётся в HttpOnly cookie, код очищается из поля после отправки. RU/HY
+меняет тексты формы и ошибок без пересоздания сессии; сохраняется только язык.
+
+Playwright через изолированный Compose проверяет реальный обмен кода, cookie,
+перезагрузку, языки, logout, использованный код и истечение/отзыв сессии в БД.
+Код выдаёт настоящий обработчик `/login` через тестовый Messenger-порт; тестовых
+публичных endpoints и обхода auth нет. Управление фикстурами работает только в
+тестовом UUID-проекте. Результаты браузера хранятся во временном каталоге прогона
+и удаляются вместе с ним; в отчёт попадают счётчики, место сбоя и краткая ошибка
+с маскированием кода/JWT. Отдельные UI-тесты проверяют ошибки и адаптивность на
+HTTP-подменах; они не заменяют настоящий E2E.
+
+## Заявки и управление доступом (#7)
+
+**Состояния.** Заявка — это строка `members` со статусом `pending`: уникальность
+`telegram_id` делает обход блокировки структурным, а отдельной таблицы заявок нет.
+`/join` создаёт `pending`; `approve` → `approved`, `reject` → `rejected`; `block`
+допустим из `pending`, `rejected` и `approved`; `unblock` возвращает `blocked` →
+`approved` с прежней ролью. Из `rejected` в `pending` участник возвращается только
+через `/join` (версия растёт); `blocked` покидается только через `unblock`.
+Каждая смена доступа увеличивает `access_version` и пишет `status_changed_at` и
+`decided_by`; прежние отказы не хранятся (остаётся последнее решение).
+
+**`/join`.** Бот в личном чате вызывает `POST /internal/v1/join-requests` (отдельная
+операция ключа Automation) и отвечает по исходу `submitted` / `already_pending` /
+`already_member` / `blocked`. Лимит — 5 запросов в минуту на Telegram ID (429 с
+`Retry-After: 60`). У `pending` нет ни кода входа, ни сессии: выдача кода, обмен
+и проверка сессии требуют `approved`. Допуск решает только Identity; FSM-состояние
+бота (`botflow:fsm:*`) не читается ни одним путём доступа.
+
+**Решение.** `DecideMember` выполняет одну транзакцию: `pg_advisory_xact_lock`
+решений, блокировка строк цели и актёра `FOR UPDATE`, подсчёт `approved` admin
+внутри блокировки, применение, commit. Порядок проверок: (1) статус уже равен
+результату действия → 200 `changed=false` без роста версии, outbox и работы с
+сессиями (повтор, в том числе от другого admin); (2) `access_version` не равна
+`expected_version` → 409 `version_conflict`; (3) недопустимый переход → 409
+`invalid_transition`; (4) защиты `cannot_block_self` и `last_admin` → 409;
+(5) актёр, потерявший доступ в параллельном решении, получает 401, admin-роль
+перепроверяется (403). Защиты стоят до проверки актёра намеренно: admin, которого
+только что заблокировали, не может снять последнего admin. Условный
+`UPDATE ... WHERE access_version = :expected` остаётся второй линией защиты.
+`block` в той же транзакции отзывает все сессии и отменяет живые коды; `unblock`
+не очищает отзыв и не выдаёт код — нужен новый `/login`. `ExchangeLoginCode`
+сначала блокирует строку участника (порядок «участник → код», как у `block` и
+выдачи кода), чтобы сессия не пережила параллельный `block` и не оживала после
+`unblock`. Глобальная блокировка сериализует решения — для одной команды это
+приемлемо.
+
+**Admin API** (`identity-api`, cookie-сессия admin, POST — ещё `Origin`):
+`GET /api/v1/admin/join-requests?status=pending|rejected` и
+`GET /api/v1/admin/members?status=` (по умолчанию `approved` и `blocked`; `limit`
+1–100, `offset`, порядок `created_at, id`); `POST /api/v1/admin/members/{id}/
+approve|reject|block|unblock` с `{"expected_version": n}` → `{member, changed}`.
+Ошибки: 401 `unauthenticated`, 403 `admin_required` / `origin_not_allowed`, 404
+`member_not_found`, 409 `version_conflict` / `invalid_transition` /
+`cannot_block_self` / `last_admin`, 422. **Маршрут `/api/v1/admin/` в
+`frontend/nginx.conf` пока не добавлен** (папка frontend вне этого среза): API
+проверяется напрямую на `identity-api`, ingress-маршрут добавит срез админ-панели.
+
+**Уведомление о решении.** В транзакции `approve` / `reject` / `unblock` Identity
+пишет одну строку `outbox` (`member.access-decided`: `member_id`, `telegram_id`,
+`decision`, `access_version`, `decided_at`); `block` события не пишет, повтор тоже.
+`identity-worker` читает due-строки `FOR UPDATE SKIP LOCKED`, публикует
+persistent mandatory-сообщение в durable topic exchange `botflow.identity` с
+подтверждением брокера (`message_id` = id события) и только после этого ставит
+`published_at`; при сбое `attempts` и `next_attempt_at` хранятся в PG (3 попытки,
+паузы 5 с и 30 с, затем строка остаётся видимой без `next_attempt_at`). Обе стороны
+идемпотентно объявляют exchange, очередь `botflow.automation.identity-events` и
+привязку, поэтому событие маршрутизируемо до старта потребителя.
+Automation: потребитель в **одной** транзакции пишет `inbox_messages` и
+`notification_intents` (`id` = id события), затем делает ack; повторная доставка —
+только ack. Relay переносит `pending` в `enqueued` и добавляет id в Redis Stream
+`botflow:automation:notifications` (группа `notifier`). Notifier читает через
+`XREADGROUP`, подбирает зависшие записи через `XAUTOCLAIM`, делает `XACK` только
+после записи статуса в PG. Перед отправкой он запрашивает у Identity текущего
+участника: решение отправляется только если `intent.access_version` равна текущей
+и политика разрешает, иначе статус `suppressed_stale` / `suppressed_blocked`.
+Сбой Telegram или Identity — до трёх попыток, затем `failed` (виден в PG). Редкий
+дубль сообщения допустим (ADR-0021).
+
+**Принятые границы (ADR-0021).** Строка `outbox` после трёх неудачных публикаций остаётся
+без `next_attempt_at`: простой RabbitMQ дольше ~35 с теряет уведомление о решении (сам
+доступ не затронут), инструмента повторной постановки нет. Событие с
+невалидным телом отклоняется без requeue и без DLX/DLQ; источник сообщений только
+собственный Identity, поэтому на практике это недостижимо. Неклассифицированная ошибка
+записи в БД повторяется с паузой 1 с, пока хранилище недоступно. `unblock` ранее
+заблокированного `pending`/`rejected` участника даёт `approved` — это явное решение
+admin, а не обход блокировки.
+
+**Заблокированный автор (правило для следующих срезов).** Identity не владеет
+задачами, поэтому `block` меняет только членство и сессии и не отменяет принятые
+задания — они завершаются. Финальное уведомление автору задачи (виды `task.result`,
+`transcription.result`) подавляется, если автор не `approved` (`delivery_verdict`
+в `domain/notifications.py`). Срезы Tasks/Automation обязаны отправлять такие
+уведомления через `DeliverNotification`, а не напрямую в Telegram.
+
+**Проверки.** Юнит-тесты закрывают таблицу переходов, DecideMember, HTTP-контракт и
+адаптеры. Настоящие PostgreSQL, RabbitMQ и Redis в `make smoke` проверяет класс
+`AccessFlow`: join → approve → login, reject и повторная заявка, обход блокировки,
+лимит `/join`, 401/403/Origin, конкурентные approve и взаимные block, отзыв сессий,
+путь outbox → RabbitMQ → intent → Redis Stream → тестовый Messenger, подавление
+устаревшего решения и финального уведомления блокированному автору, повторная
+доставка и «подставное» FSM-состояние в Redis.
+
+## Текстовый путь: сообщение, задача, REST и уведомление (#9)
+
+Обычное личное текстовое сообщение допущенного участника становится одной Pending-задачей
+общей доски; автор получает уведомление о результате. Голос, изменение статуса,
+редактирование и удаление в этот срез не входят.
+
+**Владение offset.** `start_polling` aiogram двигает offset и после ошибки
+обработчика (проверено запуском: `_process_update` проглатывает исключение), поэтому
+сообщение, которое не удалось сохранить, было бы потеряно. `TelegramPoller`
+(`infrastructure/polling.py`) сам вызывает `Bot.get_updates` и
+`Dispatcher.feed_update` и двигает offset только после возврата обработчика.
+Ошибки инфраструктуры (`DBAPIError`, `TimeoutError`, `OSError`) удерживают offset:
+тот же update приходит снова после паузы 5 с ±20 %. Любая другая ошибка пишется в
+лог фиксированным текстом (текст исключения может содержать токен) и update
+пропускается: «ядовитое» сообщение не блокирует очередь. Ошибка отправки ответа не
+пробрасывается: сообщение уже сохранено. На токен работает один poller.
+
+**Контракт входа** (`allowed_updates = message, edited_message`). Личное сообщение с
+текстом — задание. `/start`, `/login`, `/join` — как раньше. Неизвестная `/команда` и
+неподдерживаемое содержимое (голос, фото и т. д.) — короткий ответ без задания.
+`edited_message` и сообщения вне личного чата молча игнорируются: текст задачи
+неизменяем (ADR-0005). Автор без допуска получает отказ, при недоступном Identity —
+«временно недоступно»; задание в обоих случаях не создаётся.
+
+**Задание и лимиты.** `SqlJobStore.accept` — одна транзакция: `pg_advisory_xact_lock`,
+проверка дубля `UNIQUE(bot_id, chat_id, message_id)` (повтор не считается новой
+нагрузкой), счёт незавершённых заданий (`status = accepted`): всего < 100 и у автора
+< 10, затем `INSERT` задания и строки `outbox` с командой CreateTask. Исходы:
+`ACCEPTED`, `DUPLICATE`, `LIMIT` (ничего не записано). Положительный ответ (ACK)
+отправляется строго после commit, затем в `jobs.acked_at` пишется время; повтор
+сообщения повторяет ACK только пока `acked_at IS NULL`. Лимит отклоняется до ACK.
+Слот освобождается результатом задания (`completed`) или исчерпанием отправки
+(`failed`), но не доставкой уведомления. Глобальная advisory-блокировка —
+тот же приём, что и в ADR-0022; для одной команды она приемлема. Тот же текст с
+новым `message_id` — новое задание. Идентификаторы задания и строки outbox
+детерминированно выводятся из источника `bot_id:chat_id:message_id`.
+
+**Envelope и топология.** Тело JSON и зеркало в свойствах AMQP:
+`{envelope_version: 1, message_id, type, correlation_id, occurred_at, payload}`.
+`message_id` — id строки outbox, `correlation_id` — id задания. CreateTask
+(routing key `task.create`, очередь `botflow.tasks.commands`) несёт `job_id`, `bot_id`,
+`chat_id`, `message_id`, `author_id` (id участника Identity), `author_telegram_id`,
+`author_name` (снимок из Telegram, до 64 символов), `text` (1…4096). TaskCreated
+(`task.created`, очередь `botflow.automation.task-results`) несёт `job_id`, `task_id`,
+`source_key`. Exchange `botflow.tasks` — durable topic; обе стороны объявляют топологию
+идемпотентно, publisher использует confirms и `mandatory`.
+
+**Tasks.** Одна транзакция: `INSERT inbox ON CONFLICT DO NOTHING` (конфликт — только ack),
+`INSERT tasks ON CONFLICT DO NOTHING` (UNIQUE `source_key` и `correlation_id`), строка
+outbox TaskCreated. Идентификаторы задачи и результата — `uuid5` от источника, поэтому
+другой `message_id` с тем же источником не создаёт ни второй задачи, ни второго
+результата. Ack — только после commit.
+
+**Retry, ошибка, replay.** `RelayOutbox` (`kernel_platform.outbox`) берёт готовые строки
+`FOR UPDATE SKIP LOCKED`, публикует с confirm и пишет исход в той же транзакции:
+`attempts`, `next_attempt_at`, `last_error` (только имя класса исключения). До трёх
+попыток с паузами 5 и 30 с ±20 %. Недоступность брокера (ошибки соединения,
+таймаут confirm) попытку не расходует (ADR-0007). После третьей ошибки в той же
+транзакции `on_exhausted` помечает задание `failed` с сохранённой ошибкой: слот
+свободен. Оператор повторяет исходное задание командой
+`python -m api.worker replay <job_id>` (подробно — «Ошибка задания и replay (#15)»):
+у той же строки outbox (прежний id) сбрасываются попытки, задание снова `accepted`. Поздний TaskCreated для `failed` задания допустим
+(`failed` → `completed`). При исчерпании попыток outbox публикации `TaskCreated` на стороне
+Tasks оператор повторяет отправку результата аналогичной командой Tasks worker:
+`python -m api.worker replay <job_id>`. Consumer (`QueueConsumer`) подтверждает сообщение только после
+commit; при временной ошибке пауза с jitter и `nack(requeue=True)` без busy loop;
+невалидное сообщение — `reject(requeue=False)` без DLX (ADR-0021).
+
+**Результат и уведомление.** Automation в одной транзакции пишет inbox, переводит
+задание в `completed` с `task_id` и сохраняет intent `task.result` с текстом
+«Задача создана: <до 100 символов>». Дальше работают прежние relay → Redis Stream →
+notifier; правило `delivery_verdict` подавляет итог заблокированному автору. Сбой
+уведомления меняет только статус intent, задание и задача не затрагиваются.
+
+**Tasks REST.** `GET /api/v1/tasks?status=pending|in_progress|completed&limit=&cursor=`
+возвращает `ApiResponse`: `data` — список `TaskView` (`id`, `text`, `status`, `version`,
+`author_id`, `author_name`, `created_at`, `updated_at`), `meta` — `next_cursor`, `has_more`.
+Порядок `created_at DESC, id DESC`, keyset-курсор (непрозрачный base64 JSON позиции),
+`limit` по умолчанию 50, максимум 100 (иначе 422), неверный курсор — 400
+`invalid_cursor`. `GET /api/v1/tasks/{id}` — карточка, 404 `task_not_found`. Любой
+допущенный участник видит все задачи доски. Авторизация без изменений Identity:
+Tasks пересылает cookie `botflow_session` на `GET /api/v1/users/me` при каждом запросе
+(401 → 401, не `approved` → 403, сеть/5xx → 503 `identity_unavailable`), ответы
+`Cache-Control: no-store`. `/health/ready` по-прежнему 503. Строка, созданная
+одновременно с чтением, может сместиться между страницами; это исправляется
+перечитыванием (ADR-0021).
+
+**Измерение ACK.** `jobs.message_date` — время отправки по Telegram, `received_at` —
+приход update в poller, `acked_at` — после отправки ACK. Живой замер:
+`SELECT percentile_cont(0.95) WITHIN GROUP (ORDER BY acked_at - received_at) FROM jobs
+WHERE acked_at IS NOT NULL`; цель ≤ 2 с — цель, а не результат измерения. В CI с
+подменой Telegram проверяется только `acked_at - received_at < 2 с`.
+
+**Принятые границы (ADR-0021).** Постоянно невалидный CreateTask на стороне Tasks
+(недостижим после валидации в Automation) отклоняется без ответа, задание остаётся
+`accepted` и занимает слот до ручного закрытия. Ранее в Compose было два сервиса одного бота
+(`automation-bot`, `telegram-bot`); сервис `automation-bot` удалён в пользу единого `telegram-bot`
+с профилями `workers` и `bot`, исключая 409 Telegram.
+
+**Проверки.** Юнит-тесты: retry-политика, `RelayOutbox`, `QueueConsumer`, топология,
+`CreateTaskFromCommand`, REST-контракт, адаптер Identity, `AcceptTextMessage`,
+`TelegramPoller`, маршруты, `ProcessTaskResult`. Настоящие PostgreSQL, RabbitMQ, Redis,
+ingress и `tasks-worker` в `make smoke` проверяет класс `TextTaskFlow`: текст → задание и
+outbox → ACK после commit → RabbitMQ → Tasks → TaskCreated → intent → Redis Stream →
+тестовый Messenger; повтор `message_id` и тот же текст дважды; конкурентные лимиты
+100/10; откат и недоступная БД; недоступный брокер без расхода попыток; расписание
+5/30 с, исчерпание и replay без второй задачи; сбой уведомления; REST список,
+карточка, курсор, фильтр и 401/403 через ingress с настоящей cookie.
+
+## Голосовой путь: Telegram, MinIO, Whisper и задача (#14)
+
+Личное голосовое сообщение допущенного участника проходит тот же путь, что и текст,
+но между приёмом и CreateTask стоит отдельный процесс распознавания. Исходы:
+одна задача с текстом транскрипции или итоговая ошибка с понятным уведомлением и
+без задачи (пустую карточку создать нельзя: CreateTask появляется только после
+непустого текста).
+
+**Процессы.** `telegram-bot` принимает update (без torch); `automation-worker`
+дополнительно переносит строки `TranscribeVoice` из outbox в Redis Stream
+`botflow:automation:voice`; `whisper-worker` (образ `stt-runtime`, профиль `workers`,
+`make build` его не собирает) — единственный процесс с Whisper, подключён к PostgreSQL,
+Redis, MinIO и Telegram, без RabbitMQ. Отсюда гарантия «долгая работа Whisper не блокирует
+ingress, AMQP, текстовый путь и уведомления»: они в других процессах.
+
+**Приём.** `AcceptVoiceMessage`: допуск через Identity (общий `Admission` с текстовым
+путём), затем Telegram `duration ≤ 60 с` и `file_size ≤ 5 MiB` (размер может отсутствовать;
+по факту его перепроверит воркер). В одной транзакции `SqlJobStore.accept_voice` пишет
+задание (`jobs.kind = 'voice'`, `text` пока `NULL`), `voice_jobs` (`file_id`,
+`file_unique_id`, длительность, размер, mime) и строку outbox `TranscribeVoice`
+(routing key `voice.transcribe`, id `uuid5` от задания — отличный от id CreateTask).
+ACK — строго после commit; повтор update даёт `DUPLICATE` и повторяет ACK только пока
+`acked_at IS NULL`. Хранятся только `file_id` и `file_unique_id`: URL с токеном
+Telegram нигде не строится кодом приложения (его собирает aiogram внутри
+`download_file`), в БД, outbox и журнал он не попадает; тест проверяет отсутствие
+`api.telegram.org` во всех строках.
+
+**Лимиты.** Тот же advisory-lock и транзакция: общие 100/10 по `status = 'accepted'` плюс
+голосовые 10 всего и 2 на автора (`kind = 'voice'`). Сначала проверяются общие
+лимиты (ответ «слишком много задач»), затем голосовые («слишком много голосовых»);
+ничего не пишется. Слот освобождают подтверждённая задача (TaskCreated) или итоговая
+ошибка; доставка уведомления слот не освобождает. Невалидное аудио (>60 с, >5 MiB)
+отклоняется до записи.
+
+**Доставка в STT.** Одна таблица `outbox`; `RelayOutbox` каждого процесса берёт только свои
+строки через фильтр `routing_keys` (`task.create` для RabbitMQ, `voice.*` для
+Redis). `RedisVoicePublisher` делает `XADD` (`job_id`, `outbox_id`); ошибка соединения
+или таймаут Redis превращается в `ConnectionError`, поэтому простой Redis не
+расходует попытки строки (ADR-0007). Повторный `XADD` после падения между `XADD` и
+`mark_published` безвреден: воркер идемпотентен по состоянию PostgreSQL. Исчерпанная
+отправка (`fail_voice_job`) завершает задание как `unavailable` с уведомлением.
+
+**Воркер.** Старт: удалить прежний маркер готовности → проверить SHA-256 весов и
+загрузить модель → создать группу `stt` → записать маркер `/tmp/whisper-ready`.
+Healthcheck Compose — наличие маркера, поэтому контейнер не готов до загрузки модели.
+Цикл строго последовательный: `claim_idle(1)` (запись, повисшая ≥ 180 с, см.
+`docs/whisper-validation.md`), иначе `read(1)`; следующая запись не читается, пока
+предыдущая не обработана и не подтверждена. Стадии `TranscribeVoice`, каждая БД-операция
+— отдельная короткая транзакция, ни одна не открыта на время скачивания, загрузки и
+Whisper:
+
+1. `begin`: учесть попытку (`attempts`, `started_at`, `cold_start` у первой записи
+   процесса); неизвестное или завершённое задание — только `XACK`.
+2. Скачать файл по `file_id` (`get_file`, затем `download_file` в память с жёстким
+   потолком 5 MiB), положить объект `voice/<job_id>` в приватный bucket `botflow-audio`.
+3. `checkpoint`: `stage = stored`, ключ, размер и SHA-256. Перезапущенная запись читает
+   объект из MinIO и Telegram не трогает; пропавший объект — повторное скачивание.
+4. Whisper (параметры из `docs/whisper-validation.md`).
+5. `complete` — ОДНА транзакция: `jobs.text`, `voice_jobs.stage = done`, язык, метки
+   STT и строка CreateTask с тем же детерминированным id и конвертом, что у текста
+   (общий построитель `create_task_message`). Дальше путь текста без изменений:
+   RabbitMQ → Tasks → TaskCreated → intent `task.result` → уведомление.
+
+Временные ошибки Telegram/MinIO повторяются в процессе по `RetryPolicy` 5 с и 30 с
+(три попытки), затем итог `unavailable`. Сбой записи в БД или неожиданная ошибка
+Whisper оставляют запись в stream без `XACK`: её заберёт воркер после 180 с; запись,
+обработанная более трёх раз, завершается ошибкой `failed`.
+
+**Итоговые ошибки.** Одна транзакция: `jobs.status = failed` (слот свободен),
+`last_error` и `voice_jobs.error_code`, intent `transcription.result` с русским текстом
+(«… Задача не создана …»). Коды: `empty_audio` (нет речи/пустой текст),
+`corrupted_audio` (ffprobe/ffmpeg), `too_long` (по ffprobe > 61 с: Opus «ровно 60 с»
+показывает 60.006), `too_large`, `timeout`, `file_unavailable` (Telegram больше не отдаёт
+файл), `unavailable` (временные ошибки исчерпаны), `text_too_long` (> 4096 символов,
+текст задачи не усекается), `failed`. Заблокированному автору итог подавляется
+прежним `delivery_verdict`. Оператор повторяет упавшее задание командой
+`python -m api.worker replay <job_id>`: запись снова `accepted`, читается из
+MinIO (если объект уже есть) или из Telegram, старое уведомление об ошибке удаляется;
+лимиты задач и голосовых заданий проверяются заново (см. «Ошибка задания и replay (#15)»).
+
+**Таймаут и перезапуск.** Decode идёт в daemon-потоке с таймаутом 120 с (вдвое больше
+максимума 58 с из #4, `BOTFLOW_STT_TIMEOUT_SECONDS`). Поток Python остановить нельзя, поэтому
+после таймаута воркер фиксирует итоговую ошибку, подтверждает запись, убирает маркер и
+завершает процесс через `os._exit`; `restart: unless-stopped` поднимает его заново
+(загрузка модели ≈ 6–10 с). Зависший decode не успевает наложиться на следующую запись.
+Отвергнутая альтернатива — дочерний процесс с kill по таймауту: чище, но около 100 строк
+кода и вторая загрузка модели; к ней стоит вернуться, если `os._exit` не
+подойдёт.
+
+**Измерение (`make voice-latency`).** Всё считается по строкам Automation, без SQL между
+БД. «Update → задача» — от `jobs.received_at` до записи TaskCreated
+(`jobs.updated_at` завершённого задания): к этому моменту Tasks уже сохранил задачу, и
+она читается через REST. Отдельно выводятся: ACK, ожидание в очереди
+(`outbox.published_at` → `voice_jobs.started_at`, в итог НЕ входит), скачивание +
+MinIO, STT, передача от конца распознавания до TaskCreated. Холодный старт (первая
+запись процесса) — отдельной строкой и в вердикт не входит. Вердикт сравнивает худший
+итог прогретых записей с 60 с и всегда называет условия: прогретый воркер, пустая
+очередь, диапазон длительностей аудио. Это измерение, а не гарантия: по #4 армянская
+запись ≈ 60 с даёт ≈ 58 с одного STT, поэтому цель 60 с для длинных hy-записей на
+нагруженной машине не достижима. Живое подтверждение — ручная приёмка (#17).
+
+**Проверки.** Юнит-тесты: домен и миграция, `AcceptVoiceMessage` и маршруты, фильтр
+routing key и `RedisVoicePublisher`/`RedisVoiceQueue`, адаптеры файла Telegram и S3,
+`TranscribeVoice` (каждая ветка), цикл воркера и готовность, `WhisperTranscriber`
+с фальшивой моделью, расчёт задержки. SQL (`accept_voice`, `SqlVoiceStore`, миграция,
+фильтр outbox) проверяет `make smoke`, класс `VoiceTaskFlow`: настоящие PostgreSQL,
+RabbitMQ, Redis Streams, MinIO и `tasks-worker`; подменены только Telegram (Messenger и
+источник файлов) и STT на портах. Реальный Whisper в CI и в smoke не запускается.
+
+## Ошибка задания и replay (#15)
+
+**Состояние одного задания.** `python -m api.worker status <job_id>` (`make job-status
+JOB=<uuid>`) читает из Automation только безопасные колонки и печатает строки `ключ=значение`:
+`kind`, `status`, `stage` (у голоса), `delivery_attempts` (попытки строки outbox
+CreateTask или, пока нет транскрипта, TranscribeVoice), `processing_attempts` (попытки
+обработки голосовой записи), `max_attempts=3`, `error_code`, `next_attempt_at` (пока строка
+не опубликована; `-` у исчерпанной), `task_created` (`yes`/`no`). Текст сообщения, `file_id`,
+ключ объекта, имя автора и `payload` не читаются и не печатаются. `error_code` — код из
+закрытого списка: коды `VOICE_FAILURES`, `delivery_failed` (сбой публикации в брокер или
+поток) или `unknown`; сырой текст ошибки никогда не выводится. Неизвестный id — «Job not
+found.», код возврата не ноль.
+
+**Replay.** `python -m api.worker replay <job_id>` (`make job-replay JOB=<uuid>`) выполняет
+`ReplayJobCommandHandler` в одной транзакции: блокировка приёма (`lock_acceptance`),
+блокировка задания, действие только над `failed`. Для такого задания лимиты проверяются
+заново (`JobLimits.check` по `count_unfinished(author)`, у голоса — и голосовые): упавшее
+задание слота не держит. Отказ (`job_limit`/`voice_limit`) ничего не меняет, задание остаётся
+`failed`. Успех сохраняет прежний `job_id` и прежний id строки outbox (`uuid5` от задания):
+упавшая голосовая запись уходит в `queued`/`stored` (из MinIO, если объект есть), а при
+сбое публикации сбрасываются `attempts`, `next_attempt_at` и `last_error` ещё не
+опубликованной строки. Попытки сбрасываются только при replay именно `failed` задания:
+повтор команды (задание уже `accepted` или `completed`) ничего не меняет и не коммитит.
+Tasks остаётся идемпотентным по inbox и `source_key`/`correlation_id`: повторная команда
+или повторный результат второй задачи не создают, поздний TaskCreated завершает `failed`
+задание.
+
+**Попытки, паузы, перезапуск.** Не больше трёх попыток: доставка — `attempts` строки outbox
+(паузы 5 и 30 с), обработка записи — `voice_jobs.attempts` (четвёртый приход записи
+завершается кодом `failed`). Постоянная ошибка (пустая или повреждённая запись, слишком
+длинная или большая) завершает задание сразу, без повторов. Недоступность брокера или Redis
+попытку не расходует и откладывает строку минимум на 5 с, без немедленного бесконечного
+возврата в очередь. Попытки и `next_attempt_at` лежат в PostgreSQL, поэтому нормальный
+рестарт процесса их не теряет. После рестарта воркера стандартное восстановление
+(непубликованные строки outbox, `XAUTOCLAIM` зависших записей Redis Stream) продолжает
+работу: чекпоинт аудио в MinIO и транскрипт сохраняются, вторая задача не создаётся,
+редкое повторное уведомление в Telegram допустимо.
+
+**Не входит в готовность.** Удаление томов, backup и restore, сверка после потери Redis и
+автоматическая очистка (retention) — вне границ этой поставки (ADR-0015, ADR-0020, ADR-0021);
+отдельной lease/fencing-схемы и матрицы сбоев нет. Проверки: юнит-тесты (`ReplayJobCommandHandler`,
+запрос статуса, повторы и рестарт) и три сценария `make smoke`: ошибка → статус → отказ по
+лимиту → replay (`TextTaskFlow`), повтор после создания задачи (`TextTaskFlow`), голосовой
+replay из сохранённого объекта и повторная запись потока (`VoiceTaskFlow`).

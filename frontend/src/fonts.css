@@ -1,0 +1,24 @@
+@font-face {
+  font-family: Montserrat;
+  src: url('/fonts/Montserrat-Regular.otf') format('opentype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: Montserrat;
+  src: url('/fonts/Montserrat-SemiBold.otf') format('opentype');
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Sans Armenian';
+  src: url('/fonts/NotoSansArmenian.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  size-adjust: 80%;
+}

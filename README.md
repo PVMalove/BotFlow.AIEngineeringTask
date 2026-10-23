@@ -1,89 +1,55 @@
-# BotFlow.AIEngineeringTask
+# BotFlow
 
-## Описание проекта
+Управление задачами через Telegram и общую веб-панель. Участник отправляет
+боту текст или голосовое сообщение, а задача появляется на Kanban-доске.
+Распознавание речи выполняется локально с помощью OpenAI Whisper.
 
-**BotFlow** — управление задачами команды через Telegram и веб-панель.
-Пользователь отправляет текст или голосовое сообщение, получает подтверждение
-приёма и видит созданную задачу на общей Kanban-доске. Голос распознаётся
-локальным OpenAI Whisper на русском или армянском с определением языка.
+![Kanban-доска BotFlow](docs/presentation/images/02-kanban-board.png)
 
-Одна команда работает с одной доской. Участник меняет статус своих задач,
-администратор — любых задач, а также одобряет заявки, блокирует и разблокирует
-участников. Вход в веб-панель выполняется через одноразовый код Telegram.
-Веб-интерфейс поддерживает русский и армянский с переключателем языка;
-визуальное направление — светлая доска, графитовые поверхности и золотистые акценты
-под собственным названием BotFlow. [Дизайн и локализация](docs/frontend-design.md).
+## Реализованная функциональность
 
-Первая версия ориентирована на полный демонстрационный сценарий: базовые
-повторы, дедупликация и восстановление после рестарта. Расширенные процедуры
-аварийного восстановления и эксплуатации отложены: [ADR-0021](docs/adr/0021-proportionate-reliability.md).
+- Создание задач из текстовых и голосовых сообщений в Telegram.
+- Kanban-доска со статусами «Ожидает», «В работе» и «Завершено», перетаскиванием карточек и обновлением без перезагрузки страницы.
+- Вход в веб-панель по одноразовому коду из Telegram.
+- Рассмотрение заявок на доступ и управление участниками администратором.
+- Разграничение прав: участники изменяют свои задачи, администраторы — любые.
+- Интерфейс на русском и армянском языках с поддержкой компьютеров и мобильных устройств.
+- Фоновое распознавание голосовых сообщений локальной моделью Whisper.
+- Защита от дублирования задач при повторной обработке и повторный запуск заданий после ошибок.
 
-**Состояние:** архитектура и стартовый каркас. Есть манифесты/lockfiles,
-Dockerfiles, Compose, HTTP-оболочки сервисов и начальная страница React.
-Создание задач, авторизация, брокерные обработчики, миграции бизнес-данных
-и STT-адаптер ещё не реализованы. `/health/live` проверяет процесс;
-`/health/ready` возвращает 503 до подключения бизнес-адаптеров. Bootstrap и
-workers завершаются явной ошибкой до реализации, а не имитируют обработку.
+## Архитектура
+
+![Взаимодействие сервисов BotFlow](docs/presentation/images/architecture.svg)
+
+[Интерактивная схема](docs/presentation/botflow-architecture.html) подготовлена по коду проекта.
+
+| Сервис | Ответственность |
+| --- | --- |
+| Identity | Участники, допуск, роли и сессии |
+| Tasks | Задачи, статусы, версии и WebSocket доски |
+| Automation | Telegram-бот, голосовые задания и уведомления |
+
+У каждого сервиса своя PostgreSQL. RabbitMQ передаёт команды и результаты между
+сервисами, Redis Streams обслуживает фоновые задания Automation. Аудио хранится
+в приватном bucket S3 хранилища MinIO. Панель получает сигнал через WebSocket и перечитывает
+данные по REST.
 
 ## Стек
 
 | Область | Технологии |
 | --- | --- |
 | Backend | Python 3.12, FastAPI, Pydantic Settings, SQLAlchemy async, asyncpg, Alembic |
-| Архитектура | Hexagonal Architecture, локальный CQRS, UoW, outbox/inbox, dependency-injector |
+| Архитектура | Hexagonal Architecture, локальный CQRS, UoW, outbox/inbox, DI |
 | Telegram | aiogram 3, long polling |
 | Распознавание | Официальный локальный OpenAI Whisper, ffmpeg; подключение после проверки модели |
 | Межсервисный обмен | RabbitMQ, aio-pika |
 | Внутренние задания | Redis Streams: транскрипция и Telegram-уведомления |
 | Realtime | Redis Pub/Sub, WebSocket, REST-синхронизация |
-| Хранение | Три PostgreSQL, приватный MinIO bucket для аудио |
+| Хранение | PostgreSQL, приватный MinIO bucket для аудио |
 | Frontend | React, TypeScript, Vite, Material UI, TanStack Query, React Router |
 | Инструменты | uv/uv.lock, Node 24 LTS/npm/package-lock, Ruff, mypy, ESLint, Prettier |
 | Проверки | pytest, HTTPX, Vitest, React Testing Library, Playwright — сценарии добавляются с функциональностью |
 | Контейнеры | Docker Compose, отдельные образы сервисов, nginx для SPA/API/WS |
-
-## Схема взаимодействия компонентов
-
-Схема описывает целевое поведение. Каждый сервис пишет только в свою БД.
-Текст пропускает Whisper; вход и намерение обработки сохраняются до ответа бота.
-
-```mermaid
-flowchart TD
-    User[Пользователь в Telegram] -->|Текст или голос .ogg| Bot[Telegram Bot · Automation]
-    Bot -->|Проверка допуска| Identity[Identity API]
-    Identity --> IDB[(Identity PostgreSQL)]
-    Bot --> ADB[(Automation PostgreSQL + outbox)]
-    ADB -->|После commit: подтверждение приёма| User
-
-    ADB -->|Голос: задание| STT[Redis Streams · transcription]
-    STT --> Worker[Whisper worker · Automation]
-    Worker -->|Скачать аудио| TG[Telegram File API]
-    Worker --> S3[(MinIO · приватное аудио)]
-    Worker --> Whisper[Локальный OpenAI Whisper]
-    Whisper -->|Транскрипция| ADB
-
-    ADB -->|Текст или транскрипция: CreateTask| Rabbit[RabbitMQ]
-    Rabbit --> Tasks[Tasks worker]
-    Tasks --> TDB[(Tasks PostgreSQL + inbox/outbox)]
-    TDB -->|TaskCreated| Rabbit
-    Rabbit --> Result[Automation · обработчик результата]
-    Result --> ADB
-    ADB --> Notify[Redis Streams · notifications]
-    Notify --> Sender[Telegram notification worker]
-    Sender -->|Результат обработки| User
-
-    TDB --> Events[Redis Pub/Sub · botflow.board.changed]
-    Events --> API[Tasks API · WebSocket]
-    API --> Dashboard[Frontend Dashboard · React]
-    Dashboard -->|GET данных / PATCH статуса + версия| API
-    API --> TDB
-```
-
-RabbitMQ отвечает за команды/результаты между сервисами, Redis Streams —
-за внутренние задания Automation. Pub/Sub передаёт сигнал перечитать REST,
-а не надёжный журнал: после reconnect и пропущенных сигналов панель
-синхронизируется заново. Временный FSM бота не является источником допуска
-или состояния принятого задания.
 
 ## Структура проекта
 
@@ -120,57 +86,83 @@ BotFlow.AIEngineeringTask/
     ├── Makefile
     ├── pyproject.toml                  # uv workspace
     ├── uv.lock
-    ├── libs/platform/                 # общие технические адаптеры, не бизнес-модели
+    ├── libs/                           # общие технические библиотеки, не бизнес-модели
+    │   ├── kernel-domain/              # Result, Error, Entity, DomainEvent
+    │   ├── kernel-platform/            # HTTP-контракт, UoW, outbox, воркеры
+    │   ├── observability/              # request id, логи
+    │   └── test-support/               # общие тестовые двойники
     └── services/
         ├── identity-service/
         ├── tasks-service/
         └── automation-service/
             ├── Dockerfile             # у каждого сервиса свой образ
             ├── pyproject.toml
+            ├── src/                   # корень импортов конкретного сервиса
+            │   ├── domain/            # чистая модель и инварианты
+            │   │   ├── entities/
+            │   │   ├── value_objects/
+            │   │   ├── events/
+            │   │   ├── repositories.py
+            │   │   └── unit_of_work.py
+            │   ├── application/       # commands/, queries/, ports.py
+            │   ├── infrastructure/    # реализации портов: db/, security/
+            │   │   └── db/
+            │   │       ├── alembic.ini
+            │   │       └── alembic/
+            │   ├── api/               # HTTP, схемы, containers.py, worker/bot/bootstrap
+            │   ├── contracts/         # framework-independent View: frozen dataclasses
+            │   ├── core/              # кросс-срезная политика сервиса
+            │   └── common/            # локальные утилиты
             ├── tests/
-            └── src/botflow_automation/
-                ├── domain/            # чистая модель и инварианты
-                ├── application/       # команды, запросы и порты
-                ├── infrastructure/    # БД, брокеры, S3 и внешние адаптеры
-                │   └── db/
-                │       ├── alembic.ini
-                │       └── alembic/
-                ├── api/               # HTTP-оболочка
-                ├── bot/               # Telegram ingress
-                ├── worker/            # фоновые процессы
-                ├── containers.py      # composition root dependency-injector
-                └── bootstrap.py       # отдельная подготовка ресурсов
+            │   ├── unit/
+            │   ├── integration/
+            │   ├── e2e/
+            │   └── performance/
+            ├── k8s/
+            ├── docs/
+            ├── ci/
+            └── scripts/               # служебные CLI (voice_latency, whisper_validate)
 ```
 
-Identity и Tasks имеют аналогичные слои, собственные миграции и workers.
-Бизнес-модели не разделяются через общую библиотеку и не читают чужие БД.
-
-## Начало работы
-
-Нужны Docker с Compose, Python для служебных скриптов; для локальных проверок —
-uv и Node 24 LTS/npm. Секреты не входят в репозиторий.
+## Запуск
 
 ```bash
 cp .env.example .env
-make init            # создаёт .secrets, существующие значения не перезаписывает
-make compose-check   # проверка конфигурации без печати секретов
-make build           # сборка стартовых образов
-make infra           # PostgreSQL, Redis, RabbitMQ, MinIO
-make run             # HTTP-оболочки и начальная страница на localhost:8080
-make down            # остановка с сохранением томов
+make init
 ```
 
-MinIO собирается из официального исходника с закреплённым SHA, поскольку
-старый тег контейнера из архитектурного референса недоступен. Сборка требует
-сети и отдельно проверяется перед рабочим запуском. Веса Whisper готовятся
-отдельно; его Python-зависимости добавляются после проверки совместимости.
+В `.env` задайте `INITIAL_ADMIN_TELEGRAM_ID`, а токен бота запишите в
+`.secrets/telegram_bot_token`. Затем подготовьте веса модели и запустите стенд:
 
-`make deps` явно устанавливает зависимости. `make check`, `make test`,
-`make build`, `make e2e` — интерфейс будущего полного QA. Пока поведенческих
-тестов и изолированного E2E-окружения нет, тестовый gate не считается готовым:
-pytest не принимает пустой набор, E2E явно отказывает. `make setup`/`make demo`
-требуют реализации bootstrap и миграций. Профили `workers` и `bootstrap`
-содержат точки входа, а не работающие бизнес-обработчики.
+```bash
+make whisper-prepare
+make demo
+```
 
-Архитектурные детали и принятые компромиссы: [docs/architecture.md](docs/architecture.md),
-[ADR](docs/adr/).
+Веб-панель: [localhost:8080](http://localhost:8080). Для входа отправьте боту
+`/login` и вставьте полученный код. `make down` останавливает стенд с сохранением данных.
+Подробная настройка и команды оператора — в [руководстве запуска](docs/runbook.md).
+
+## Проверки
+
+```bash
+make deps       # установка зависимостей из lockfiles
+make check      # линтеры, типы и форматирование
+make test       # backend и frontend
+make build      # Docker-образы
+make e2e        # изолированный стенд и Playwright
+```
+
+[GitHub Actions](https://github.com/PVMalove/BotFlow.AIEngineeringTask/actions/workflows/ci.yml)
+выполняет эти проверки при push и для pull request. E2E использует реальные
+PostgreSQL, RabbitMQ, Redis и MinIO, тестовые адаптеры Telegram и распознавания речи.
+Ручная проверка приложения проведена на двух пользователях.
+
+## Материалы
+
+- [Архитектура и потоки данных](docs/architecture.md)
+- [Принятые решения](docs/adr/)
+- [Дизайн и локализация](docs/frontend-design.md)
+
+Проект выполнен как тестовое задание. Исходные материалы и локальные секреты
+не включены в репозиторий.
