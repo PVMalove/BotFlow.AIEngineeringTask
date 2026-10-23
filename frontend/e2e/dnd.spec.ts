@@ -243,7 +243,7 @@ test('hides foreign handles for a real user and preserves the server refusal', a
   const { id, patches } = await prepare(page);
   fixture('join');
   const requests = await page.request.get('/api/v1/admin/join-requests');
-  const target = (await requests.json()).find(
+  const target = (await requests.json()).data.find(
     (member: { telegram_id: number }) => member.telegram_id === 4200000008,
   );
   expect(target).toBeTruthy();
