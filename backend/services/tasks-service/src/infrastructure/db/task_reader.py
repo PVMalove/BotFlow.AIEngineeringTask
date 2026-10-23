@@ -7,7 +7,7 @@ from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from application.ports import PageCursor
-from domain.tasks import Task, TaskStatus
+from domain.tasks import Task, TaskSource, TaskStatus
 from infrastructure.db.tables import tasks
 
 
@@ -21,6 +21,9 @@ def to_task(row: Row[tuple[object, ...]]) -> Task:
         author_name=row.author_name,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        source_type=TaskSource(row.source_type)
+        if row.source_type is not None
+        else None,
     )
 
 

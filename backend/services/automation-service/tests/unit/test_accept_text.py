@@ -151,6 +151,7 @@ async def test_the_create_task_envelope_names_the_job_and_the_source() -> None:
         "author_telegram_id": USER,
         "author_name": "Ann (@ann)",
         "text": "Купить молоко",
+        "source_type": "text",
     }
 
 

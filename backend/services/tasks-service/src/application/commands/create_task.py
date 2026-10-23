@@ -10,7 +10,7 @@ from botflow_platform.consumer import InvalidMessage
 from botflow_platform.messaging import TASK_CREATED_ROUTING_KEY
 
 from application.ports import NewTask, TaskCommandStore, TaskCreatedMessage
-from domain.tasks import created_message_id_for, source_key, task_id_for
+from domain.tasks import TaskSource, created_message_id_for, source_key, task_id_for
 
 COMMAND_TYPE = "CreateTask"
 RESULT_TYPE = "TaskCreated"
@@ -75,6 +75,9 @@ class CreateTaskFromCommand:
                 author_telegram_id=_integer(payload["author_telegram_id"]),
                 author_name=_text(payload["author_name"], MAX_NAME),
                 created_at=self._clock(),
+                source_type=TaskSource(payload["source_type"])
+                if payload.get("source_type") is not None
+                else None,
             )
         except (ValueError, KeyError, TypeError, AttributeError):
             raise InvalidMessage from None

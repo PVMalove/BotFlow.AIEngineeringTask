@@ -78,6 +78,17 @@ async def test_a_valid_command_stores_the_task_with_its_source_and_author() -> N
     assert created.correlation_id == JOB
 
 
+@pytest.mark.parametrize("source_type", ["voice", "text", None])
+async def test_the_command_preserves_the_source_type_or_unknown_legacy_source(
+    source_type: str | None,
+) -> None:
+    store = Store()
+    await use_case(store).execute(
+        "m-source", "CreateTask", command(source_type=source_type)
+    )
+    assert store.calls[0][1].source_type == source_type
+
+
 async def test_the_created_event_names_the_task_and_the_job_in_its_envelope() -> None:
     store = Store()
 
@@ -129,6 +140,7 @@ async def test_a_different_source_is_a_different_task() -> None:
         ("CreateTask", command(text="x" * 4097)),
         ("CreateTask", command(author_id="nope")),
         ("CreateTask", command(chat_id="1")),
+        ("CreateTask", command(source_type="photo")),
         ("CreateTask", command(author_name="")),
         ("CreateTask", command(author_name="n" * 65)),
     ],

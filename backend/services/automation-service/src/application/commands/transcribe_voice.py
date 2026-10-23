@@ -35,7 +35,7 @@ from application.ports import (
     VoiceStore,
     VoiceWork,
 )
-from domain.jobs import VoiceStage
+from domain.jobs import JobKind, VoiceStage
 
 MAX_ATTEMPTS = 3  # processing attempts of one record before it is failed
 MAX_TEXT = 4096  # what Tasks accepts as a task text
@@ -183,6 +183,7 @@ class TranscribeVoice:
             author_name=work.author_name,
             text=text,
             received_at=work.received_at,
+            source_type=JobKind.VOICE,
         )
         done = await self._store.complete(
             work,

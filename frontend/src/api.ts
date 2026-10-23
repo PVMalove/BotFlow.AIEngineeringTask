@@ -23,6 +23,7 @@ export interface Task {
   version: number;
   author_id: string;
   author_name: string;
+  source_type?: 'text' | 'voice' | null;
   created_at: string;
   updated_at: string;
 }

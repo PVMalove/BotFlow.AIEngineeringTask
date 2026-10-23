@@ -21,7 +21,7 @@ from application.ports import (
     VersionConflict,
 )
 from application.queries.tasks import GetTask, ListTasks
-from domain.tasks import Actor, Role, Task, TaskStatus
+from domain.tasks import Actor, Role, Task, TaskSource, TaskStatus
 
 BASE = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 COOKIES = {"botflow_session": "session-token"}
@@ -163,6 +163,7 @@ async def test_the_list_returns_the_whole_board_newest_first_with_authorship(
         "author_name": "Ann (@ann)",
         "created_at": "2026-01-01T12:02:00Z",
         "updated_at": "2026-01-01T12:02:00Z",
+        "source_type": None,
     }
     assert body["data"][1]["author_name"] == "Bob"  # tasks of other authors too
     assert body["meta"] == {"next_cursor": None, "has_more": False}
@@ -543,3 +544,22 @@ async def test_every_rejection_carries_message_and_request_id(
     body = response.json()
     assert body["detail"] == detail and body["request_id"] == "req-7"
     assert body["message"] and set(body) == {"detail", "message", "request_id"}
+
+
+@pytest.mark.parametrize("source_type", ["voice", "text", None])
+async def test_source_type_is_preserved_in_list_get_and_status_patch(
+    env: Env, client: httpx.AsyncClient, source_type: str | None
+) -> None:
+    task = env.board.add(
+        1, source_type=TaskSource(source_type) if source_type else None
+    )
+    listed = await client.get("/api/v1/tasks")
+    assert listed.json()["data"][0]["source_type"] == source_type
+    card = await client.get(f"/api/v1/tasks/{task.id}")
+    assert card.json()["data"]["source_type"] == source_type
+    changed = await client.patch(
+        f"/api/v1/tasks/{task.id}",
+        json={"status": "in_progress", "expected_version": 1},
+    )
+    assert changed.status_code == 200
+    assert changed.json()["data"]["source_type"] == source_type

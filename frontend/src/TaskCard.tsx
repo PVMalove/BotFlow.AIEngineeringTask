@@ -3,6 +3,7 @@ import { Box, ButtonBase, IconButton, Paper, Typography } from '@mui/material';
 import type { ReactNode } from 'react';
 import type { Task, TaskStatus } from './api';
 import type { Messages } from './locale';
+import { TaskSource } from './TaskSource';
 
 export function TaskCard({
   task,
@@ -47,6 +48,21 @@ export function TaskCard({
         overflowWrap: 'anywhere',
         opacity: isDragging ? 0.5 : 1,
         zIndex: isDragging ? 10 : 'auto',
+        transition: isDragging
+          ? 'none'
+          : 'background-color 150ms ease, border-color 150ms ease, transform 150ms ease',
+        '&:focus-within': { borderColor: 'primary.main', bgcolor: '#FFFCF5' },
+        ...(!isDragging && {
+          '@media (hover: hover) and (pointer: fine)': {
+            '&:hover': {
+              borderColor: 'primary.main',
+              bgcolor: '#FFFCF5',
+              transform: 'scale(1.015)',
+              zIndex: 1,
+            },
+          },
+        }),
+        '@media (prefers-reduced-motion: reduce)': { transition: 'none' },
         transform: transform
           ? 'translate3d(' + transform.x + 'px,' + transform.y + 'px,0)'
           : undefined,
@@ -68,7 +84,7 @@ export function TaskCard({
           color="text.secondary"
           sx={{ fontSize: 11, pr: editable ? 4 : 0, mb: 1 }}
         >
-          Telegram •{' '}
+          <TaskSource source={task.source_type} messages={messages} /> •{' '}
           <Box component="time" dateTime={task.created_at}>
             {dateFormat.format(new Date(task.created_at))}
           </Box>

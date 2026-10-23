@@ -11,6 +11,11 @@ _TASK_NAMESPACE = UUID("6f0c0b5e-3a54-4c5b-9d0e-1d2a7b7c9e01")
 _RESULT_NAMESPACE = UUID("6f0c0b5e-3a54-4c5b-9d0e-1d2a7b7c9e02")
 
 
+class TaskSource(StrEnum):
+    TEXT = "text"
+    VOICE = "voice"
+
+
 class TaskStatus(StrEnum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
@@ -40,6 +45,7 @@ class Task:
     author_name: str  # snapshot taken when the task was created
     created_at: datetime
     updated_at: datetime
+    source_type: TaskSource | None = None
 
 
 def may_change_status(actor: Actor, task: Task) -> bool:

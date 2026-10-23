@@ -11,6 +11,7 @@ import {
 } from '@mui/material';
 import type { Task, TaskStatus } from './api';
 import type { Messages } from './locale';
+import { TaskSource } from './TaskSource';
 
 export function TaskDialog({
   task,
@@ -62,7 +63,8 @@ export function TaskDialog({
             {task.text}
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            {messages.taskSource}: Telegram
+            {messages.taskSource}:{' '}
+            <TaskSource source={task.source_type} messages={messages} />
             <br />
             {messages.taskDate}: {dateFormat.format(new Date(task.created_at))}
             <br />

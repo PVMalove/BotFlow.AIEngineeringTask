@@ -255,6 +255,7 @@ async def test_the_transcript_becomes_the_create_task_of_the_text_path() -> None
         "author_telegram_id": 4_200_000_001,
         "author_name": "Ann (@ann)",
         "text": "Купить молоко",
+        "source_type": "voice",
     }
     assert message.payload["occurred_at"] == NOW.isoformat()
 

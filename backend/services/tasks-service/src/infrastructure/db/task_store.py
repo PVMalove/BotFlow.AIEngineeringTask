@@ -44,6 +44,7 @@ class SqlTaskCommandStore:
                 .values(
                     id=task.id,
                     source_key=task.source_key,
+                    source_type=task.source_type,
                     correlation_id=task.correlation_id,
                     text=task.text,
                     status=TaskStatus.PENDING.value,

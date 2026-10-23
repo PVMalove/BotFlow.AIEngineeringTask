@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Protocol
 from uuid import UUID
 
-from domain.tasks import Actor, Task, TaskStatus
+from domain.tasks import Actor, Task, TaskSource, TaskStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -18,6 +18,7 @@ class NewTask:
     author_telegram_id: int
     author_name: str
     created_at: datetime
+    source_type: TaskSource | None = None
 
 
 @dataclass(frozen=True, slots=True)

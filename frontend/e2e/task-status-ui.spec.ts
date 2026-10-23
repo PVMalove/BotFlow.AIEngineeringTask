@@ -11,6 +11,73 @@ const original = {
   updated_at: '2026-10-22T18:57:00Z',
 };
 
+for (const { sourceType, ru, hy } of [
+  { sourceType: 'voice', ru: 'Голос', hy: 'Ձայն' },
+  { sourceType: 'text', ru: 'Текст', hy: 'Տեքստ' },
+  { sourceType: null, ru: 'Telegram', hy: 'Telegram' },
+] as const) {
+  test(
+    'shows the real task source in the card and dialog: ' + sourceType,
+    async ({ page }) => {
+      await page.route('**/api/v1/users/me', (route) =>
+        route.fulfill({
+          json: { id: 'owner', role: 'user', status: 'approved' },
+        }),
+      );
+      await page.route('**/api/v1/tasks?**', (route) =>
+        route.fulfill({
+          json: {
+            data:
+              new URL(route.request().url()).searchParams.get('status') ===
+              'pending'
+                ? [{ ...original, source_type: sourceType }]
+                : [],
+            meta: { has_more: false },
+          },
+        }),
+      );
+      await page.goto('/');
+      await expect(page.getByRole('listitem')).toContainText('Telegram');
+      if (sourceType)
+        expect(await page.getByRole('listitem').innerText()).not.toContain(ru);
+      if (sourceType)
+        await expect(
+          page
+            .getByRole('listitem')
+            .getByRole('img', { name: ru, exact: true }),
+        ).toBeVisible();
+      await page
+        .getByRole('button', { name: original.text, exact: true })
+        .click();
+      await expect(page.getByRole('dialog')).toContainText('Telegram');
+      if (sourceType)
+        await expect(
+          page.getByRole('dialog').getByRole('img', { name: ru, exact: true }),
+        ).toBeVisible();
+      await page
+        .getByRole('dialog')
+        .getByRole('button', { name: 'Отмена', exact: true })
+        .click();
+      await page.getByRole('button', { name: 'Հայերեն', exact: true }).click();
+      await expect(page.getByRole('listitem')).toContainText('Telegram');
+      if (sourceType)
+        await expect(
+          page
+            .getByRole('listitem')
+            .getByRole('img', { name: hy, exact: true }),
+        ).toBeVisible();
+      await page
+        .getByRole('button', { name: original.text, exact: true })
+        .click();
+      await expect(page.getByRole('dialog')).toContainText('Telegram');
+      if (sourceType)
+        await expect(
+          page.getByRole('dialog').getByRole('img', { name: hy, exact: true }),
+        ).toBeVisible();
+    },
+  );
+}
+
 test('saves the selected status once and moves the card without duplicates', async ({
   page,
 }) => {

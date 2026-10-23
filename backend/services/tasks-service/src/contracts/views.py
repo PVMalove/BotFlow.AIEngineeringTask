@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from domain.tasks import Task, TaskStatus
+from domain.tasks import Task, TaskSource, TaskStatus
 
 
 class TaskView(BaseModel):
@@ -17,6 +17,7 @@ class TaskView(BaseModel):
     author_name: str
     created_at: datetime
     updated_at: datetime
+    source_type: TaskSource | None = None
 
 
 class ChangeStatusRequest(BaseModel):
@@ -36,4 +37,5 @@ def task_view(task: Task) -> TaskView:
         author_name=task.author_name,
         created_at=task.created_at,
         updated_at=task.updated_at,
+        source_type=task.source_type,
     )

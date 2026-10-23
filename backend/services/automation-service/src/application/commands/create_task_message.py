@@ -7,7 +7,7 @@ from uuid import UUID
 from botflow_platform.messaging import TASK_CREATE_ROUTING_KEY
 
 from application.ports import OutboxMessage
-from domain.jobs import outbox_id_for
+from domain.jobs import JobKind, outbox_id_for
 
 COMMAND_TYPE = "CreateTask"
 ENVELOPE_VERSION = 1
@@ -24,6 +24,7 @@ def create_task_message(
     author_name: str,
     text: str,
     received_at: datetime,
+    source_type: JobKind,
 ) -> OutboxMessage:
     """The deterministic outbox id keeps a repeated hand-off to one message."""
     entry_id = outbox_id_for(job_id)
@@ -36,6 +37,7 @@ def create_task_message(
         "author_telegram_id": author_telegram_id,
         "author_name": author_name,
         "text": text,
+        "source_type": source_type.value,
     }
     return OutboxMessage(
         id=entry_id,

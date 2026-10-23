@@ -15,7 +15,7 @@ from application.ports import (
     NewJob,
     OutboxMessage,
 )
-from domain.jobs import job_id_for
+from domain.jobs import JobKind, job_id_for
 
 ACK = "Принято. Создаю задачу, сообщу, когда она будет готова."
 LIMIT_REPLY = "Слишком много задач в обработке. Повторите отправку позже."
@@ -85,4 +85,5 @@ class AcceptTextMessage:
             author_name=job.author_name,
             text=job.text,
             received_at=job.received_at,
+            source_type=JobKind.TEXT,
         )

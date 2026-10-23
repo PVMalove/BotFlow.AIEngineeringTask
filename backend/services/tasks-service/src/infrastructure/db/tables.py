@@ -23,6 +23,7 @@ tasks = Table(
     metadata,
     Column("id", Uuid, primary_key=True),
     Column("source_key", Text, nullable=False),
+    Column("source_type", Text),
     Column("correlation_id", Uuid, nullable=False),
     Column("text", Text, nullable=False),
     Column("status", Text, nullable=False),
@@ -38,6 +39,7 @@ tasks = Table(
         "status IN ('pending', 'in_progress', 'completed')",
         name="tasks_status_check",
     ),
+    CheckConstraint("source_type IN ('text', 'voice')", name="tasks_source_type_check"),
     Index("tasks_board_order", text("created_at DESC"), text("id DESC")),
 )
 
