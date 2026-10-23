@@ -202,6 +202,52 @@ async def test_an_unavailable_broker_does_not_spend_an_attempt() -> None:
     assert "ConnectionRefusedError" in store.last_tx.errors[row.id]
 
 
+async def test_attempts_and_delays_survive_a_restart_and_stop_at_three() -> None:
+    store, publisher = Store(), Publisher()
+    row = store.add()
+    publisher.failure = RuntimeError("nack")
+    exhausted: list[UUID] = []
+
+    async def on_exhausted(tx: Tx, entry: OutboxRow, error: str) -> None:
+        exhausted.append(entry.id)
+
+    # Every step is a new relay over the stored row, as after a process restart.
+    await relay(store, publisher, NOW, on_exhausted).execute()
+    await relay(store, publisher, NOW + timedelta(seconds=4), on_exhausted).execute()
+    assert store.rows[row.id].attempts == 1
+    await relay(store, publisher, NOW + timedelta(seconds=5), on_exhausted).execute()
+    assert store.rows[row.id].attempts == 2
+    assert store.rows[row.id].next_attempt_at == NOW + timedelta(seconds=35)
+    await relay(store, publisher, NOW + timedelta(seconds=34), on_exhausted).execute()
+    assert store.rows[row.id].attempts == 2 and exhausted == []
+    await relay(store, publisher, NOW + timedelta(seconds=35), on_exhausted).execute()
+
+    assert store.rows[row.id].attempts == 3
+    assert store.rows[row.id].next_attempt_at is None
+    assert exhausted == [row.id]
+    await relay(store, publisher, NOW + timedelta(hours=1), on_exhausted).execute()
+    assert store.rows[row.id].attempts == 3 and exhausted == [row.id]  # no 4th try
+
+
+async def test_a_long_outage_never_exhausts_the_row_or_requeues_it_at_once() -> None:
+    store, publisher = Store(), Publisher()
+    row = store.add()
+    publisher.failure = ConnectionRefusedError("broker down")
+    exhausted: list[UUID] = []
+
+    async def on_exhausted(tx: Tx, entry: OutboxRow, error: str) -> None:
+        exhausted.append(entry.id)
+
+    now = NOW
+    for _ in range(10):
+        await relay(store, publisher, now, on_exhausted).execute()
+        due = store.rows[row.id].next_attempt_at
+        assert due is not None and due >= now + timedelta(seconds=5)
+        now = due
+
+    assert (store.rows[row.id].attempts, exhausted) == (0, [])
+
+
 async def test_one_failing_row_does_not_stop_the_rest_of_the_batch() -> None:
     store = Store()
     first = store.add(created_at=NOW)

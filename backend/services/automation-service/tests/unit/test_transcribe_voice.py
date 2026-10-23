@@ -426,6 +426,45 @@ async def test_a_record_that_keeps_crashing_is_failed_instead_of_looping() -> No
     assert h.telegram.calls == []
 
 
+async def test_attempts_are_stored_so_a_restarted_worker_stops_at_three() -> None:
+    h = Harness()
+
+    for attempt in (1, 2, 3):
+        restarted = Harness(None)  # a new process over the same database
+        restarted.world = h.world
+        restarted.stt.error = RuntimeError("worker killed")  # no verdict: stays pending
+        with pytest.raises(RuntimeError):
+            await restarted.run()
+        voice = h.job().voice
+        assert voice is not None and voice.attempts == attempt
+        assert voice.stage is VoiceStage.STORED  # the audio checkpoint is kept
+
+    last = Harness(None)
+    last.world = h.world
+    result = await last.run()
+
+    assert result.outcome is TranscribeOutcome.FAILED and result.error_code == "failed"
+    assert last.stt.heard == [] and last.telegram.calls == []  # no fourth attempt
+    assert h.job().status is JobStatus.FAILED
+
+
+@pytest.mark.parametrize(
+    "error", [EmptyAudio(), CorruptedAudio(), AudioTooLong(), AudioTooLarge()]
+)
+async def test_a_permanent_error_ends_the_job_at_once_without_a_retry(
+    error: Exception,
+) -> None:
+    h = Harness()
+    h.stt.error = error
+
+    result = await h.run()
+
+    voice = h.job().voice
+    assert result.outcome is TranscribeOutcome.FAILED
+    assert voice is not None and voice.attempts == 1
+    assert (len(h.stt.heard), h.sleeps) == (1, [])
+
+
 async def test_a_storage_failure_on_begin_propagates_so_the_entry_stays_pending() -> (
     None
 ):
