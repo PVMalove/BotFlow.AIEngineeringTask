@@ -10,19 +10,6 @@ from kernel_platform.http.errors import ApiError, ErrorDetail, ServiceUnavailabl
 from kernel_platform.http.exception_handlers import register_error_handlers
 
 
-class _DemoDependencyError(Exception):
-    """A technical failure of a dependency; the service lists it as unavailable."""
-
-
-class _Item(BaseModel):
-    price: float
-
-
-class _Body(BaseModel):
-    price: float
-    items: list[_Item] = []
-
-
 @pytest.fixture
 def client() -> httpx.AsyncClient:
     # raise_app_exceptions=False: /boom намеренно позволяет необработанному
@@ -145,6 +132,10 @@ async def test_the_500_response_carries_the_request_id_in_body_and_header(
     assert response.json()["error"]["request_id"] == "req-500"
 
 
+class _Item(BaseModel):
+    price: float
+
+
 def _build_app() -> FastAPI:
     app = FastAPI()
     app.add_middleware(RequestContextMiddleware)
@@ -193,3 +184,12 @@ def _without_request_id(response: httpx.Response) -> dict[str, dict[str, object]
     body: dict[str, dict[str, object]] = response.json()
     body["error"].pop("request_id")
     return body
+
+
+class _DemoDependencyError(Exception):
+    """A technical failure of a dependency; the service lists it as unavailable."""
+
+
+class _Body(BaseModel):
+    price: float
+    items: list[_Item] = []
