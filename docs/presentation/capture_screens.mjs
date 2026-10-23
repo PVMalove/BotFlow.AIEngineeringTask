@@ -9,7 +9,7 @@ const browser = await chromium.launch({
 });
 try {
   const page = await browser.newPage({ viewport: { width: 1440, height: 700 },
-    deviceScaleFactor: 1, timezoneId: 'Asia/Yerevan', locale: 'ru-RU' });
+    deviceScaleFactor: 2, timezoneId: 'Asia/Yerevan', locale: 'ru-RU' });
   const admin = { id: 'demo-admin', telegram_id: 4200000001, display_name: '@taskpilot',
     role: 'admin', status: 'approved', access_version: 1 };
   const applicant = { id: 'demo-user', telegram_id: 4200000002, display_name: '@northstar',
@@ -44,12 +44,17 @@ try {
   await page.screenshot({path:path.join(root,'images/02-kanban-board.png')});
   await page.getByRole('listitem').filter({hasText:tasks[0].text}).getByRole('button').first().click();
   await page.getByRole('dialog').waitFor();
+  await page.evaluate(() => Promise.all(document.getAnimations().map(a => a.finished.catch(() => {}))));
   await page.screenshot({path:path.join(root,'images/03-task-details.png')});
   await page.getByRole('button',{name:'Отмена',exact:true}).click();
   await page.getByRole('link',{name:'Управление доступом',exact:true}).click();
   await page.getByRole('heading',{name:'Управление доступом',exact:true}).waitFor();
   await page.getByText('@northstar',{exact:true}).first().waitFor();
+  await page.setViewportSize({ width: 960, height: 520 });
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(500);
   await page.screenshot({path:path.join(root,'images/04-admin-panel.png')});
+  await page.setViewportSize({ width: 1440, height: 700 });
   await page.route('**/api/v1/users/me',route=>route.fulfill({status:401,json:{error:{code:'invalid_session'}}}));
   await page.goto(base+'/login');
   await page.getByRole('heading',{name:'Вход в BotFlow'}).waitFor();

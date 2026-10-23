@@ -14,12 +14,10 @@
 `http://127.0.0.1:5177`). `BOTFLOW_CHROME` позволяет указать установленный Chromium.
 Скрипт использует Playwright из зависимостей frontend.
 
-`build_presentation.mjs` собирает слайды через `@oai/artifact-tool` и сохраняет
-`BotFlow.pdf`. Если пакет не доступен обычным импортом, `NODE_MODULES_PATH` задаёт
-каталог модулей среды авторинга. Временные файлы пишутся в
-`BOTFLOW_DECK_BUILD` (по умолчанию `/tmp/botflow-presentation-build`).
-Для экспорта через LibreOffice задайте `BOTFLOW_PDF_ENGINE=libreoffice`.
-`BOTFLOW_SOFFICE` позволяет указать исполняемый файл.
+`presentation.html` — исходник четырёх слайдов 16:9. `build_presentation.mjs`
+печатает его в `BotFlow.pdf` через Playwright из зависимостей frontend
+(`BOTFLOW_CHROME` задаёт установленный Chromium). Скриншоты и схема подключаются
+из `images/`.
 
 Схема пересобирается установленным archify:
 
