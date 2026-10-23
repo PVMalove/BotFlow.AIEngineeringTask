@@ -5,6 +5,7 @@ from typing import Any
 from uuid import UUID
 
 from kernel_platform.consumer import InvalidMessage
+from kernel_platform.envelope import ENVELOPE_VERSION, as_int, as_str
 
 from application.commands.create_task import (
     CreateTaskCommand,
@@ -12,7 +13,6 @@ from application.commands.create_task import (
 )
 
 COMMAND_TYPE = "CreateTask"
-ENVELOPE_VERSION = 1
 
 
 class CreateTaskConsumer:
@@ -39,25 +39,13 @@ def _parse(message_id: str, body: bytes) -> CreateTaskCommand:
         return CreateTaskCommand(
             message_id=message_id,
             correlation_id=UUID(payload["job_id"]),
-            bot_id=_integer(payload["bot_id"]),
-            chat_id=_integer(payload["chat_id"]),
-            source_message_id=_integer(payload["message_id"]),
-            text=_string(payload["text"]),
+            bot_id=as_int(payload["bot_id"]),
+            chat_id=as_int(payload["chat_id"]),
+            source_message_id=as_int(payload["message_id"]),
+            text=as_str(payload["text"]),
             author_id=UUID(payload["author_id"]),
-            author_telegram_id=_integer(payload["author_telegram_id"]),
-            author_name=_string(payload["author_name"]),
+            author_telegram_id=as_int(payload["author_telegram_id"]),
+            author_name=as_str(payload["author_name"]),
         )
     except (ValueError, KeyError, TypeError, AttributeError):
         raise InvalidMessage from None
-
-
-def _integer(value: object) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError
-    return value
-
-
-def _string(value: object) -> str:
-    if not isinstance(value, str):
-        raise ValueError
-    return value

@@ -1,9 +1,10 @@
 """The automation transaction on SQLAlchemy: repositories, outbox staging, handlers."""
 
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 
-from kernel_platform.unit_of_work import EventHandler, SqlAlchemyUnitOfWork
+from kernel_platform.clock import utcnow
+from kernel_platform.sqlalchemy_unit_of_work import EventHandler, SqlAlchemyUnitOfWork
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.repositories import InboxRepository, IntentRepository, JobRepository
@@ -22,7 +23,7 @@ class SqlAutomationUnitOfWork(SqlAlchemyUnitOfWork):
         sessions: async_sessionmaker[AsyncSession],
         *,
         event_handlers: Sequence[EventHandler] = (),
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        clock: Callable[[], datetime] = utcnow,
     ) -> None:
         super().__init__(
             sessions,

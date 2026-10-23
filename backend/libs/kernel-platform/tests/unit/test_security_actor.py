@@ -1,4 +1,4 @@
-"""ADR 0005: общий framework-independent контракт Actor/ActorRole."""
+"""Actor, ActorRole and the shared admin-only gate."""
 
 import dataclasses
 import uuid
@@ -43,4 +43,4 @@ def test_require_admin_raises_forbidden_for_a_non_admin_actor() -> None:
         require_admin(actor)
 
     assert exc_info.value.status_code == 403
-    assert exc_info.value.code == "FORBIDDEN"
+    assert exc_info.value.code == "forbidden"

@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID, uuid5
 
 from kernel_domain.domain_event import DomainEvent
+from kernel_platform.envelope import ENVELOPE_VERSION
 from kernel_platform.messaging import TASK_CREATED_ROUTING_KEY
 from kernel_platform.outbox import enqueue
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from domain.events.task_domain_event import TaskCreated
 from infrastructure.db.tables import outbox
 
-ENVELOPE_VERSION = 1
 RESULT_TYPE = "TaskCreated"
 # The result id is a function of the task id: a replayed event is the same row.
 _RESULT_NAMESPACE = UUID("6f0c0b5e-3a54-4c5b-9d0e-1d2a7b7c9e02")

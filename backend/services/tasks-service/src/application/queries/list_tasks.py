@@ -44,11 +44,6 @@ class ListTasksQueryHandler:
         return Result[Page[TaskView]].ok(
             Page(
                 items=[TaskView.from_domain(task) for task in items],
-                page_info=PageInfo(
-                    next_cursor=next_cursor,
-                    prev_cursor=None,
-                    has_more=has_more,
-                    has_prev=False,
-                ),
+                page_info=PageInfo(next_cursor=next_cursor, has_more=has_more),
             )
         )

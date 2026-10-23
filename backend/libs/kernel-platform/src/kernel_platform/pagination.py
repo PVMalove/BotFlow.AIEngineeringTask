@@ -1,13 +1,4 @@
-# ruff: noqa: E501
-"""Общий keyset-курсор и форма страницы для list-эндпоинтов (issue #200).
-
-Ранее локальный для `catalog-service` контракт: непрозрачный курсор
-(`created_at`, `id`), форма страницы (`has_more`/`has_prev` и т.п.) и
-кодирование/декодирование курсора в base64-строку. Второй подтверждённый
-потребитель — `identity-service` (issue #201/#202) — делает дублирование
-между сервисами неоправданным (тот же admission-принцип, что и ADR 0006 для
-generic drain-в-outbox).
-"""
+"""Opaque keyset cursor and the page shape of list endpoints."""
 
 import base64
 import binascii
@@ -20,12 +11,12 @@ MAX_PAGE_LIMIT = 100
 
 
 class InvalidCursorError(ValueError):
-    """Курсор пагинации не удалось декодировать."""
+    """The pagination cursor cannot be decoded."""
 
 
 @dataclass(frozen=True)
 class Cursor:
-    """Keyset-позиция в отсортированном по (`created_at`, `id`) списке."""
+    """A position in a list sorted by (`created_at`, `id`)."""
 
     created_at: datetime
     id: uuid.UUID
@@ -33,48 +24,28 @@ class Cursor:
 
 @dataclass(frozen=True)
 class PageInfo:
-    """Форма страницы курсорного листинга — не зависит от типа элементов."""
+    """The shape of a page, independent of the item type."""
 
     next_cursor: str | None
-    prev_cursor: str | None
     has_more: bool
-    has_prev: bool
 
 
 @dataclass(frozen=True)
 class Page[T]:
-    """Транспортно-независимая страница: элементы плюс их `PageInfo` —
-    то, что list-хэндлеры возвращают через `Result`, а `match_page`
-    разворачивает в `data`/`meta` BFF-конверта (issue #221, ADR 0002)."""
+    """Items plus their `PageInfo`: what list handlers return in a `Result`."""
 
     items: list[T]
     page_info: PageInfo
 
 
 def encode_cursor(created_at: datetime, entity_id: uuid.UUID) -> str:
-    """Кодирует keyset-позицию в непрозрачный курсор.
-
-    Args:
-        created_at (datetime): Значение `created_at` строки-границы страницы.
-        entity_id (uuid.UUID): Id той же строки — тай-брейкер сортировки.
-
-    Returns:
-        str: Непрозрачная base64-строка курсора."""
+    """Encode the boundary row of a page into an opaque cursor."""
     raw = f"{created_at.isoformat()}|{entity_id}"
     return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
 
 
 def decode_cursor(token: str) -> Cursor:
-    """Декодирует курсор, выданный `encode_cursor`, обратно в `Cursor`.
-
-    Args:
-        token (str): Курсор из query-параметра `after`/`before`.
-
-    Returns:
-        Cursor: Декодированная keyset-позиция.
-
-    Raises:
-        InvalidCursorError: Курсор повреждён или не декодируется."""
+    """Decode a cursor from `encode_cursor`; a damaged one is `InvalidCursorError`."""
     try:
         raw = base64.urlsafe_b64decode(token.encode("ascii")).decode("utf-8")
         created_at_raw, id_raw = raw.split("|")

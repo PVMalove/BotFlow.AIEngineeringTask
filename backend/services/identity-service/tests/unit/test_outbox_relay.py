@@ -5,7 +5,7 @@ from datetime import timedelta
 import pytest
 from conftest import NOW, Clock, FakeUnitOfWork, Store
 
-from application.commands.access import DecideMember, DecideMemberCommand
+from application.commands.access import DecideMemberCommand, DecideMemberCommandHandler
 from application.commands.relay import RelayOutbox
 from domain.entities.member import Member
 from domain.outbox import ACCESS_DECIDED, OutboxEntry
@@ -40,7 +40,9 @@ class World:
         self.applicant = member(MemberStatus.PENDING, telegram_id=3)
         for m in (self.admin, self.second, self.applicant):
             self.store.members[m.id] = m
-        self.decide = DecideMember(lambda: FakeUnitOfWork(self.store), self.clock.now)
+        self.decide = DecideMemberCommandHandler(
+            lambda: FakeUnitOfWork(self.store), self.clock.now
+        )
 
     async def act(self, action: Action, target: Member, version: int | None = None):  # type: ignore[no-untyped-def]
         current = self.store.members[target.id]

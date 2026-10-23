@@ -13,10 +13,6 @@ from observability.formatters import JsonFormatter, select_formatter
 from observability.middleware import RequestContextMiddleware
 
 
-def _record(message: str = "hello") -> logging.LogRecord:
-    return logging.LogRecord("svc", logging.INFO, __file__, 1, message, None, None)
-
-
 def test_json_formatter_has_fixed_keys_and_request_id() -> None:
     token = request_id_var.set("req-1")
     try:
@@ -37,15 +33,6 @@ def test_select_formatter_prefers_json_outside_dev(
     assert not isinstance(select_formatter("dev", "tasks"), JsonFormatter)
 
 
-def _client() -> TestClient:
-    async def ping(request: Request) -> PlainTextResponse:
-        return PlainTextResponse(request_id_var.get() or "")
-
-    app = Starlette(routes=[Route("/ping", ping)])
-    app.add_middleware(RequestContextMiddleware)
-    return TestClient(app)
-
-
 def test_middleware_echoes_valid_request_id() -> None:
     response = _client().get("/ping", headers={"X-Request-ID": "abc-123"})
     assert response.headers["X-Request-ID"] == "abc-123"
@@ -64,3 +51,16 @@ def test_middleware_writes_access_log(caplog: pytest.LogCaptureFixture) -> None:
     record = next(r for r in caplog.records if r.name == "observability.middleware")
     assert record.__dict__["path"] == "/ping"
     assert record.__dict__["status_code"] == 200
+
+
+def _record(message: str = "hello") -> logging.LogRecord:
+    return logging.LogRecord("svc", logging.INFO, __file__, 1, message, None, None)
+
+
+def _client() -> TestClient:
+    async def ping(request: Request) -> PlainTextResponse:
+        return PlainTextResponse(request_id_var.get() or "")
+
+    app = Starlette(routes=[Route("/ping", ping)])
+    app.add_middleware(RequestContextMiddleware)
+    return TestClient(app)

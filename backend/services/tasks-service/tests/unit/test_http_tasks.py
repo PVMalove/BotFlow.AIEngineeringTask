@@ -107,12 +107,7 @@ async def test_the_list_returns_the_whole_board_newest_first_with_authorship(
         "updated_at": "2026-01-01T12:02:00Z",
     }
     assert body["data"][1]["author_name"] == "Bob"  # tasks of other authors too
-    assert body["meta"] == {
-        "next_cursor": None,
-        "prev_cursor": None,
-        "has_more": False,
-        "has_prev": False,
-    }
+    assert body["meta"] == {"next_cursor": None, "has_more": False}
 
 
 async def test_the_default_page_has_fifty_tasks_and_the_cursor_continues_it(
@@ -182,7 +177,7 @@ async def test_an_unknown_status_is_rejected(client: httpx.AsyncClient) -> None:
     response = await client.get("/api/v1/tasks", params={"status": "archived"})
 
     assert response.status_code == 422
-    assert error_of(response)["code"] == "VALIDATION_ERROR"
+    assert error_of(response)["code"] == "validation_error"
 
 
 @pytest.mark.parametrize("cursor", ["not-a-cursor", "e30", "!!!"])
@@ -417,7 +412,7 @@ async def test_an_invalid_patch_body_is_rejected(
     response = await client.patch(f"/api/v1/tasks/{task.id.value}", json=payload)
 
     assert response.status_code == 422
-    assert error_of(response)["code"] == "VALIDATION_ERROR"
+    assert error_of(response)["code"] == "validation_error"
 
 
 async def test_an_unauthenticated_status_change_is_refused(

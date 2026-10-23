@@ -6,7 +6,7 @@ from kernel_domain.domain_event import DomainEvent
 from kernel_domain.entity import Entity
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from kernel_platform.unit_of_work import SqlAlchemyUnitOfWork
+from kernel_platform.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork
 
 
 @dataclass(frozen=True, kw_only=True)

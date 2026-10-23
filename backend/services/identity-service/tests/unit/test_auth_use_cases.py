@@ -17,19 +17,19 @@ from conftest import (
 from kernel_domain.result import Result
 
 from application.commands.auth import (
-    EnsureInitialAdmin,
     EnsureInitialAdminCommand,
-    ExchangeLoginCode,
+    EnsureInitialAdminCommandHandler,
     ExchangeLoginCodeCommand,
-    IssueLoginCode,
+    ExchangeLoginCodeCommandHandler,
     IssueLoginCodeCommand,
-    Logout,
+    IssueLoginCodeCommandHandler,
     LogoutCommand,
+    LogoutCommandHandler,
     SessionGrant,
 )
 from application.queries.members import (
-    AuthenticateSession,
     AuthenticateSessionQuery,
+    AuthenticateSessionQueryHandler,
     CurrentSession,
 )
 from contracts.views import LoginCodeView
@@ -40,26 +40,30 @@ from domain.value_objects.role import Role
 ADMIN_TELEGRAM_ID = 4_200_000_001
 
 
-async def issued_by(issue: IssueLoginCode, telegram_id: int) -> LoginCodeView:
+async def issued_by(
+    issue: IssueLoginCodeCommandHandler, telegram_id: int
+) -> LoginCodeView:
     result = await issue.execute(IssueLoginCodeCommand(telegram_id))
     assert result.is_ok
     return result.value
 
 
 async def exchanged(
-    exchange: ExchangeLoginCode, code: str, client: str = "c"
+    exchange: ExchangeLoginCodeCommandHandler, code: str, client: str = "c"
 ) -> Result[SessionGrant]:
     return await exchange.execute(ExchangeLoginCodeCommand(code, client))
 
 
 async def authenticated(
-    authenticate: AuthenticateSession, token: str
+    authenticate: AuthenticateSessionQueryHandler, token: str
 ) -> Result[CurrentSession]:
     return await authenticate.execute(AuthenticateSessionQuery(token))
 
 
 async def grant_for(
-    issue: IssueLoginCode, exchange: ExchangeLoginCode, telegram_id: int
+    issue: IssueLoginCodeCommandHandler,
+    exchange: ExchangeLoginCodeCommandHandler,
+    telegram_id: int,
 ) -> SessionGrant:
     result = await exchanged(exchange, (await issued_by(issue, telegram_id)).code)
     assert result.is_ok
@@ -87,13 +91,17 @@ def limiter() -> FakeRateLimiter:
 
 
 @pytest.fixture
-def ensure_admin(store: Store, clock: Clock) -> EnsureInitialAdmin:
-    return EnsureInitialAdmin(lambda: FakeUnitOfWork(store), clock.now)
+def ensure_admin(store: Store, clock: Clock) -> EnsureInitialAdminCommandHandler:
+    return EnsureInitialAdminCommandHandler(lambda: FakeUnitOfWork(store), clock.now)
 
 
 @pytest.fixture
-def issue(store: Store, clock: Clock, limiter: FakeRateLimiter) -> IssueLoginCode:
-    return IssueLoginCode(lambda: FakeUnitOfWork(store), limiter, clock.now)
+def issue(
+    store: Store, clock: Clock, limiter: FakeRateLimiter
+) -> IssueLoginCodeCommandHandler:
+    return IssueLoginCodeCommandHandler(
+        lambda: FakeUnitOfWork(store), limiter, clock.now
+    )
 
 
 @pytest.fixture
@@ -104,28 +112,34 @@ def tokens() -> FakeTokens:
 @pytest.fixture
 def exchange(
     store: Store, clock: Clock, limiter: FakeRateLimiter, tokens: FakeTokens
-) -> ExchangeLoginCode:
-    return ExchangeLoginCode(lambda: FakeUnitOfWork(store), limiter, clock.now, tokens)
+) -> ExchangeLoginCodeCommandHandler:
+    return ExchangeLoginCodeCommandHandler(
+        lambda: FakeUnitOfWork(store), limiter, clock.now, tokens
+    )
 
 
 @pytest.fixture
-def logout(store: Store, clock: Clock) -> Logout:
-    return Logout(lambda: FakeUnitOfWork(store), clock.now)
+def logout(store: Store, clock: Clock) -> LogoutCommandHandler:
+    return LogoutCommandHandler(lambda: FakeUnitOfWork(store), clock.now)
 
 
 @pytest.fixture
-def authenticate(store: Store, clock: Clock, tokens: FakeTokens) -> AuthenticateSession:
-    return AuthenticateSession(lambda: FakeUnitOfWork(store), tokens, clock.now)
+def authenticate(
+    store: Store, clock: Clock, tokens: FakeTokens
+) -> AuthenticateSessionQueryHandler:
+    return AuthenticateSessionQueryHandler(
+        lambda: FakeUnitOfWork(store), tokens, clock.now
+    )
 
 
 @pytest.fixture
-async def admin(ensure_admin: EnsureInitialAdmin) -> int:
+async def admin(ensure_admin: EnsureInitialAdminCommandHandler) -> int:
     await ensure_admin.execute(EnsureInitialAdminCommand(ADMIN_TELEGRAM_ID))
     return ADMIN_TELEGRAM_ID
 
 
 async def test_initial_admin_is_created_approved(
-    ensure_admin: EnsureInitialAdmin, store: Store
+    ensure_admin: EnsureInitialAdminCommandHandler, store: Store
 ) -> None:
     created = await ensure_admin.execute(EnsureInitialAdminCommand(ADMIN_TELEGRAM_ID))
 
@@ -136,7 +150,7 @@ async def test_initial_admin_is_created_approved(
 
 
 async def test_repeat_keeps_existing_access_decision(
-    ensure_admin: EnsureInitialAdmin, store: Store
+    ensure_admin: EnsureInitialAdminCommandHandler, store: Store
 ) -> None:
     await ensure_admin.execute(EnsureInitialAdminCommand(ADMIN_TELEGRAM_ID))
     (member,) = store.members.values()
@@ -151,7 +165,7 @@ async def test_repeat_keeps_existing_access_decision(
 
 
 async def test_code_is_32_url_safe_chars_valid_5_minutes_and_stored_hashed(
-    issue: IssueLoginCode, store: Store, clock: Clock, admin: int
+    issue: IssueLoginCodeCommandHandler, store: Store, clock: Clock, admin: int
 ) -> None:
     issued = await issued_by(issue, admin)
 
@@ -163,8 +177,8 @@ async def test_code_is_32_url_safe_chars_valid_5_minutes_and_stored_hashed(
 
 
 async def test_exchange_opens_an_8_hour_session_and_code_is_single_use(
-    issue: IssueLoginCode,
-    exchange: ExchangeLoginCode,
+    issue: IssueLoginCodeCommandHandler,
+    exchange: ExchangeLoginCodeCommandHandler,
     store: Store,
     clock: Clock,
     admin: int,
@@ -183,7 +197,9 @@ async def test_exchange_opens_an_8_hour_session_and_code_is_single_use(
 
 
 async def test_new_code_cancels_the_previous_one(
-    issue: IssueLoginCode, exchange: ExchangeLoginCode, admin: int
+    issue: IssueLoginCodeCommandHandler,
+    exchange: ExchangeLoginCodeCommandHandler,
+    admin: int,
 ) -> None:
     first = await issued_by(issue, admin)
     second = await issued_by(issue, admin)
@@ -193,8 +209,8 @@ async def test_new_code_cancels_the_previous_one(
 
 
 async def test_expired_code_gives_no_session(
-    issue: IssueLoginCode,
-    exchange: ExchangeLoginCode,
+    issue: IssueLoginCodeCommandHandler,
+    exchange: ExchangeLoginCodeCommandHandler,
     store: Store,
     clock: Clock,
     admin: int,
@@ -208,7 +224,7 @@ async def test_expired_code_gives_no_session(
 
 @pytest.mark.parametrize("wrong", ["", "short", "x" * 32, "!" * 32, "x" * 33])
 async def test_wrong_code_gives_no_session(
-    exchange: ExchangeLoginCode, store: Store, admin: int, wrong: str
+    exchange: ExchangeLoginCodeCommandHandler, store: Store, admin: int, wrong: str
 ) -> None:
     assert code_of(await exchanged(exchange, wrong)) == "invalid_code"
     assert not store.sessions
@@ -216,7 +232,7 @@ async def test_wrong_code_gives_no_session(
 
 @pytest.mark.parametrize("telegram_id", [1, ADMIN_TELEGRAM_ID])
 async def test_code_is_not_issued_without_approved_membership(
-    issue: IssueLoginCode, store: Store, admin: int, telegram_id: int
+    issue: IssueLoginCodeCommandHandler, store: Store, admin: int, telegram_id: int
 ) -> None:
     if telegram_id == admin:
         (member,) = store.members.values()
@@ -229,8 +245,8 @@ async def test_code_is_not_issued_without_approved_membership(
 
 
 async def test_member_blocked_after_issue_cannot_exchange_and_code_is_burned(
-    issue: IssueLoginCode,
-    exchange: ExchangeLoginCode,
+    issue: IssueLoginCodeCommandHandler,
+    exchange: ExchangeLoginCodeCommandHandler,
     store: Store,
     admin: int,
 ) -> None:
@@ -245,7 +261,7 @@ async def test_member_blocked_after_issue_cannot_exchange_and_code_is_burned(
 
 
 async def test_code_issue_is_rate_limited_per_member(
-    issue: IssueLoginCode, store: Store, admin: int
+    issue: IssueLoginCodeCommandHandler, store: Store, admin: int
 ) -> None:
     for _ in range(5):
         await issued_by(issue, admin)
@@ -257,7 +273,7 @@ async def test_code_issue_is_rate_limited_per_member(
 
 
 async def test_exchange_attempts_are_rate_limited_per_client(
-    exchange: ExchangeLoginCode, admin: int
+    exchange: ExchangeLoginCodeCommandHandler, admin: int
 ) -> None:
     for _ in range(30):
         result = await exchanged(exchange, "x" * 32, "203.0.113.5")
@@ -270,10 +286,10 @@ async def test_exchange_attempts_are_rate_limited_per_client(
 
 
 async def test_session_authenticates_until_logout_revokes_it(
-    issue: IssueLoginCode,
-    exchange: ExchangeLoginCode,
-    authenticate: AuthenticateSession,
-    logout: Logout,
+    issue: IssueLoginCodeCommandHandler,
+    exchange: ExchangeLoginCodeCommandHandler,
+    authenticate: AuthenticateSessionQueryHandler,
+    logout: LogoutCommandHandler,
     admin: int,
 ) -> None:
     grant = await grant_for(issue, exchange, admin)
@@ -286,9 +302,9 @@ async def test_session_authenticates_until_logout_revokes_it(
 
 
 async def test_session_stops_working_after_8_hours(
-    issue: IssueLoginCode,
-    exchange: ExchangeLoginCode,
-    authenticate: AuthenticateSession,
+    issue: IssueLoginCodeCommandHandler,
+    exchange: ExchangeLoginCodeCommandHandler,
+    authenticate: AuthenticateSessionQueryHandler,
     clock: Clock,
     admin: int,
 ) -> None:
@@ -302,9 +318,9 @@ async def test_session_stops_working_after_8_hours(
 
 
 async def test_valid_token_does_not_outlive_membership_approval(
-    issue: IssueLoginCode,
-    exchange: ExchangeLoginCode,
-    authenticate: AuthenticateSession,
+    issue: IssueLoginCodeCommandHandler,
+    exchange: ExchangeLoginCodeCommandHandler,
+    authenticate: AuthenticateSessionQueryHandler,
     store: Store,
     admin: int,
 ) -> None:
@@ -315,11 +331,15 @@ async def test_valid_token_does_not_outlive_membership_approval(
     assert code_of(await authenticated(authenticate, grant.token)) == "unauthenticated"
 
 
-async def test_unknown_token_is_rejected(authenticate: AuthenticateSession) -> None:
+async def test_unknown_token_is_rejected(
+    authenticate: AuthenticateSessionQueryHandler,
+) -> None:
     assert code_of(await authenticated(authenticate, "not-issued")) == "unauthenticated"
 
 
-async def test_logout_of_unknown_session_is_harmless(logout: Logout) -> None:
+async def test_logout_of_unknown_session_is_harmless(
+    logout: LogoutCommandHandler,
+) -> None:
     await logout.execute(LogoutCommand(uuid4()))
 
 
@@ -328,8 +348,8 @@ async def test_exchange_locks_the_member_before_it_touches_the_code(
     clock: Clock,
     limiter: FakeRateLimiter,
     tokens: FakeTokens,
-    ensure_admin: EnsureInitialAdmin,
-    issue: IssueLoginCode,
+    ensure_admin: EnsureInitialAdminCommandHandler,
+    issue: IssueLoginCodeCommandHandler,
 ) -> None:
     """A block must not interleave between spending a code and the session."""
     await ensure_admin.execute(EnsureInitialAdminCommand(ADMIN_TELEGRAM_ID))
@@ -357,7 +377,9 @@ async def test_exchange_locks_the_member_before_it_touches_the_code(
             self.login_codes = Codes()  # type: ignore[assignment]
             return self
 
-    sut = ExchangeLoginCode(lambda: Recording(store), limiter, clock.now, tokens)
+    sut = ExchangeLoginCodeCommandHandler(
+        lambda: Recording(store), limiter, clock.now, tokens
+    )
 
     await sut.execute(ExchangeLoginCodeCommand(code, "ip"))
 

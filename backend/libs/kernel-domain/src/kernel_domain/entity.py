@@ -1,71 +1,32 @@
-# ruff: noqa: E501
 from kernel_domain.domain_event import DomainEvent
 
 
 class Entity[TId]:
-    """Базовый строительный блок агрегата: равенство по `id` в рамках одного
-    конкретного типа (не по значению полей), плюс накопление доменных событий,
-    атомарно отдаваемых вызывающему через `pull_events()` — сама публикация
-    (Outbox) остаётся за пределами этого класса.
+    """Building block of an aggregate: equal by `id` within one type, and it
+    collects domain events that the unit of work takes with `pull_events()`.
 
-    Новая сущность создаётся фабрикой `create()` (с валидацией и событием),
-    гидратация из хранилища — `reconstitute()` (без валидации и событий)."""
+    A new entity is built by a `create()` factory (validation and an event), a
+    stored one by `reconstitute()` (no validation, no events). Publishing the
+    events is not the entity's business.
+    """
 
     def __init__(self, id: TId) -> None:
-        """Проставляет идентификатор и готовит пустую очередь доменных событий.
-
-        Args:
-            id (TId): Уникальный идентификатор сущности (обычно UUID или инт)."""
         self.id = id
         self._domain_events: list[DomainEvent] = []
 
     def add_domain_event(self, event: DomainEvent) -> None:
-        """Регистрирует новое доменное событие во внутреннем стейте агрегата.
-
-        Тупо аппендит ивент в in-memory список `_domain_events`.
-        Ожидается, что этот метод будет дергаться из бизнес-методов энтити после
-        успешной мутации стейта, чтобы потом инфраструктура смогла их слить и задиспатчить.
-
-        Args:
-            event (DomainEvent): Инстанс доменного события для добавления в очередь."""
         self._domain_events.append(event)
 
     def pull_events(self) -> list[DomainEvent]:
-        """Забирает все накопленные доменные события и флушит внутреннюю очередь.
-
-        Атомарно выгребает текущий список `_domain_events` и ресетит его в пустой.
-        Сайд-эффект: после вызова очередь событий внутри агрегата очищается.
-        Это нужно для того, чтобы при коммите транзакции аутбокс-паттерн или
-        евент-бас забрали события ровно один раз.
-
-        Returns:
-            list[DomainEvent]: Список накопленных доменных событий."""
+        """Return the collected events and forget them: each is taken exactly once."""
         events = self._domain_events
         self._domain_events = []
         return events
 
     def __eq__(self, other: object) -> bool:
-        """Проверяет равенство двух сущностей по их айдишнику.
-
-        Две энтити считаются равными, если они принадлежат строго к одному и тому же классу
-        и имеют одинаковые `id`. Равенство по значению остальных полей игнорится.
-
-        Args:
-            other (object): Объект для сравнения.
-
-        Returns:
-            bool: True, если объекты одного типа и их id совпадают (либо это один и тот же инстанс)."""
         if type(other) is not type(self):
             return False
         return self is other or self.id == other.id
 
     def __hash__(self) -> int:
-        """Вычисляет хэш сущности на основе ее типа и айдишника.
-
-        Позволяет безопасно пихать энтити в сеты и использовать как ключи в диктах.
-        Завязан только на неизменяемый `id` и класс, так что хэш стабилен на протяжении
-        жизни объекта.
-
-        Returns:
-            int: Вычисленное значение хэша."""
         return hash((type(self), self.id))

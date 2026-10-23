@@ -1,14 +1,14 @@
 """Public representation of a task."""
 
+from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
-
-from pydantic import BaseModel
 
 from domain.entities.task import Task
 
 
-class TaskView(BaseModel):
+@dataclass(frozen=True)
+class TaskView:
     id: UUID
     text: str
     status: str

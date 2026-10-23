@@ -26,7 +26,7 @@ class AuthenticateSessionQuery:
     token: str
 
 
-class AuthenticateSession:
+class AuthenticateSessionQueryHandler:
     """A valid signature is not enough: the stored session and access are rechecked."""
 
     def __init__(
@@ -61,7 +61,7 @@ class FindMemberByTelegramQuery:
     telegram_id: int
 
 
-class FindMemberByTelegram:
+class FindMemberByTelegramQueryHandler:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
 
@@ -82,7 +82,7 @@ class ListMembersQuery:
     offset: int = 0
 
 
-class ListMembers:
+class ListMembersQueryHandler:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
 
@@ -97,11 +97,11 @@ class ListMembers:
 
 
 __all__ = [
-    "ListMembers",
+    "ListMembersQueryHandler",
     "ListMembersQuery",
-    "AuthenticateSession",
+    "AuthenticateSessionQueryHandler",
     "AuthenticateSessionQuery",
     "CurrentSession",
-    "FindMemberByTelegram",
+    "FindMemberByTelegramQueryHandler",
     "FindMemberByTelegramQuery",
 ]

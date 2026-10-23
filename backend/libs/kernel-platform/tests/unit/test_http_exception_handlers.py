@@ -1,27 +1,17 @@
-"""ADR 0003: платформенные exception handlers нормализуют любую форму
-отказа в структурированный конверт `{"error": {"code", "message"}}`."""
-
-from collections.abc import Callable
+"""Platform exception handlers turn every failure into `{"error": {...}}`."""
 
 import httpx
 import pytest
 from fastapi import FastAPI, HTTPException
+from observability.middleware import RequestContextMiddleware
 from pydantic import BaseModel
 
-from kernel_platform.http.errors import ApiError, ErrorDetail
+from kernel_platform.http.errors import ApiError, ErrorDetail, ServiceUnavailableError
 from kernel_platform.http.exception_handlers import register_error_handlers
 
 
-class _DemoServiceError(Exception):
-    """Заглушка вместо собственного базового `ApplicationError` сервиса
-    (структурный code/message/status_code, без наследования от kernel_platform)."""
-
-    code = "DEMO_UNAVAILABLE"
-    message = "demo service недоступен"
-    status_code = 503
-
-    def __init__(self) -> None:
-        super().__init__(self.message)
+class _DemoDependencyError(Exception):
+    """A technical failure of a dependency; the service lists it as unavailable."""
 
 
 class _Item(BaseModel):
@@ -31,49 +21,6 @@ class _Item(BaseModel):
 class _Body(BaseModel):
     price: float
     items: list[_Item] = []
-
-
-def _build_app() -> FastAPI:
-    app = FastAPI()
-    register_error_handlers(app, service_error_type=_DemoServiceError)
-
-    @app.get("/http-error")
-    async def _http_error() -> None:
-        raise HTTPException(status_code=401, detail="Требуется авторизация")
-
-    @app.get("/http-error-with-headers")
-    async def _http_error_with_headers() -> None:
-        raise HTTPException(
-            status_code=401,
-            detail="Требуется авторизация",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    @app.post("/validate")
-    async def _validate(body: _Body) -> dict[str, float]:
-        return {"price": body.price}
-
-    @app.get("/service-error")
-    async def _service_error() -> None:
-        raise _DemoServiceError()
-
-    @app.get("/api-error-with-details")
-    async def _api_error_with_details() -> None:
-        raise ApiError(
-            status_code=400,
-            code="general_multiple_validation_errors",
-            message="Обнаружены множественные ошибки валидации",
-            details=[
-                ErrorDetail(field="name", issue="Плохое имя"),
-                ErrorDetail(field="price", issue="Плохая цена"),
-            ],
-        )
-
-    @app.get("/boom")
-    async def _boom() -> None:
-        raise RuntimeError("connection string: postgres://secret@host/db")
-
-    return app
 
 
 @pytest.fixture
@@ -92,8 +39,8 @@ async def test_http_exception_gets_canonical_code_and_original_status(
         response = await client.get("/http-error")
 
     assert response.status_code == 401
-    assert response.json() == {
-        "error": {"code": "UNAUTHORIZED", "message": "Требуется авторизация"}
+    assert _without_request_id(response) == {
+        "error": {"code": "unauthorized", "message": "Требуется авторизация"}
     }
 
 
@@ -112,7 +59,7 @@ async def test_request_validation_error_becomes_structured_400_shape(
 
     body = response.json()
     assert response.status_code == 422
-    assert body["error"]["code"] == "VALIDATION_ERROR"
+    assert body["error"]["code"] == "validation_error"
     assert body["error"]["message"] == "Некорректные данные запроса"
 
 
@@ -150,7 +97,7 @@ async def test_api_error_with_details_includes_them_in_the_response(
         response = await client.get("/api-error-with-details")
 
     assert response.status_code == 400
-    assert response.json() == {
+    assert _without_request_id(response) == {
         "error": {
             "code": "general_multiple_validation_errors",
             "message": "Обнаружены множественные ошибки валидации",
@@ -162,16 +109,15 @@ async def test_api_error_with_details_includes_them_in_the_response(
     }
 
 
-async def test_expected_service_error_uses_its_own_structural_contract(
+async def test_a_failing_dependency_answers_503_with_retry_after(
     client: httpx.AsyncClient,
 ) -> None:
     async with client:
-        response = await client.get("/service-error")
+        response = await client.get("/dependency-down")
 
     assert response.status_code == 503
-    assert response.json() == {
-        "error": {"code": "DEMO_UNAVAILABLE", "message": "demo service недоступен"}
-    }
+    assert response.headers["retry-after"] == "5"
+    assert response.json()["error"]["code"] == ServiceUnavailableError().code
 
 
 async def test_unexpected_exception_is_hidden_behind_a_safe_500(
@@ -181,59 +127,69 @@ async def test_unexpected_exception_is_hidden_behind_a_safe_500(
         response = await client.get("/boom")
 
     assert response.status_code == 500
-    body = response.json()
-    assert body == {
-        "error": {"code": "INTERNAL_ERROR", "message": "Внутренняя ошибка сервера"}
-    }
+    error = response.json()["error"]
+    assert error["code"] == "internal_error"
+    assert error["message"] == "Внутренняя ошибка сервера"
     assert "secret" not in response.text
     assert "postgres://" not in response.text
 
 
-def _build_app_with_boom(
-    on_unhandled_exception: Callable[[Exception], None] | None,
-) -> FastAPI:
+async def test_the_500_response_carries_the_request_id_in_body_and_header(
+    client: httpx.AsyncClient,
+) -> None:
+    async with client:
+        response = await client.get("/boom", headers={"X-Request-ID": "req-500"})
+
+    assert response.status_code == 500
+    assert response.headers["x-request-id"] == "req-500"
+    assert response.json()["error"]["request_id"] == "req-500"
+
+
+def _build_app() -> FastAPI:
     app = FastAPI()
-    register_error_handlers(
-        app,
-        service_error_type=_DemoServiceError,
-        on_unhandled_exception=on_unhandled_exception,
-    )
+    app.add_middleware(RequestContextMiddleware)
+    register_error_handlers(app, unavailable_error_types=[_DemoDependencyError])
+
+    @app.get("/http-error")
+    async def _http_error() -> None:
+        raise HTTPException(status_code=401, detail="Требуется авторизация")
+
+    @app.get("/http-error-with-headers")
+    async def _http_error_with_headers() -> None:
+        raise HTTPException(
+            status_code=401,
+            detail="Требуется авторизация",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    @app.post("/validate")
+    async def _validate(body: _Body) -> dict[str, float]:
+        return {"price": body.price}
+
+    @app.get("/dependency-down")
+    async def _dependency_down() -> None:
+        raise _DemoDependencyError()
+
+    @app.get("/api-error-with-details")
+    async def _api_error_with_details() -> None:
+        raise ApiError(
+            status_code=400,
+            code="general_multiple_validation_errors",
+            message="Обнаружены множественные ошибки валидации",
+            details=[
+                ErrorDetail(field="name", issue="Плохое имя"),
+                ErrorDetail(field="price", issue="Плохая цена"),
+            ],
+        )
 
     @app.get("/boom")
     async def _boom() -> None:
-        raise RuntimeError("kaboom")
+        raise RuntimeError("connection string: postgres://secret@host/db")
 
     return app
 
 
-async def test_on_unhandled_exception_hook_receives_the_exception() -> None:
-    received: list[Exception] = []
-    transport = httpx.ASGITransport(
-        app=_build_app_with_boom(received.append), raise_app_exceptions=False
-    )
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/boom")
-
-    assert response.status_code == 500
-    assert len(received) == 1
-    assert isinstance(received[0], RuntimeError)
-
-
-async def test_on_unhandled_exception_hook_fail_does_not_break_the_500_response() -> (
-    None
-):
-    def _broken_hook(exc: Exception) -> None:
-        raise ValueError("hook itself is broken")
-
-    transport = httpx.ASGITransport(
-        app=_build_app_with_boom(_broken_hook), raise_app_exceptions=False
-    )
-
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        response = await client.get("/boom")
-
-    assert response.status_code == 500
-    assert response.json() == {
-        "error": {"code": "INTERNAL_ERROR", "message": "Внутренняя ошибка сервера"}
-    }
+def _without_request_id(response: httpx.Response) -> dict[str, dict[str, object]]:
+    body: dict[str, dict[str, object]] = response.json()
+    body["error"].pop("request_id")
+    return body

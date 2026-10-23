@@ -3,8 +3,7 @@
 from typing import Annotated
 
 from fastapi import Depends, Request
-from kernel_domain.result import Result
-from kernel_platform.http.match import unwrap
+from kernel_platform.http.match import raise_error, unwrap
 from kernel_platform.security.actor import Actor
 from kernel_platform.security.errors import AuthErrors
 
@@ -28,7 +27,7 @@ async def get_actor(request: Request, services: ServicesDI) -> Actor:
     access can be revoked."""
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
-        return unwrap(Result[Actor].fail(AuthErrors.unauthenticated()))
+        raise_error(AuthErrors.unauthenticated())
     return unwrap(await services.identity.require_approved(token))
 
 

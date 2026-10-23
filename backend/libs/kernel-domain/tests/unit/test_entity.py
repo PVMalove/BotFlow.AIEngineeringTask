@@ -1,5 +1,3 @@
-# ruff: noqa: E501
-
 from kernel_domain.domain_event import DomainEvent
 from kernel_domain.entity import Entity
 

@@ -1,4 +1,4 @@
-"""The Member decision table and the DecideMember use case against in-memory ports."""
+"""The Member decision table and the DecideMember handler against in-memory ports."""
 
 from datetime import timedelta
 from uuid import UUID, uuid4
@@ -8,7 +8,7 @@ from conftest import NOW, Clock, CodeRow, FakeUnitOfWork, Store
 from kernel_domain.errors import ErrorType
 from kernel_domain.result import Result
 
-from application.commands.access import DecideMember, DecideMemberCommand
+from application.commands.access import DecideMemberCommand, DecideMemberCommandHandler
 from contracts.views import DecisionView
 from domain.entities.auth_session import AuthSession
 from domain.entities.login_code import LoginCode
@@ -189,7 +189,7 @@ def test_a_repeated_join_changes_nobody_else(
     assert (target.status, target.access_version) == (status, 3)
 
 
-# ---- DecideMember ----------------------------------------------------------
+# ---- DecideMemberCommandHandler ----------------------------------------------
 
 
 class World:
@@ -199,7 +199,9 @@ class World:
         self.admin = self.add(member(S.APPROVED, Role.ADMIN, telegram_id=1))
         self.second_admin = self.add(member(S.APPROVED, Role.ADMIN, telegram_id=2))
         self.applicant = self.add(member(S.PENDING, telegram_id=3))
-        self.sut = DecideMember(lambda: FakeUnitOfWork(self.store), self.clock.now)
+        self.sut = DecideMemberCommandHandler(
+            lambda: FakeUnitOfWork(self.store), self.clock.now
+        )
 
     def add(self, new: Member) -> Member:
         self.store.members[new.id] = new

@@ -3,14 +3,17 @@
 import argparse
 import asyncio
 import os
-from datetime import UTC, datetime
 from pathlib import Path
 
+from kernel_platform.clock import utcnow
 from kernel_platform.migrations import run_migrations
 
 import infrastructure.db as db_package
 from api.containers import Container
-from application.commands.auth import EnsureInitialAdmin, EnsureInitialAdminCommand
+from application.commands.auth import (
+    EnsureInitialAdminCommand,
+    EnsureInitialAdminCommandHandler,
+)
 from infrastructure.db.unit_of_work import SqlUnitOfWork
 
 ALEMBIC_INI = Path(db_package.__file__).parent / "alembic.ini"
@@ -26,7 +29,9 @@ async def admin(container: Container) -> None:
     if not raw.isdigit() or int(raw) == 0:
         raise SystemExit("INITIAL_ADMIN_TELEGRAM_ID must be a positive Telegram ID.")
     database = await container.database.async_()
-    ensure_admin = EnsureInitialAdmin(lambda: SqlUnitOfWork(database.sessions), _utcnow)
+    ensure_admin = EnsureInitialAdminCommandHandler(
+        lambda: SqlUnitOfWork(database.sessions), utcnow
+    )
     if await ensure_admin.execute(EnsureInitialAdminCommand(telegram_id=int(raw))):
         print("Initial admin created.")
     else:
@@ -41,10 +46,6 @@ async def main(command: str) -> None:
         closing = container.shutdown_resources()
         if closing is not None:
             await closing
-
-
-def _utcnow() -> datetime:
-    return datetime.now(UTC)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,8 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query
+from kernel_platform.http.cache import no_store
 from kernel_platform.http.envelope import ApiResponse
 from kernel_platform.http.match import match_page, match_result
 from kernel_platform.security.origin import require_same_origin
@@ -13,7 +14,9 @@ from api.schemas import ChangeStatusBody, TaskListRequest
 from application.queries.get_task import GetTaskQuery
 from contracts.task import TaskView
 
-router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
+router = APIRouter(
+    prefix="/api/v1/tasks", tags=["tasks"], dependencies=[Depends(no_store)]
+)
 
 
 @router.get(
@@ -27,11 +30,9 @@ router = APIRouter(prefix="/api/v1/tasks", tags=["tasks"])
 )
 async def list_tasks(
     request: Annotated[TaskListRequest, Query()],
-    response: Response,
     _: RequiredAuth,
     handler: ListTasksDI,
 ) -> ApiResponse[list[TaskView]]:
-    response.headers["Cache-Control"] = "no-store"
     return match_page(await handler.execute(request.to_query()))
 
 
@@ -41,9 +42,8 @@ async def list_tasks(
     summary="Карточка задачи",
 )
 async def get_task(
-    task_id: UUID, response: Response, _: RequiredAuth, handler: GetTaskDI
+    task_id: UUID, _: RequiredAuth, handler: GetTaskDI
 ) -> ApiResponse[TaskView]:
-    response.headers["Cache-Control"] = "no-store"
     return match_result(await handler.execute(GetTaskQuery(task_id)))
 
 
@@ -62,9 +62,7 @@ async def get_task(
 async def change_task_status(
     task_id: UUID,
     body: ChangeStatusBody,
-    response: Response,
     actor: RequiredAuth,
     handler: ChangeTaskStatusDI,
 ) -> ApiResponse[TaskView]:
-    response.headers["Cache-Control"] = "no-store"
     return match_result(await handler.execute(body.to_command(task_id, actor)))

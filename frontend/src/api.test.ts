@@ -14,12 +14,7 @@ afterEach(() => vi.unstubAllGlobals());
 test('reads a status page of 50 tasks and passes the opaque cursor unchanged', async () => {
   const page = {
     data: [],
-    meta: {
-      next_cursor: null,
-      prev_cursor: null,
-      has_more: false,
-      has_prev: false,
-    },
+    meta: { next_cursor: null, has_more: false },
   };
   const fetchBoundary = vi.fn().mockResolvedValue(Response.json(page));
   vi.stubGlobal('fetch', fetchBoundary);

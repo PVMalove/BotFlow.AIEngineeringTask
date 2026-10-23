@@ -2,10 +2,11 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 
 from kernel_domain.result import Result
+from kernel_platform.clock import utcnow
 
 from domain.entities.job import Job
 from domain.job_limits import JobLimits
@@ -30,7 +31,7 @@ class JobAcceptance:
         self,
         uow_factory: Callable[[], AutomationUnitOfWork],
         limits: JobLimits = JobLimits(),
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self._uow_factory = uow_factory
         self._limits = limits

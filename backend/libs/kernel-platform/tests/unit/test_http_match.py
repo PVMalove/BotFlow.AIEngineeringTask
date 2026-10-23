@@ -1,4 +1,4 @@
-"""ADR 0002/0003: общий конверт успеха + разворачивание `Result` в HTTP."""
+"""The success envelope and the unwrapping of a `Result` into HTTP."""
 
 import pytest
 from kernel_domain.errors import Error, ErrorList, ErrorType
@@ -6,7 +6,7 @@ from kernel_domain.result import Result
 
 from kernel_platform.http.envelope import ApiResponse
 from kernel_platform.http.errors import ApiError, ErrorDetail
-from kernel_platform.http.match import match_created, match_page, match_result
+from kernel_platform.http.match import match_page, match_result
 from kernel_platform.pagination import Page, PageInfo
 
 
@@ -59,22 +59,8 @@ def test_match_result_attaches_details_for_an_error_list() -> None:
     ]
 
 
-def test_match_created_behaves_exactly_like_match_result() -> None:
-    ok: Result[str] = Result[str].ok("created")
-    assert match_created(ok) == match_result(Result[str].ok("created"))
-
-    error = Error(
-        code="already_active", description="Конфликт", type=ErrorType.CONFLICT
-    )
-    with pytest.raises(ApiError) as exc_info:
-        match_created(Result[str].fail(error))
-    assert exc_info.value.status_code == 409
-
-
 def test_match_page_splits_items_into_data_and_page_info_into_meta() -> None:
-    page_info = PageInfo(
-        next_cursor="n", prev_cursor=None, has_more=True, has_prev=False
-    )
+    page_info = PageInfo(next_cursor="n", has_more=True)
     result: Result[Page[int]] = Result[Page[int]].ok(
         Page(items=[1, 2], page_info=page_info)
     )
@@ -83,12 +69,7 @@ def test_match_page_splits_items_into_data_and_page_info_into_meta() -> None:
 
     assert response == ApiResponse[list[int]](
         data=[1, 2],
-        meta={
-            "next_cursor": "n",
-            "prev_cursor": None,
-            "has_more": True,
-            "has_prev": False,
-        },
+        meta={"next_cursor": "n", "has_more": True},
     )
 
 

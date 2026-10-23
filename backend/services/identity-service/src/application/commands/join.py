@@ -20,7 +20,7 @@ class SubmitJoinRequestCommand:
     display_name: str | None = None
 
 
-class SubmitJoinRequest:
+class SubmitJoinRequestCommandHandler:
     def __init__(
         self,
         uow_factory: UnitOfWorkFactory,

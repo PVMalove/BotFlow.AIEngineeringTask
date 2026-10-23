@@ -4,38 +4,13 @@
 """
 
 import asyncio
-import inspect
 import sys
-from collections.abc import Awaitable, Callable
 from uuid import UUID
+
+from kernel_platform.worker import forever, repeat, run_process, shutdown
 
 from api.containers import Container, build_worker
 from infrastructure.db.replay import replay_task_created
-
-IDLE_SECONDS = 1.0
-FAILURE_SECONDS = 5.0
-
-
-async def repeat(step: Callable[[], Awaitable[int]]) -> None:
-    """Run `step` forever; pause when idle and after a failure."""
-    while True:
-        try:
-            if not await step():
-                await asyncio.sleep(IDLE_SECONDS)
-        except Exception:
-            # Driver errors can carry credentials; report nothing but a fixed text.
-            print("Outbox relay iteration failed; retrying.", flush=True)
-            await asyncio.sleep(FAILURE_SECONDS)
-
-
-async def consume(run: Callable[[], Awaitable[None]]) -> None:
-    """Restart the consumer after a broker failure."""
-    while True:
-        try:
-            await run()
-        except Exception:
-            print("Task consumer failed; retrying.", flush=True)
-            await asyncio.sleep(FAILURE_SECONDS)
 
 
 async def main() -> None:
@@ -45,12 +20,17 @@ async def main() -> None:
         worker = build_worker(resources)
         print("Tasks worker started.", flush=True)
         async with asyncio.TaskGroup() as group:
-            group.create_task(consume(worker.consumer.run))
-            group.create_task(repeat(worker.relay.execute))
+            group.create_task(
+                forever(worker.consumer.run, failure="Task consumer failed; retrying.")
+            )
+            group.create_task(
+                repeat(
+                    worker.relay.execute,
+                    failure="Outbox relay iteration failed; retrying.",
+                )
+            )
     finally:
-        shutdown = container.shutdown_resources()
-        if inspect.isawaitable(shutdown):
-            await shutdown
+        await shutdown(container)
 
 
 async def replay(job_id: UUID) -> None:
@@ -59,9 +39,7 @@ async def replay(job_id: UUID) -> None:
         resources = await container.resources.async_()
         replayed = await replay_task_created(resources.sessions, job_id)
     finally:
-        shutdown = container.shutdown_resources()
-        if inspect.isawaitable(shutdown):
-            await shutdown
+        await shutdown(container)
     if not replayed:
         raise SystemExit("Nothing to replay: no unpublished TaskCreated for this job.")
     print("TaskCreated of the job is due again.")
@@ -71,7 +49,7 @@ def _replay_job_id() -> UUID:
     try:
         return UUID(sys.argv[2])
     except ValueError:
-        raise SystemExit("Usage: worker.py replay <job_id (UUID)>") from None
+        raise SystemExit("Usage: python -m api.worker replay <job_id (UUID)>") from None
 
 
 if __name__ == "__main__":
@@ -80,11 +58,7 @@ if __name__ == "__main__":
     elif len(sys.argv) > 1:
         raise SystemExit("Tasks worker handlers are not implemented.")
     else:
-        try:
-            asyncio.run(main())
-        except KeyboardInterrupt:
-            pass
-        except Exception:
-            raise SystemExit(
-                "Tasks worker unavailable; verify its secrets and services."
-            ) from None
+        run_process(
+            main,
+            unavailable="Tasks worker unavailable; verify its secrets and services.",
+        )

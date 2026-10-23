@@ -2,10 +2,11 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from uuid import UUID
 
 from kernel_domain.result import Result
+from kernel_platform.clock import utcnow
 
 from domain.errors import AutomationErrors
 from domain.unit_of_work import AutomationUnitOfWork
@@ -23,7 +24,7 @@ class RecordTaskResultCommandHandler:
     def __init__(
         self,
         uow_factory: Callable[[], AutomationUnitOfWork],
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self._uow_factory = uow_factory
         self._clock = clock

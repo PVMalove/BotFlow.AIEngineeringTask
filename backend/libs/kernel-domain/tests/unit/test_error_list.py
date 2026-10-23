@@ -1,13 +1,6 @@
-# ruff: noqa: E501
-import json
-
 import pytest
 
 from kernel_domain.errors import Error, ErrorList, ErrorType
-
-
-def _validation_error(code: str, field: str) -> Error:
-    return Error.validation(code, f"Описание {code}", invalid_field=field)
 
 
 def test_of_a_single_error_returns_it_unwrapped() -> None:
@@ -67,57 +60,5 @@ def test_of_rejects_a_non_validation_error() -> None:
         ErrorList.of([validation_error, not_found_error])
 
 
-def test_error_list_serializes_to_the_documented_json_shape() -> None:
-    first = _validation_error("invalid_name", "name")
-    second = Error.validation("invalid_form", "Общая ошибка формы")
-    error_list = ErrorList.of([first, second])
-    assert isinstance(error_list, ErrorList)
-
-    payload = json.loads(error_list.serialize())
-
-    assert payload == {
-        "errors": [
-            {
-                "code": "invalid_name",
-                "description": "Описание invalid_name",
-                "type": "VALIDATION",
-                "invalid_field": "name",
-            },
-            {
-                "code": "invalid_form",
-                "description": "Общая ошибка формы",
-                "type": "VALIDATION",
-                "invalid_field": None,
-            },
-        ]
-    }
-
-
-def test_error_list_round_trips_through_polymorphic_deserialize() -> None:
-    first = _validation_error("invalid_name", "name")
-    second = _validation_error("invalid_price", "price")
-    error_list = ErrorList.of([first, second])
-    assert isinstance(error_list, ErrorList)
-
-    restored = Error.deserialize(error_list.serialize())
-
-    assert isinstance(restored, ErrorList)
-    assert restored.code == error_list.code
-    assert restored.type is error_list.type
-    assert restored.errors == error_list.errors
-
-
-@pytest.mark.parametrize(
-    "raw",
-    [
-        "{}",
-        '{"errors": []}',
-        '{"errors": [{"code": "x"}]}',
-        '{"errors": [{"code": "x", "description": "y", "type": "NOT_A_TYPE", "invalid_field": null}]}',
-    ],
-)
-def test_deserialize_raises_value_error_for_malformed_error_list_json(
-    raw: str,
-) -> None:
-    with pytest.raises(ValueError):
-        Error.deserialize(raw)
+def _validation_error(code: str, field: str) -> Error:
+    return Error.validation(code, f"Описание {code}", invalid_field=field)

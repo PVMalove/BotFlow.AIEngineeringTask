@@ -9,19 +9,18 @@ a time from the Redis Stream and needs the Whisper weights, not RabbitMQ.
 """
 
 import asyncio
-import inspect
 import logging
 import os
 import signal
 import socket
 import sys
-from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from uuid import UUID
 
 import httpx
 from aiogram import Bot
 from kernel_platform.resources import open_redis, open_s3
+from kernel_platform.worker import forever, repeat, run_process, shutdown
 
 from api.containers import (
     Container,
@@ -40,21 +39,6 @@ from infrastructure.stt.whisper_transcriber import WhisperTranscriber
 from infrastructure.stt.whisper_validation import load_whisper_model, verify_weights
 from infrastructure.telegram import TelegramMessenger
 from infrastructure.telegram_files import TelegramFileSource
-
-IDLE_SECONDS = 1.0
-FAILURE_SECONDS = 5.0
-
-
-async def repeat(step: Callable[[], Awaitable[int]]) -> None:
-    """Run `step` forever; pause when idle and after a failure."""
-    while True:
-        try:
-            if not await step():
-                await asyncio.sleep(IDLE_SECONDS)
-        except Exception:
-            # Driver errors can carry credentials; report nothing but a fixed text.
-            print("Worker step failed; retrying.", flush=True)
-            await asyncio.sleep(FAILURE_SECONDS)
 
 
 async def main() -> None:
@@ -88,16 +72,14 @@ async def main() -> None:
             await pipeline.queue.ensure_group()
             print("Automation worker started.", flush=True)
             async with asyncio.TaskGroup() as group:
-                group.create_task(_forever(pipeline.consumer.run))
+                group.create_task(forever(pipeline.consumer.run))
                 group.create_task(repeat(pipeline.relay.execute))
                 group.create_task(repeat(pipeline.notifier.execute))
-                group.create_task(_forever(tasks.results.run))
+                group.create_task(forever(tasks.results.run))
                 group.create_task(repeat(tasks.relay.execute))
                 group.create_task(repeat(voice.relay.execute))
     finally:
-        shutdown = container.shutdown_resources()
-        if inspect.isawaitable(shutdown):
-            await shutdown
+        await shutdown(container)
 
 
 async def transcription() -> None:
@@ -143,9 +125,7 @@ async def transcription() -> None:
                 exit_process=lambda: os._exit(70),
             )
     finally:
-        shutdown = container.shutdown_resources()
-        if inspect.isawaitable(shutdown):
-            await shutdown
+        await shutdown(container)
 
 
 async def replay(job_id: UUID) -> None:
@@ -158,9 +138,7 @@ async def replay(job_id: UUID) -> None:
             database.sessions, job_id
         ) or await replay_job(database.sessions, job_id)
     finally:
-        shutdown = container.shutdown_resources()
-        if inspect.isawaitable(shutdown):
-            await shutdown
+        await shutdown(container)
     if not replayed:
         raise SystemExit(
             "Nothing to replay: no failed voice job or unpublished CreateTask."
@@ -172,40 +150,22 @@ def _replay_job_id() -> UUID:
     try:
         return UUID(sys.argv[2])
     except ValueError:
-        raise SystemExit("Usage: worker.py replay <job_id (UUID)>") from None
-
-
-async def _forever(run: Callable[[], Awaitable[None]]) -> None:
-    """Restart the consumer after a broker failure."""
-    while True:
-        try:
-            await run()
-        except Exception:
-            print("Worker consumer failed; retrying.", flush=True)
-            await asyncio.sleep(FAILURE_SECONDS)
+        raise SystemExit("Usage: python -m api.worker replay <job_id (UUID)>") from None
 
 
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "replay":
         asyncio.run(replay(_replay_job_id()))
     elif sys.argv[1:] == ["transcription"]:
-        try:
-            asyncio.run(transcription())
-        except KeyboardInterrupt:
-            pass
-        except Exception:
-            raise SystemExit(
-                "STT worker unavailable; verify the Whisper weights, secrets and "
-                "services."
-            ) from None
+        run_process(
+            transcription,
+            unavailable="STT worker unavailable; verify the Whisper weights, secrets "
+            "and services.",
+        )
     elif len(sys.argv) > 1:
         raise SystemExit("Automation worker handlers are not implemented.")
     else:
-        try:
-            asyncio.run(main())
-        except KeyboardInterrupt:
-            pass
-        except Exception:
-            raise SystemExit(
-                "Automation worker unavailable; verify its secrets and services."
-            ) from None
+        run_process(
+            main,
+            unavailable="Automation worker unavailable; verify secrets and services.",
+        )

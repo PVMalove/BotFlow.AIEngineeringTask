@@ -4,9 +4,9 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid5
 
+from kernel_platform.envelope import ENVELOPE_VERSION
 from kernel_platform.messaging import TASK_CREATE_ROUTING_KEY
 
-ENVELOPE_VERSION = 1
 CREATE_TASK = "CreateTask"
 TRANSCRIBE_VOICE = "TranscribeVoice"
 VOICE_ROUTING_KEY = "voice.transcribe"

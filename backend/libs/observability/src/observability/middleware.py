@@ -23,6 +23,9 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     ) -> Response:
         incoming = request.headers.get("x-request-id", "")
         request_id = incoming if _REQUEST_ID.fullmatch(incoming) else str(uuid.uuid4())
+        # The handler of an unhandled exception runs outside this middleware, after
+        # the context variable is reset, so it reads the id from the request state.
+        request.state.request_id = request_id
         reset = request_id_var.set(request_id)
         started_at = time.perf_counter()
         status_code = 500

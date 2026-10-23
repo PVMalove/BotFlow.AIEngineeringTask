@@ -17,20 +17,20 @@ from api.containers import Services
 from api.dependencies import get_services
 from api.main import create_identity_app
 from api.security import CookiePolicy, Operation, ServiceKeys
-from application.commands.access import DecideMember
+from application.commands.access import DecideMemberCommandHandler
 from application.commands.auth import (
-    EnsureInitialAdmin,
     EnsureInitialAdminCommand,
-    ExchangeLoginCode,
-    IssueLoginCode,
+    EnsureInitialAdminCommandHandler,
+    ExchangeLoginCodeCommandHandler,
     IssueLoginCodeCommand,
-    Logout,
+    IssueLoginCodeCommandHandler,
+    LogoutCommandHandler,
 )
-from application.commands.join import SubmitJoinRequest
+from application.commands.join import SubmitJoinRequestCommandHandler
 from application.queries.members import (
-    AuthenticateSession,
-    FindMemberByTelegram,
-    ListMembers,
+    AuthenticateSessionQueryHandler,
+    FindMemberByTelegramQueryHandler,
+    ListMembersQueryHandler,
 )
 from domain.value_objects.member_status import MemberStatus
 from infrastructure.security.jwt import Rs256Tokens
@@ -57,17 +57,19 @@ class Env:
         def uow() -> FakeUnitOfWork:
             return FakeUnitOfWork(self.store)
 
-        self.issue = IssueLoginCode(uow, limiter, self.clock.now)
+        self.issue = IssueLoginCodeCommandHandler(uow, limiter, self.clock.now)
         self.services = Services(
-            exchange=ExchangeLoginCode(uow, limiter, self.clock.now, tokens),
-            logout=Logout(uow, self.clock.now),
-            authenticate=AuthenticateSession(uow, tokens, self.clock.now),
+            exchange=ExchangeLoginCodeCommandHandler(
+                uow, limiter, self.clock.now, tokens
+            ),
+            logout=LogoutCommandHandler(uow, self.clock.now),
+            authenticate=AuthenticateSessionQueryHandler(uow, tokens, self.clock.now),
             cookies=CookiePolicy(secure=secure),
             issue_code=self.issue,
-            find_member=FindMemberByTelegram(uow),
-            submit_join=SubmitJoinRequest(uow, limiter, self.clock.now),
-            decide=DecideMember(uow, self.clock.now),
-            list_members=ListMembers(uow),
+            find_member=FindMemberByTelegramQueryHandler(uow),
+            submit_join=SubmitJoinRequestCommandHandler(uow, limiter, self.clock.now),
+            decide=DecideMemberCommandHandler(uow, self.clock.now),
+            list_members=ListMembersQueryHandler(uow),
             service_keys=ServiceKeys(
                 {
                     "automation-key-for-tests": (
@@ -80,7 +82,7 @@ class Env:
         )
 
     async def login_code(self) -> str:
-        admin_uow = EnsureInitialAdmin(
+        admin_uow = EnsureInitialAdminCommandHandler(
             lambda: FakeUnitOfWork(self.store), self.clock.now
         )
         await admin_uow.execute(EnsureInitialAdminCommand(ADMIN))

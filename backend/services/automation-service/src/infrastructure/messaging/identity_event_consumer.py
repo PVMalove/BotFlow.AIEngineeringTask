@@ -5,6 +5,7 @@ from uuid import UUID
 
 from aio_pika.abc import AbstractChannel, AbstractQueue
 from kernel_platform.consumer import InvalidMessage
+from kernel_platform.envelope import as_int, as_str
 from kernel_platform.messaging import declare_identity_events
 
 from application.commands.store_member_decision import (
@@ -43,21 +44,9 @@ def _parse(
         return StoreMemberDecisionCommand(
             event_id=UUID(message_id),
             member_id=UUID(payload["member_id"]),
-            telegram_id=_integer(payload["telegram_id"]),
-            decision=_string(payload["decision"]),
-            access_version=_integer(payload["access_version"]),
+            telegram_id=as_int(payload["telegram_id"]),
+            decision=as_str(payload["decision"]),
+            access_version=as_int(payload["access_version"]),
         )
     except (ValueError, KeyError, TypeError):
         raise InvalidMessage from None
-
-
-def _integer(value: object) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError
-    return value
-
-
-def _string(value: object) -> str:
-    if not isinstance(value, str):
-        raise ValueError
-    return value

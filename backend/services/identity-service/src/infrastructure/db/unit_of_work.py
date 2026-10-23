@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 from kernel_domain.entity import Entity
-from kernel_platform.unit_of_work import EventHandler, SqlAlchemyUnitOfWork
+from kernel_platform.sqlalchemy_unit_of_work import EventHandler, SqlAlchemyUnitOfWork
 from sqlalchemy import Row, delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker

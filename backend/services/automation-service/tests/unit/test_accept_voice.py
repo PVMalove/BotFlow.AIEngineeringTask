@@ -45,14 +45,14 @@ class Harness:
             clock=lambda: NOW + timedelta(milliseconds=300),
         )
 
+    def only_job(self) -> Job:
+        assert len(self.world.jobs) == 1
+        return next(iter(self.world.jobs.values()))
+
     def _unit_of_work(self) -> LoggedUnitOfWork:
         if self.storage_failure:
             raise self.storage_failure
         return LoggedUnitOfWork(self.world, self.log)
-
-    def only_job(self) -> Job:
-        assert len(self.world.jobs) == 1
-        return next(iter(self.world.jobs.values()))
 
 
 def command(**overrides: Any) -> AcceptVoiceCommand:

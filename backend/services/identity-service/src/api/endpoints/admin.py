@@ -3,7 +3,8 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query
+from kernel_platform.http.cache import no_store
 from kernel_platform.http.envelope import ApiResponse
 from kernel_platform.http.match import match_result
 from kernel_platform.security.origin import require_same_origin
@@ -13,7 +14,9 @@ from api.schemas import DecisionBody, JoinRequestsListRequest, MembersListReques
 from contracts.views import AdminMemberView, DecisionView
 from domain.value_objects.access import Action
 
-router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
+router = APIRouter(
+    prefix="/api/v1/admin", tags=["admin"], dependencies=[Depends(no_store)]
+)
 
 
 @router.get(
@@ -26,10 +29,8 @@ async def join_requests(
     request: Annotated[JoinRequestsListRequest, Query()],
     _: AdminAuth,
     handler: ListMembersDI,
-    response: Response,
 ) -> ApiResponse[list[AdminMemberView]]:
     """Список заявок для администратора."""
-    response.headers["Cache-Control"] = "no-store"
     return match_result(await handler.execute(request.to_query()))
 
 
@@ -45,10 +46,8 @@ async def members(
     request: Annotated[MembersListRequest, Query()],
     _: AdminAuth,
     handler: ListMembersDI,
-    response: Response,
 ) -> ApiResponse[list[AdminMemberView]]:
     """Список участников для администратора."""
-    response.headers["Cache-Control"] = "no-store"
     return match_result(await handler.execute(request.to_query()))
 
 
@@ -68,10 +67,8 @@ async def decide_member(
     body: DecisionBody,
     admin: AdminAuth,
     handler: DecideMemberDI,
-    response: Response,
 ) -> ApiResponse[DecisionView]:
     """Принять решение от имени текущего администратора."""
-    response.headers["Cache-Control"] = "no-store"
     return match_result(
         await handler.execute(body.to_command(admin.member.id.value, member_id, action))
     )

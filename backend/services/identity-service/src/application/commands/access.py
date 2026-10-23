@@ -24,7 +24,7 @@ class DecideMemberCommand:
     expected_version: int
 
 
-class DecideMember:
+class DecideMemberCommandHandler:
     def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
         self._uow_factory = uow_factory
         self._clock = clock

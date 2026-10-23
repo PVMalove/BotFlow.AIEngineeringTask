@@ -1,4 +1,3 @@
-# ruff: noqa: E501
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -77,12 +76,8 @@ def test_a_subclass_implementing_the_contract_is_driven_entirely_by_it() -> None
 def test_a_subclass_can_override_only_event_type_leaving_aggregate_type_default() -> (
     None
 ):
-    """Регрессия: ранее `event_type`/`aggregate_type` были объявлены как
-    `ClassVar` на базовом классе — это ломало mypy для существующих
-    потребителей `DomainEvent` (`support-service`), которые уже
-    переопределяли `event_type: str = "..."` как обычное поле экземпляра,
-    не трогая `aggregate_type` вовсе. Оба поля — обычные dataclass-поля с
-    дефолтом, переопределение одного без другого не конфликтует."""
+    """`event_type` and `aggregate_type` are plain dataclass fields with
+    defaults, so a subclass may override one without the other."""
 
     @dataclass(frozen=True, kw_only=True)
     class TicketCreated(DomainEvent):

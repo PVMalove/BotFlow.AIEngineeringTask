@@ -1,20 +1,24 @@
 """Service composition root; each process owns its infrastructure lifecycle."""
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 
 from dependency_injector import containers, providers
+from kernel_platform.clock import utcnow
 from kernel_platform.resources import Resources, open_database, open_resources
 from kernel_platform.settings import Settings
 
 from api.security import CookiePolicy, Operation, ServiceKeys
-from application.commands.access import DecideMember
-from application.commands.auth import ExchangeLoginCode, IssueLoginCode, Logout
-from application.commands.join import SubmitJoinRequest
+from application.commands.access import DecideMemberCommandHandler
+from application.commands.auth import (
+    ExchangeLoginCodeCommandHandler,
+    IssueLoginCodeCommandHandler,
+    LogoutCommandHandler,
+)
+from application.commands.join import SubmitJoinRequestCommandHandler
 from application.queries.members import (
-    AuthenticateSession,
-    FindMemberByTelegram,
-    ListMembers,
+    AuthenticateSessionQueryHandler,
+    FindMemberByTelegramQueryHandler,
+    ListMembersQueryHandler,
 )
 from infrastructure.db.unit_of_work import SqlRateLimiter, SqlUnitOfWork
 from infrastructure.security.jwt import Rs256Tokens
@@ -27,15 +31,15 @@ _INSECURE_COOKIE_ENVIRONMENTS = {"local", "test"}
 class Services:
     """Use cases the HTTP layer needs, wired to the process resources."""
 
-    exchange: ExchangeLoginCode
-    logout: Logout
-    authenticate: AuthenticateSession
+    exchange: ExchangeLoginCodeCommandHandler
+    logout: LogoutCommandHandler
+    authenticate: AuthenticateSessionQueryHandler
     cookies: CookiePolicy
-    issue_code: IssueLoginCode
-    find_member: FindMemberByTelegram
-    submit_join: SubmitJoinRequest
-    decide: DecideMember
-    list_members: ListMembers
+    issue_code: IssueLoginCodeCommandHandler
+    find_member: FindMemberByTelegramQueryHandler
+    submit_join: SubmitJoinRequestCommandHandler
+    decide: DecideMemberCommandHandler
+    list_members: ListMembersQueryHandler
     service_keys: ServiceKeys
 
 
@@ -46,19 +50,19 @@ async def build_services(settings: Settings, resources: Resources) -> Services:
     def uow() -> SqlUnitOfWork:
         return SqlUnitOfWork(sessions)
 
-    limiter = SqlRateLimiter(sessions, _utcnow)
+    limiter = SqlRateLimiter(sessions, utcnow)
     return Services(
-        exchange=ExchangeLoginCode(uow, limiter, _utcnow, tokens),
-        logout=Logout(uow, _utcnow),
-        authenticate=AuthenticateSession(uow, tokens, _utcnow),
+        exchange=ExchangeLoginCodeCommandHandler(uow, limiter, utcnow, tokens),
+        logout=LogoutCommandHandler(uow, utcnow),
+        authenticate=AuthenticateSessionQueryHandler(uow, tokens, utcnow),
         cookies=CookiePolicy(
             secure=settings.environment not in _INSECURE_COOKIE_ENVIRONMENTS
         ),
-        issue_code=IssueLoginCode(uow, limiter, _utcnow),
-        find_member=FindMemberByTelegram(uow),
-        submit_join=SubmitJoinRequest(uow, limiter, _utcnow),
-        decide=DecideMember(uow, _utcnow),
-        list_members=ListMembers(uow),
+        issue_code=IssueLoginCodeCommandHandler(uow, limiter, utcnow),
+        find_member=FindMemberByTelegramQueryHandler(uow),
+        submit_join=SubmitJoinRequestCommandHandler(uow, limiter, utcnow),
+        decide=DecideMemberCommandHandler(uow, utcnow),
+        list_members=ListMembersQueryHandler(uow),
         service_keys=ServiceKeys(
             {
                 settings.secret("automation_service_key").get_secret_value(): (
@@ -84,7 +88,3 @@ class Container(containers.DeclarativeContainer):
     services = providers.Resource(
         build_services, settings=settings, resources=resources
     )
-
-
-def _utcnow() -> datetime:
-    return datetime.now(UTC)

@@ -15,7 +15,8 @@ class TaskErrors:
     @staticmethod
     def forbidden() -> Error:
         return Error.forbidden(
-            "forbidden", "Менять статус этой задачи может только её автор."
+            "forbidden",
+            "Менять статус этой задачи может только её автор или администратор.",
         )
 
     @staticmethod

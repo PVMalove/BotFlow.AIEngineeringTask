@@ -1,12 +1,7 @@
-# ruff: noqa: E501
 import pytest
 
 from kernel_domain.errors import Error, ErrorType
 from kernel_domain.result import Result
-
-
-def _an_error() -> Error:
-    return Error(code="x", description="y", type=ErrorType.FAILURE)
 
 
 def test_ok_result_reports_is_ok_and_carries_the_value() -> None:
@@ -46,3 +41,7 @@ def test_ok_without_a_value_is_a_valid_void_style_result() -> None:
 
     assert result.is_ok is True
     assert result.value is None
+
+
+def _an_error() -> Error:
+    return Error(code="x", description="y", type=ErrorType.PROBLEM)

@@ -207,6 +207,26 @@ def test_a_finished_job_does_not_take_voice_steps() -> None:
     assert job.checkpoint_audio("k", 1, "s", LATER) is False
 
 
+def test_a_job_finished_between_read_and_write_takes_no_transcript() -> None:
+    job = voice_job()
+    job.fail_delivery("exhausted", LATER)
+    job.pull_events()
+
+    assert job.complete_transcription("текст", "ru", NOW, LATER, LATER) is False
+    assert job.text is None
+    assert job.pull_events() == []
+
+
+def test_a_job_finished_between_read_and_write_takes_no_second_failure() -> None:
+    job = voice_job()
+    job.checkpoint_audio("k", 1, "s", NOW)
+    assert job.complete_transcription("текст", "ru", NOW, LATER, LATER) is True
+    job.pull_events()
+
+    assert job.fail_voice("unavailable", "notice", LATER) is False
+    assert job.pull_events() == []
+
+
 def test_the_limits_refuse_the_common_cap_before_the_voice_cap() -> None:
     limits = JobLimits()
 

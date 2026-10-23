@@ -35,9 +35,7 @@ export type TaskPage = Envelope<
   Task[],
   {
     next_cursor: string | null;
-    prev_cursor: string | null;
     has_more: boolean;
-    has_prev: boolean;
   }
 >;
 

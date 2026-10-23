@@ -3,7 +3,8 @@ from typing import Any
 from fastapi import FastAPI
 from kernel_platform.http.app import create_app
 from kernel_platform.http.exception_handlers import register_error_handlers
-from sqlalchemy.exc import DBAPIError, TimeoutError
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from api.containers import Container
 from api.endpoints.tasks import router as tasks_router
@@ -20,7 +21,7 @@ def create_tasks_app(container: Any = None) -> FastAPI:
         unavailable_error_types=(
             IdentityUnavailable,
             DBAPIError,
-            TimeoutError,
+            PoolTimeoutError,
             OSError,
         ),
     )

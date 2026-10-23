@@ -1,6 +1,7 @@
 """Internal member queries and login code issuance endpoints."""
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Depends
+from kernel_platform.http.cache import no_store
 from kernel_platform.http.envelope import ApiResponse
 from kernel_platform.http.match import match_result
 
@@ -14,7 +15,7 @@ from api.schemas import FindMemberRequest, IssueCodeRequest, JoinRequestBody
 from api.security import Operation
 from contracts.views import JoinRequestView, LoginCodeView, MemberView
 
-router = APIRouter(tags=["internal"])
+router = APIRouter(tags=["internal"], dependencies=[Depends(no_store)])
 
 
 @router.get(
@@ -28,11 +29,10 @@ router = APIRouter(tags=["internal"])
     dependencies=[service_operation(Operation.FIND_MEMBER)],
 )
 async def find_member(
-    telegram_id: int, response: Response, handler: FindMemberDI
+    telegram_id: int, handler: FindMemberDI
 ) -> ApiResponse[MemberView]:
     """Найти участника по Telegram ID."""
     query = FindMemberRequest(telegram_id=telegram_id).to_query()
-    response.headers["Cache-Control"] = "no-store"
     return match_result(await handler.execute(query))
 
 
@@ -47,10 +47,9 @@ async def find_member(
     dependencies=[service_operation(Operation.ISSUE_LOGIN_CODE)],
 )
 async def issue_login_code(
-    body: IssueCodeRequest, response: Response, handler: IssueLoginCodeDI
+    body: IssueCodeRequest, handler: IssueLoginCodeDI
 ) -> ApiResponse[LoginCodeView]:
     """Выпустить одноразовый код для входа в веб-панель."""
-    response.headers["Cache-Control"] = "no-store"
     return match_result(await handler.execute(body.to_command()))
 
 
@@ -65,10 +64,9 @@ async def issue_login_code(
     dependencies=[service_operation(Operation.SUBMIT_JOIN_REQUEST)],
 )
 async def submit_join_request(
-    body: JoinRequestBody, response: Response, handler: SubmitJoinRequestDI
+    body: JoinRequestBody, handler: SubmitJoinRequestDI
 ) -> ApiResponse[JoinRequestView]:
     """Принять заявку на доступ; решение о допуске принимает только Identity."""
-    response.headers["Cache-Control"] = "no-store"
     return match_result(await handler.execute(body.to_command()))
 
 

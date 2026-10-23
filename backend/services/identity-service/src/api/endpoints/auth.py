@@ -1,6 +1,7 @@
 """Authentication endpoints for identity service."""
 
 from fastapi import APIRouter, Depends, Request, Response
+from kernel_platform.http.cache import no_store
 from kernel_platform.http.envelope import ApiResponse
 from kernel_platform.http.match import unwrap
 from kernel_platform.security.origin import require_same_origin
@@ -17,7 +18,9 @@ from application.commands.auth import LogoutCommand
 from application.queries.members import AuthenticateSessionQuery
 from contracts.views import MemberView
 
-router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+router = APIRouter(
+    prefix="/api/v1/auth", tags=["auth"], dependencies=[Depends(no_store)]
+)
 
 
 @router.post(
@@ -44,7 +47,6 @@ async def exchange_login_code(
     grant = unwrap(await handler.execute(body.to_command(client=client)))
     lifetime = grant.session.expires_at - grant.session.created_at
     services.cookies.set_session(response, grant.token, int(lifetime.total_seconds()))
-    response.headers["Cache-Control"] = "no-store"
     return ApiResponse(data=MemberView.from_domain(grant.member))
 
 

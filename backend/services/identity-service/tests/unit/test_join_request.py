@@ -3,7 +3,10 @@
 import pytest
 from conftest import Clock, FakeRateLimiter, FakeUnitOfWork, Store
 
-from application.commands.join import SubmitJoinRequest, SubmitJoinRequestCommand
+from application.commands.join import (
+    SubmitJoinRequestCommand,
+    SubmitJoinRequestCommandHandler,
+)
 from domain.entities.member import Member
 from domain.value_objects.access import JoinOutcome
 from domain.value_objects.member_id import MemberId
@@ -29,8 +32,12 @@ def limiter() -> FakeRateLimiter:
 
 
 @pytest.fixture
-def sut(store: Store, clock: Clock, limiter: FakeRateLimiter) -> SubmitJoinRequest:
-    return SubmitJoinRequest(lambda: FakeUnitOfWork(store), limiter, clock.now)
+def sut(
+    store: Store, clock: Clock, limiter: FakeRateLimiter
+) -> SubmitJoinRequestCommandHandler:
+    return SubmitJoinRequestCommandHandler(
+        lambda: FakeUnitOfWork(store), limiter, clock.now
+    )
 
 
 def only_member(store: Store) -> Member:
@@ -55,7 +62,7 @@ def existing(store: Store, clock: Clock, status: MemberStatus) -> Member:
 
 
 async def test_a_new_person_becomes_a_pending_member(
-    sut: SubmitJoinRequest, store: Store
+    sut: SubmitJoinRequestCommandHandler, store: Store
 ) -> None:
     result = await sut.execute(SubmitJoinRequestCommand(APPLICANT, "Ann @ann"))
 
@@ -72,7 +79,7 @@ async def test_a_new_person_becomes_a_pending_member(
 
 
 async def test_a_second_request_while_pending_changes_nothing(
-    sut: SubmitJoinRequest, store: Store
+    sut: SubmitJoinRequestCommandHandler, store: Store
 ) -> None:
     await sut.execute(SubmitJoinRequestCommand(APPLICANT))
     before = only_member(store)
@@ -89,7 +96,7 @@ async def test_a_second_request_while_pending_changes_nothing(
 
 
 async def test_an_approved_member_is_told_they_already_belong(
-    sut: SubmitJoinRequest, store: Store, clock: Clock
+    sut: SubmitJoinRequestCommandHandler, store: Store, clock: Clock
 ) -> None:
     approved = existing(store, clock, MemberStatus.APPROVED)
 
@@ -100,7 +107,7 @@ async def test_an_approved_member_is_told_they_already_belong(
 
 
 async def test_a_rejected_applicant_can_apply_again_with_a_new_version(
-    sut: SubmitJoinRequest, store: Store, clock: Clock
+    sut: SubmitJoinRequestCommandHandler, store: Store, clock: Clock
 ) -> None:
     rejected = existing(store, clock, MemberStatus.REJECTED)
     rejected.decided_by = rejected.id.value
@@ -118,7 +125,7 @@ async def test_a_rejected_applicant_can_apply_again_with_a_new_version(
 
 
 async def test_a_blocked_member_cannot_bypass_the_block(
-    sut: SubmitJoinRequest, store: Store, clock: Clock
+    sut: SubmitJoinRequestCommandHandler, store: Store, clock: Clock
 ) -> None:
     blocked = existing(store, clock, MemberStatus.BLOCKED)
 
@@ -129,7 +136,7 @@ async def test_a_blocked_member_cannot_bypass_the_block(
 
 
 async def test_the_sixth_request_in_a_minute_is_rate_limited(
-    sut: SubmitJoinRequest, store: Store
+    sut: SubmitJoinRequestCommandHandler, store: Store
 ) -> None:
     for _ in range(5):
         await sut.execute(SubmitJoinRequestCommand(APPLICANT))
@@ -140,7 +147,7 @@ async def test_the_sixth_request_in_a_minute_is_rate_limited(
 
 
 async def test_the_limit_is_kept_per_telegram_id(
-    sut: SubmitJoinRequest, limiter: FakeRateLimiter
+    sut: SubmitJoinRequestCommandHandler, limiter: FakeRateLimiter
 ) -> None:
     for _ in range(5):
         await sut.execute(SubmitJoinRequestCommand(APPLICANT))

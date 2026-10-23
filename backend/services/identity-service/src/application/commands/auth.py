@@ -41,7 +41,7 @@ class EnsureInitialAdminCommand:
     telegram_id: int
 
 
-class EnsureInitialAdmin:
+class EnsureInitialAdminCommandHandler:
     """Create the first admin once; an existing member is never changed."""
 
     def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
@@ -65,7 +65,7 @@ class IssueLoginCodeCommand:
     telegram_id: int
 
 
-class IssueLoginCode:
+class IssueLoginCodeCommandHandler:
     """Give an approved member a fresh code; any earlier live code is cancelled."""
 
     def __init__(
@@ -123,7 +123,7 @@ class ExchangeLoginCodeCommand:
     client: str
 
 
-class ExchangeLoginCode:
+class ExchangeLoginCodeCommandHandler:
     """Trade a live code for a session; the code works exactly once."""
 
     def __init__(
@@ -183,7 +183,7 @@ class LogoutCommand:
     session_id: UUID
 
 
-class Logout:
+class LogoutCommandHandler:
     """Revoke one session; there is no refresh to cancel."""
 
     def __init__(self, uow_factory: UnitOfWorkFactory, clock: Clock) -> None:
@@ -197,15 +197,15 @@ class Logout:
 
 
 __all__ = [
-    "EnsureInitialAdmin",
+    "EnsureInitialAdminCommandHandler",
     "EnsureInitialAdminCommand",
-    "ExchangeLoginCode",
+    "ExchangeLoginCodeCommandHandler",
     "ExchangeLoginCodeCommand",
-    "IssueLoginCode",
+    "IssueLoginCodeCommandHandler",
     "IssueLoginCodeCommand",
     "LOGIN_CODE_TTL",
     "LoginCodeView",
-    "Logout",
+    "LogoutCommandHandler",
     "LogoutCommand",
     "SESSION_TTL",
     "SessionGrant",

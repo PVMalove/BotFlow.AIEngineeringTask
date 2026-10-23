@@ -1,12 +1,11 @@
 """Long-polling Telegram process. Reads credentials from Docker secret files."""
 
-import asyncio
-import inspect
 import logging
 import os
 
 import httpx
 from aiogram import Bot
+from kernel_platform.worker import run_process, shutdown
 
 from api.containers import Container
 from infrastructure.identity_gateway import HttpIdentityGateway
@@ -50,17 +49,10 @@ async def main() -> None:
             # Our own loop: the offset moves only after the handler returned.
             await TelegramPoller(bot, dispatcher).run()
     finally:
-        shutdown = container.shutdown_resources()
-        if inspect.isawaitable(shutdown):
-            await shutdown
+        await shutdown(container)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        pass
-    except Exception:
-        raise SystemExit(
-            "Telegram bot unavailable; verify its secrets and services."
-        ) from None
+    run_process(
+        main, unavailable="Telegram bot unavailable; verify its secrets and services."
+    )

@@ -4,6 +4,7 @@ import json
 from uuid import UUID
 
 from kernel_platform.consumer import InvalidMessage
+from kernel_platform.envelope import ENVELOPE_VERSION
 
 from application.commands.record_task_result import (
     RecordTaskResultCommand,
@@ -11,7 +12,6 @@ from application.commands.record_task_result import (
 )
 
 RESULT_TYPE = "TaskCreated"
-ENVELOPE_VERSION = 1
 
 
 class TaskResultConsumer:

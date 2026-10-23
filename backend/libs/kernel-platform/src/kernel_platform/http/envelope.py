@@ -1,15 +1,11 @@
-"""Общий конверт успешного BFF-ответа (ADR 0002).
-
-`ApiResponse[T]` не зависит ни от одного catalog/identity/support DTO — `T`
-подставляет сам вызывающий сервис (`ApiResponse[ProductView]` и т.п.)."""
+"""The envelope of a successful API response."""
 
 from pydantic import BaseModel
 
 
 class ApiResponse[T](BaseModel):
-    """Успешный BFF-ответ: `data` — полезная нагрузка (может быть `None` для
-    удаления), `meta` — вспомогательные данные, всегда объект, пустой при
-    отсутствии (пагинация будущих list-эндпоинтов и т.п.)."""
+    """`data` is the payload; `meta` is an object, empty when there is nothing
+    to add (pagination of list endpoints)."""
 
     data: T
     meta: dict[str, object] = {}

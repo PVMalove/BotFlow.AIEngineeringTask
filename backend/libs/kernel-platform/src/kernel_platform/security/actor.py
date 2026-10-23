@@ -1,9 +1,4 @@
-"""Общий framework-independent контракт Actor (ADR 0005).
-
-`Actor` заменяет локальные для identity/support/catalog пары
-`actor_id`/`is_admin` и сервис-локальные дубликаты `Actor`: security-адаптер
-аутентифицирует вызывающего и строит это transport-neutral значение, а
-application-хендлеры сами принимают решения об авторизации над ним."""
+"""The authenticated caller, independent of the transport."""
 
 import enum
 import uuid
@@ -19,21 +14,18 @@ class ActorRole(enum.StrEnum):
 
 @dataclass(frozen=True)
 class Actor:
-    """Аутентифицированный вызывающий, передаваемый из HTTP-адаптера в use case."""
+    """The caller that the HTTP adapter passes to a use case."""
 
     id: uuid.UUID
     role: ActorRole
 
 
-_ADMIN_ONLY = ApiError(
-    status_code=403, code="FORBIDDEN", message="Доступ только для администраторов!"
-)
-
-
 def require_admin(actor: Actor) -> Actor:
-    """Общий admin-only гейт: `AdminActor`-зависимость FastAPI каждого
-    сервиса оборачивает эту функцию вместо дублирования проверки роли и
-    текста ошибки (ADR 0005)."""
+    """The shared admin-only gate for the `AdminActor` dependency of a service."""
     if actor.role is not ActorRole.ADMIN:
-        raise _ADMIN_ONLY
+        raise ApiError(
+            status_code=403,
+            code="forbidden",
+            message="Доступ только для администраторов!",
+        )
     return actor

@@ -2,10 +2,11 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from uuid import UUID
 
 from kernel_domain.result import Result
+from kernel_platform.clock import utcnow
 from kernel_platform.security.actor import Actor
 
 from application.authorization import may_change_status
@@ -28,7 +29,7 @@ class ChangeTaskStatusCommandHandler:
     def __init__(
         self,
         uow_factory: Callable[[], TasksUnitOfWork],
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self._uow_factory = uow_factory
         self._clock = clock

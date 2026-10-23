@@ -11,10 +11,11 @@ import asyncio
 import hashlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
 
+from kernel_platform.clock import utcnow
 from kernel_platform.retry import RetryPolicy
 
 from application.ports import (
@@ -81,7 +82,7 @@ class TranscribeVoiceCommandHandler:
         audio: AudioStore,
         stt: SpeechToText,
         *,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        clock: Callable[[], datetime] = utcnow,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         policy: RetryPolicy | None = None,
     ) -> None:

@@ -2,7 +2,9 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
+
+from kernel_platform.clock import utcnow
 
 from application.commands.admission import Admission
 from application.commands.job_acceptance import Accepted, JobAcceptance
@@ -32,7 +34,7 @@ class AcceptTextCommandHandler:
         identity: MemberDirectory,
         uow_factory: Callable[[], AutomationUnitOfWork],
         messenger: Messenger,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self._admission = Admission(identity, messenger)
         self._acceptance = JobAcceptance(uow_factory, clock=clock)

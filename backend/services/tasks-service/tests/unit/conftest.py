@@ -148,6 +148,10 @@ class FakeTasksUnitOfWork:
             self.before_update()
 
 
+def uuid_of(task: Task) -> UUID:
+    return task.id.value
+
+
 def _copy(task: Task) -> Task:
     return Task.reconstitute(
         task.id,
@@ -162,7 +166,3 @@ def _copy(task: Task) -> Task:
         created_at=task.created_at,
         updated_at=task.updated_at,
     )
-
-
-def uuid_of(task: Task) -> UUID:
-    return task.id.value
