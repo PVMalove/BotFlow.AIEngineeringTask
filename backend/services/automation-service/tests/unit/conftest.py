@@ -35,7 +35,9 @@ from domain.value_objects.job_id import JobId
 from domain.value_objects.job_status import JobKind, JobStatus
 from infrastructure.messaging.envelopes import (
     create_task_envelope,
+    outbox_id_for,
     transcribe_envelope,
+    transcribe_outbox_id_for,
 )
 
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
@@ -47,6 +49,7 @@ class World:
     intents: dict[IntentId, NotificationIntent] = field(default_factory=dict)
     inbox: set[str] = field(default_factory=set)
     outbox: dict[UUID, tuple[str, dict[str, Any]]] = field(default_factory=dict)
+    resets: list[UUID] = field(default_factory=list)  # outbox rows made due again
     commits: int = 0
 
 
@@ -150,6 +153,7 @@ class FakeAutomationUnitOfWork:
         self._working.intents = deepcopy(self._world.intents)
         self._working.inbox = set(self._world.inbox)
         self._working.outbox = deepcopy(self._world.outbox)
+        self._working.resets = list(self._world.resets)
         return self
 
     async def __aexit__(
@@ -168,6 +172,7 @@ class FakeAutomationUnitOfWork:
         self._world.intents = deepcopy(self._working.intents)
         self._world.inbox = set(self._working.inbox)
         self._world.outbox = deepcopy(self._working.outbox)
+        self._world.resets = list(self._working.resets)
         self._world.commits += 1
 
     async def rollback(self) -> None:
@@ -222,6 +227,11 @@ class FakeAutomationUnitOfWork:
                 )
             case JobRestarted():
                 data.intents.pop(IntentId.for_result(event.job_id.value), None)
+                data.resets.append(
+                    transcribe_outbox_id_for(event.job_id.value)
+                    if event.voice
+                    else outbox_id_for(event.job_id.value)
+                )
             case _:
                 return
 

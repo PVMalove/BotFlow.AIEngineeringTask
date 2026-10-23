@@ -374,6 +374,41 @@ async def test_an_unavailable_identity_is_retried_then_marked_failed() -> None:
     assert messages.sent == []
 
 
+async def test_a_restart_before_the_settle_repeats_one_notice_and_then_stops() -> None:
+    world, messages = World(), FakeMessenger(Log())
+    result = NotificationIntent.result(
+        IntentId(uuid4()),
+        chat_id=USER,
+        member_id=MEMBER_ID,
+        kind="task.result",
+        body="Задача создана: Купить молоко",
+    )
+    command = queued(world, result)
+    crash_after_send = True
+
+    def unit_of_work() -> FakeAutomationUnitOfWork:
+        if crash_after_send and messages.sent:
+            raise ConnectionError("worker killed before the settle")
+        return FakeAutomationUnitOfWork(world)
+
+    killed = DeliverNotificationCommandHandler(
+        unit_of_work, Identity(member()), messages
+    )
+    with pytest.raises(ConnectionError):
+        await killed.execute(command)
+    assert world.intents[result.id].status is IntentStatus.ENQUEUED  # still open
+
+    crash_after_send = False  # the entry is taken over after the restart
+    restarted = DeliverNotificationCommandHandler(
+        unit_of_work, Identity(member()), messages
+    )
+    assert await restarted.execute(command) is Delivery.DONE
+    assert await restarted.execute(command) is Delivery.DONE
+
+    assert len(messages.sent) == 2  # a rare duplicate is accepted, never a third
+    assert world.intents[result.id].status is IntentStatus.SENT
+
+
 async def test_a_telegram_failure_is_retried_and_a_later_success_is_sent() -> None:
     world = World()
     command = queued(world, intent())

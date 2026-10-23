@@ -226,6 +226,27 @@ PostgreSQL/Redis/RabbitMQ/MinIO без Whisper и без Telegram (`VoiceTaskFlo
 RU/hy и живой Telegram проверяются отдельно (#17).
 
 
+## Ошибка задания и replay (#15)
+
+Состояние одного текстового или голосового задания (без текста, `file_id`, ключа объекта и
+секретов) и безопасный повтор выполняются в запущенном `automation-worker`:
+
+```bash
+make job-status JOB=<uuid задания>   # kind, status, stage, попытки (max 3), error_code, task_created
+make job-replay JOB=<uuid задания>   # тот же job_id и строка outbox; лимит проверяется заново
+```
+
+Это короткие формы `docker compose --profile workers exec -T automation-worker python -m
+api.worker status|replay <job_id>`. `replay` действует только на задание в статусе `failed`;
+повтор команды ничего не меняет, превышение лимита оставляет задание `failed`. Для
+результата в Tasks остаётся прежняя команда `tasks-worker` (`python -m api.worker replay
+<job_id>`).
+
+Границы восстановления: после обычного рестарта воркера outbox и необработанные записи Redis
+Stream продолжаются сами, чекпоинт аудио и транскрипта сохраняется, редкое повторное
+уведомление допустимо. Удаление томов, backup/restore, сверка после потери Redis и
+автоматический retention не входят в готовность первой версии.
+
 ## Тесты на PostgreSQL
 
 Интеграционные тесты tasks-service с реальной БД (`tests/integration`) пропускаются, пока не

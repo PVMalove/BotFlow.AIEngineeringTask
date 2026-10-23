@@ -14,7 +14,7 @@ UV ?= uv
 	frontend-check frontend-test frontend-format frontend-build e2e \
 	_require-frontend-files _require-frontend-env _require-compose
 
-.PHONY: smoke voice-latency scripts-check scripts-test whisper-build whisper-prepare whisper-verify whisper-corpus-check whisper-bench
+.PHONY: smoke job-status job-replay _require-job voice-latency scripts-check scripts-test whisper-build whisper-prepare whisper-verify whisper-corpus-check whisper-bench
 
 WHISPER_MODEL ?= turbo
 export WHISPER_MODEL
@@ -79,6 +79,15 @@ test: backend-test frontend-test scripts-test ## Запустить backend/fron
 
 smoke: ## Настоящие ресурсы/DI/S3 и down/up в отдельном Compose-проекте; удаляет только свои тестовые тома
 	$(PYTHON) scripts/integration-smoke.py
+
+_require-job:
+	$(if $(JOB),,$(error Укажите JOB: make job-status JOB=<uuid задания>))
+
+job-status: compose-check _require-job ## Безопасное состояние одного задания (без текста и секретов): JOB=<uuid>
+	$(COMPOSE) --profile workers exec -T automation-worker python -m api.worker status "$(JOB)"
+
+job-replay: compose-check _require-job ## Повторить упавшее задание с прежним id, лимит проверяется заново: JOB=<uuid>
+	$(COMPOSE) --profile workers exec -T automation-worker python -m api.worker replay "$(JOB)"
 
 voice-latency: compose-check ## Задержка голосового пути update -> задача по данным Automation: ARGS="--last 20"
 	$(COMPOSE) run --rm --no-deps automation-bootstrap python scripts/voice_latency.py $(ARGS)

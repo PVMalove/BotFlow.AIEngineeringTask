@@ -13,6 +13,7 @@ SCRIPTS = Path(__file__).parents[2] / "scripts"
 def test_the_worker_loads_and_has_the_transcription_command() -> None:
     assert inspect.iscoroutinefunction(worker.transcription)
     assert inspect.iscoroutinefunction(worker.replay)
+    assert inspect.iscoroutinefunction(worker.status)
 
 
 def test_the_bot_and_bootstrap_entry_points_load() -> None:

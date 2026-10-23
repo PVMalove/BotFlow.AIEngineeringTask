@@ -194,6 +194,10 @@ class Job(Entity[JobId]):
             voice=voice,
         )
 
+    @property
+    def has_failed(self) -> bool:
+        return self.status is JobStatus.FAILED
+
     def mark_acked(self, at: datetime) -> None:
         """The author heard that the message is safe; recorded once."""
         if self.acked_at is None:
@@ -232,7 +236,9 @@ class Job(Entity[JobId]):
         if self.status is not JobStatus.FAILED:
             return False
         self.status = JobStatus.ACCEPTED
+        self.last_error = None
         self.updated_at = now
+        self.add_domain_event(JobRestarted(job_id=self.id, voice=False))
         return True
 
     def begin_voice_attempt(self, now: datetime, cold_start: bool) -> bool:

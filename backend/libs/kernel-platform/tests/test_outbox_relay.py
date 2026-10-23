@@ -202,6 +202,52 @@ async def test_an_unavailable_broker_does_not_spend_an_attempt() -> None:
     assert "ConnectionRefusedError" in store.last_tx.errors[row.id]
 
 
+async def test_attempts_and_delays_survive_a_restart_and_stop_at_three() -> None:
+    store, publisher = Store(), Publisher()
+    row = store.add()
+    publisher.failure = RuntimeError("nack")
+    exhausted: list[UUID] = []
+
+    async def on_exhausted(tx: Tx, entry: OutboxRow, error: str) -> None:
+        exhausted.append(entry.id)
+
+    # Every step is a new relay over the stored row, as after a process restart.
+    await relay(store, publisher, NOW, on_exhausted).execute()
+    await relay(store, publisher, NOW + timedelta(seconds=4), on_exhausted).execute()
+    assert store.rows[row.id].attempts == 1
+    await relay(store, publisher, NOW + timedelta(seconds=5), on_exhausted).execute()
+    assert store.rows[row.id].attempts == 2
+    assert store.rows[row.id].next_attempt_at == NOW + timedelta(seconds=35)
+    await relay(store, publisher, NOW + timedelta(seconds=34), on_exhausted).execute()
+    assert store.rows[row.id].attempts == 2 and exhausted == []
+    await relay(store, publisher, NOW + timedelta(seconds=35), on_exhausted).execute()
+
+    assert store.rows[row.id].attempts == 3
+    assert store.rows[row.id].next_attempt_at is None
+    assert exhausted == [row.id]
+    await relay(store, publisher, NOW + timedelta(hours=1), on_exhausted).execute()
+    assert store.rows[row.id].attempts == 3 and exhausted == [row.id]  # no 4th try
+
+
+async def test_a_long_outage_never_exhausts_the_row_or_requeues_it_at_once() -> None:
+    store, publisher = Store(), Publisher()
+    row = store.add()
+    publisher.failure = ConnectionRefusedError("broker down")
+    exhausted: list[UUID] = []
+
+    async def on_exhausted(tx: Tx, entry: OutboxRow, error: str) -> None:
+        exhausted.append(entry.id)
+
+    now = NOW
+    for _ in range(10):
+        await relay(store, publisher, now, on_exhausted).execute()
+        due = store.rows[row.id].next_attempt_at
+        assert due is not None and due >= now + timedelta(seconds=5)
+        now = due
+
+    assert (store.rows[row.id].attempts, exhausted) == (0, [])
+
+
 async def test_one_failing_row_does_not_stop_the_rest_of_the_batch() -> None:
     store = Store()
     first = store.add(created_at=NOW)
@@ -218,6 +264,28 @@ async def test_one_failing_row_does_not_stop_the_rest_of_the_batch() -> None:
     flaky = Flaky()
     assert await relay(store, flaky).execute() == 1
     assert [p[2] for p in flaky.published] == [str(second.id)]
+
+
+async def test_a_crash_after_the_confirm_publishes_the_same_message_id_again() -> None:
+    store, publisher = Store(), Publisher()
+    row = store.add()
+
+    class Crashing(Tx):
+        async def mark_published(self, entry_id: UUID, now: datetime) -> None:
+            raise OSError("process killed before the transaction ends")
+
+    @asynccontextmanager
+    async def dying() -> AsyncIterator[Tx]:
+        async with store.transaction() as tx:
+            yield Crashing(tx.rows)
+
+    with pytest.raises(OSError):
+        await RelayOutbox(dying, publisher, clock=lambda: NOW).execute()
+    assert store.rows[row.id].attempts == 0  # nothing was spent or marked
+
+    assert await relay(store, publisher).execute() == 1  # the restarted relay
+
+    assert [p[2] for p in publisher.published] == [str(row.id)] * 2  # same identity
 
 
 async def test_a_storage_error_propagates_and_rolls_back() -> None:
