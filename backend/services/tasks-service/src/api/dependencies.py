@@ -3,6 +3,7 @@
 from typing import Annotated
 
 from fastapi import Depends, Request
+from fastapi.requests import HTTPConnection
 from kernel_platform.http.match import raise_error, unwrap
 from kernel_platform.security.actor import Actor
 from kernel_platform.security.errors import AuthErrors
@@ -14,8 +15,8 @@ from application.queries.list_tasks import ListTasksQueryHandler
 from infrastructure.identity_gateway import SESSION_COOKIE
 
 
-async def get_services(request: Request) -> Services:
-    services: Services = await request.app.state.container.services.async_()
+async def get_services(connection: HTTPConnection) -> Services:
+    services: Services = await connection.app.state.container.services.async_()
     return services
 
 

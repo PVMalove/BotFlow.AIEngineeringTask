@@ -5,9 +5,9 @@ from itertools import permutations
 from uuid import uuid4
 
 import pytest
-from conftest import AUTHOR, BASE, Board, FakeTasksUnitOfWork
 from kernel_domain.errors import ErrorType
 from kernel_platform.security.actor import Actor, ActorRole
+from support.fakes import AUTHOR, BASE, Board, FakeTasksUnitOfWork
 
 from application.commands.change_task_status import (
     ChangeTaskStatusCommand,

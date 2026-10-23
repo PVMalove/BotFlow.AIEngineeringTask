@@ -5,8 +5,8 @@ from itertools import permutations
 from uuid import uuid4
 
 import pytest
-from conftest import BASE, Board
 from kernel_domain.errors import ErrorType
+from support.fakes import BASE, Board
 
 from domain.entities.task import MAX_NAME, MAX_TEXT, Task
 from domain.events.task_domain_event import TaskCreated, TaskStatusChanged

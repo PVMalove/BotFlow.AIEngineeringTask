@@ -1,5 +1,6 @@
 """Boundaries of the task use cases."""
 
+from contextlib import AbstractAsyncContextManager
 from typing import Protocol
 
 from kernel_platform.pagination import Cursor
@@ -21,3 +22,24 @@ class TaskReader(Protocol):
 
 class IdentityUnavailable(Exception):
     """Identity cannot confirm the session; access is never assumed."""
+
+
+class BoardFeedUnavailable(Exception):
+    """The signal source failed. Not a storage error: nothing is lost or rolled
+    back, the client reconnects and re-reads the board."""
+
+
+class BoardSubscription(Protocol):
+    async def wait(self, timeout: float) -> bool:
+        """True when the board changed since the last call, False after `timeout`.
+
+        Signals that piled up in between count once. A signal is only a hint to
+        re-read the board: one that was missed is not an error.
+        """
+        ...
+
+
+class BoardFeed(Protocol):
+    def subscribe(self) -> AbstractAsyncContextManager[BoardSubscription]:
+        """Signals are received from the moment the context is entered."""
+        ...

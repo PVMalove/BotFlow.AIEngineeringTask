@@ -6,11 +6,11 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from conftest import AUTHOR, Board, FakeTasksUnitOfWork
 from kernel_domain.errors import Error
 from kernel_domain.result import Result
 from kernel_platform.security.actor import Actor, ActorRole
 from kernel_platform.security.errors import AuthErrors
+from support.fakes import AUTHOR, Board, FakeBoardFeed, FakeTasksUnitOfWork
 
 from api.containers import Services
 from api.dependencies import get_services
@@ -53,6 +53,7 @@ class Env:
             change_task_status=ChangeTaskStatusCommandHandler(
                 lambda: FakeTasksUnitOfWork(self.board)
             ),
+            board_feed=FakeBoardFeed(),
         )
 
 

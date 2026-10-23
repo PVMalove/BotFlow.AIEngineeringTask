@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from conftest import Board, FakeTasksUnitOfWork
 from kernel_domain.errors import ErrorType
 from kernel_platform.consumer import InvalidMessage
+from support.fakes import Board, FakeTasksUnitOfWork
 
 from application.commands.create_task import (
     CreateTaskCommand,
@@ -110,6 +110,33 @@ async def test_a_second_message_for_one_source_yields_one_task_and_one_event() -
     assert second.is_ok
     assert len(board.tasks) == 1
     assert len(board.events) == 1  # and one TaskCreated outbox row
+
+
+async def test_a_new_task_runs_the_after_commit_handlers_once() -> None:
+    board = Board()
+    handled = AsyncMock()
+    sut = CreateTaskCommandHandler(
+        lambda: FakeTasksUnitOfWork(board, [handled]), lambda: NOW
+    )
+
+    await sut.execute(new_command(message_id="m-1"))
+    await sut.execute(new_command(message_id="m-1"))  # a redelivery
+
+    handled.assert_awaited_once()
+    assert isinstance(handled.await_args_list[0].args[0], TaskCreated)
+
+
+async def test_a_failing_after_commit_handler_does_not_fail_the_creation() -> None:
+    board = Board()
+    handled = AsyncMock(side_effect=OSError("redis down"))
+    sut = CreateTaskCommandHandler(
+        lambda: FakeTasksUnitOfWork(board, [handled]), lambda: NOW
+    )
+
+    result = await sut.execute(new_command())
+
+    assert result.is_ok and result.value is True
+    assert len(board.tasks) == 1
 
 
 async def test_a_different_source_is_a_different_task() -> None:
