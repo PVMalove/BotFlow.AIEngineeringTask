@@ -169,6 +169,224 @@ for (const { outcome, expected, expectedStatus } of [
   );
 }
 
+test('keeps an uncertain task blocked across navigation until manual reread succeeds', async ({
+  page,
+}) => {
+  let task = { ...original };
+  let uncertain = false;
+  let readsFail = true;
+  const patches: unknown[] = [];
+  await page.route('**/api/v1/users/me', (route) =>
+    route.fulfill({
+      json: {
+        id: 'owner',
+        role: 'admin',
+        status: 'approved',
+        display_name: 'Malove',
+      },
+    }),
+  );
+  await page.route('**/api/v1/admin/**', (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route('**/api/v1/tasks?**', (route) => {
+    if (uncertain && readsFail) return route.fulfill({ status: 503 });
+    return route.fulfill({
+      json: {
+        data:
+          new URL(route.request().url()).searchParams.get('status') ===
+          task.status
+            ? [task]
+            : [],
+        meta: { has_more: false },
+      },
+    });
+  });
+  await page.route('**/api/v1/tasks/task', (route) => {
+    if (route.request().method() === 'PATCH') {
+      patches.push(route.request().postDataJSON());
+      if (patches.length === 1) {
+        task = { ...task, status: 'in_progress', version: 2 };
+        uncertain = true;
+        return route.abort('failed');
+      }
+      task = { ...task, status: 'completed', version: 3 };
+      return route.fulfill({ json: { data: task } });
+    }
+    if (readsFail) return route.fulfill({ status: 503 });
+    return route.fulfill({ json: { data: task } });
+  });
+
+  await page.goto('/');
+  await page.getByRole('button', { name: original.text, exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog
+    .getByLabel('Статус', { exact: true })
+    .selectOption('in_progress');
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText(
+    'Не удалось перечитать задачу',
+  );
+  await expect(
+    dialog.getByRole('button', { name: 'Сохранить', exact: true }),
+  ).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Отмена', exact: true }).click();
+
+  await page
+    .getByRole('link', { name: 'Управление доступом', exact: true })
+    .click();
+  await page
+    .getByRole('link', { name: 'Командная доска', exact: true })
+    .click();
+  await expect(
+    page.getByRole('button', { name: /Перенести задачу/ }),
+  ).toBeDisabled();
+  await page.getByRole('button', { name: original.text, exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText(
+    'Не удалось перечитать задачу',
+  );
+  await expect(
+    dialog.getByRole('button', { name: 'Сохранить', exact: true }),
+  ).toBeDisabled();
+  await expect(dialog.getByLabel('Статус', { exact: true })).toBeDisabled();
+  expect(patches).toEqual([{ status: 'in_progress', expected_version: 1 }]);
+
+  // Refreshing the list must not replace the required explicit task reread.
+  await dialog.getByRole('button', { name: 'Отмена', exact: true }).click();
+  readsFail = false;
+  await page
+    .getByRole('button', { name: 'Обновить доску', exact: true })
+    .click();
+  await expect(
+    page
+      .getByRole('region', { name: 'В работе', exact: true })
+      .getByRole('listitem'),
+  ).toHaveCount(1);
+  await page.getByRole('button', { name: original.text, exact: true }).click();
+  await expect(
+    dialog.getByRole('button', { name: 'Сохранить', exact: true }),
+  ).toBeDisabled();
+  await dialog.getByRole('button', { name: 'Повторить', exact: true }).click();
+  await expect(dialog.getByLabel('Статус', { exact: true })).toHaveValue(
+    'in_progress',
+  );
+  await expect(
+    dialog.getByRole('button', { name: 'Сохранить', exact: true }),
+  ).toBeEnabled();
+  await dialog.getByLabel('Статус', { exact: true }).selectOption('completed');
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(patches).toEqual([
+    { status: 'in_progress', expected_version: 1 },
+    { status: 'completed', expected_version: 2 },
+  ]);
+  await expect(
+    page
+      .getByRole('region', { name: 'Завершено', exact: true })
+      .getByRole('listitem'),
+  ).toHaveCount(1);
+});
+
+test('ignores a late failed save after logout and lets the same member save in a new session', async ({
+  page,
+}) => {
+  const member = {
+    id: 'owner',
+    role: 'admin',
+    status: 'approved',
+    display_name: 'Malove',
+  };
+  let signedIn = true;
+  let task = { ...original };
+  const patches: unknown[] = [];
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  await page.route('**/api/v1/users/me', (route) =>
+    route.fulfill(signedIn ? { json: member } : { status: 401 }),
+  );
+  await page.route('**/api/v1/auth/logout', (route) => {
+    signedIn = false;
+    return route.fulfill({ status: 204 });
+  });
+  await page.route('**/api/v1/auth/exchange', (route) => {
+    signedIn = true;
+    return route.fulfill({ json: member });
+  });
+  await page.route('**/api/v1/admin/**', (route) =>
+    route.fulfill({ json: [] }),
+  );
+  await page.route('**/api/v1/tasks?**', (route) =>
+    route.fulfill({
+      json: {
+        data:
+          new URL(route.request().url()).searchParams.get('status') ===
+          task.status
+            ? [task]
+            : [],
+        meta: { has_more: false },
+      },
+    }),
+  );
+  await page.route('**/api/v1/tasks/task', async (route) => {
+    if (route.request().method() !== 'PATCH')
+      return route.fulfill({ status: 503 });
+    patches.push(route.request().postDataJSON());
+    if (patches.length === 1) {
+      await gate;
+      return route.fulfill({ status: 503 });
+    }
+    task = { ...task, status: 'completed', version: 2 };
+    return route.fulfill({ json: { data: task } });
+  });
+
+  await page.goto('/admin');
+  await page
+    .getByRole('link', { name: 'Командная доска', exact: true })
+    .click();
+  await page.getByRole('button', { name: original.text, exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog
+    .getByLabel('Статус', { exact: true })
+    .selectOption('in_progress');
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(
+    page.getByRole('button', { name: 'Сохраняем…', exact: true }),
+  ).toBeDisabled();
+  await page.goBack();
+  await expect(page).toHaveURL(/\/admin$/);
+  await page.getByRole('button', { name: 'Выйти', exact: true }).click();
+  await expect(page.getByLabel('Код из Telegram')).toBeVisible();
+
+  const failedResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'PATCH' &&
+      response.url().endsWith('/tasks/task'),
+  );
+  finish();
+  await (await failedResponse).finished();
+  await page.getByLabel('Код из Telegram').fill('a'.repeat(32));
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await page.getByRole('button', { name: original.text, exact: true }).click();
+  await expect(dialog.getByRole('alert')).toHaveCount(0);
+  await expect(
+    dialog.getByRole('button', { name: 'Сохранить', exact: true }),
+  ).toBeEnabled();
+  await dialog.getByLabel('Статус', { exact: true }).selectOption('completed');
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page
+      .getByRole('region', { name: 'Завершено', exact: true })
+      .getByRole('listitem'),
+  ).toHaveCount(1);
+  expect(patches).toEqual([
+    { status: 'in_progress', expected_version: 1 },
+    { status: 'completed', expected_version: 1 },
+  ]);
+});
+
 test('lets a regular user read a foreign task without status actions', async ({
   page,
 }) => {
@@ -203,7 +421,7 @@ test('lets a regular user read a foreign task without status actions', async ({
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 
-test('blocks duplicate submissions until the response completes', async ({
+test('blocks duplicate submissions across navigation until the response completes', async ({
   page,
 }) => {
   let finish!: () => void;
@@ -213,6 +431,9 @@ test('blocks duplicate submissions until the response completes', async ({
   let patches = 0;
   await page.route('**/api/v1/users/me', (route) =>
     route.fulfill({ json: { id: 'admin', role: 'admin', status: 'approved' } }),
+  );
+  await page.route('**/api/v1/admin/**', (route) =>
+    route.fulfill({ json: [] }),
   );
   await page.route('**/api/v1/tasks?**', (route) =>
     route.fulfill({
@@ -232,6 +453,12 @@ test('blocks duplicate submissions until the response completes', async ({
     await route.fulfill({ json: { data: original } });
   });
   await page.goto('/');
+  await page
+    .getByRole('link', { name: 'Управление доступом', exact: true })
+    .click();
+  await page
+    .getByRole('link', { name: 'Командная доска', exact: true })
+    .click();
   await page.getByRole('button', { name: original.text, exact: true }).click();
   await page
     .getByRole('dialog')
@@ -242,7 +469,20 @@ test('blocks duplicate submissions until the response completes', async ({
   ).toBeDisabled();
   await page.keyboard.press('Enter');
   expect(patches).toBe(1);
+
+  // Browser Back is still available while the modal waits for the response.
+  await page.goBack();
+  await expect(page).toHaveURL(/\/admin$/);
+  await page
+    .getByRole('link', { name: 'Командная доска', exact: true })
+    .click();
+  const handle = page.getByRole('button', { name: /Перенести задачу/ });
+  await expect(handle).toBeDisabled();
+  await page.getByRole('button', { name: original.text, exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect(patches).toBe(1);
   finish();
+  await expect(handle).toBeEnabled();
   await expect(page.getByRole('dialog')).toHaveCount(0);
 });
 

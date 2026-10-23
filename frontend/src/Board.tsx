@@ -14,7 +14,12 @@ import {
   Stack,
   Typography,
 } from '@mui/material';
-import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  skipToken,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import type { InfiniteData } from '@tanstack/react-query';
 import { Fragment, useEffect, useRef, useState } from 'react';
 
@@ -48,6 +53,13 @@ type Notice =
   | 'accessDenied'
   | 'rateLimited';
 
+type TaskOperation = {
+  attemptId: symbol;
+  task: Task;
+  phase: 'saving' | 'blocked';
+  notice: Notice | null;
+};
+
 export function Board({
   member,
   messages,
@@ -73,11 +85,21 @@ export function Board({
   ] as const;
   const [opened, setOpened] = useState<Task | null>(null);
   const [selected, setSelected] = useState<TaskStatus>('pending');
-  const [busy, setBusy] = useState(false);
-  const lock = useRef(false);
-  const failedTask = useRef<Task | null>(null);
-  const [blocked, setBlocked] = useState(false);
-  const [notice, setNotice] = useState<Notice | null>(null);
+  // This session-scoped state must survive Board unmounting during navigation.
+  // SessionRoutes removes it along with other private cache entries on logout.
+  const operationKey = ['task-operation', member.id] as const;
+  const { data: operation } = useQuery<TaskOperation | null>({
+    queryKey: operationKey,
+    queryFn: skipToken,
+    initialData: null,
+    gcTime: Infinity,
+  });
+  const busy = operation?.phase === 'saving';
+  const blocked = operation?.phase === 'blocked';
+  const [localNotice, setNotice] = useState<Notice | null>(null);
+  const notice = operation?.notice ?? localNotice;
+  const setOperation = (next: TaskOperation | null) =>
+    client.setQueryData(operationKey, next);
   const [dragged, setDragged] = useState<Task | null>(null);
   const [over, setOver] = useState<string | null>(null);
   const suppressClick = useRef(false);
@@ -101,6 +123,33 @@ export function Board({
     dateStyle: 'medium',
     timeStyle: 'short',
   });
+
+  function beginOperation(
+    task: Task,
+    notice: Notice | null = null,
+  ): TaskOperation {
+    const attempt: TaskOperation = {
+      attemptId: Symbol(),
+      task,
+      phase: 'saving',
+      notice,
+    };
+    setOperation(attempt);
+    return attempt;
+  }
+
+  function ownsOperation(attempt: TaskOperation) {
+    return (
+      client.getQueryData<TaskOperation | null>(operationKey)?.attemptId ===
+      attempt.attemptId
+    );
+  }
+
+  function finishOperation(attempt: TaskOperation) {
+    const current = client.getQueryData<TaskOperation | null>(operationKey);
+    if (current?.phase === 'saving' && current.attemptId === attempt.attemptId)
+      setOperation(null);
+  }
 
   function putTask(task: Task | null, id: string) {
     // A delayed mutation/GET must not replace a newer REST (or future WS) version.
@@ -131,31 +180,35 @@ export function Board({
     return task;
   }
 
-  async function reconcile(task: Task, reason: Notice) {
-    setBlocked(true);
+  async function reconcile(attempt: TaskOperation, reason: Notice) {
+    const { task } = attempt;
     try {
       const fresh = await getTask(task.id);
+      if (!ownsOperation(attempt)) return;
       await client.cancelQueries({ queryKey: key });
+      if (!ownsOperation(attempt)) return;
       const observed = putTask(fresh, task.id) ?? fresh;
       setOpened((current) =>
         current?.id === observed.id ? observed : current,
       );
       // A second command requires the user to select again against the observed version.
       setSelected(observed.status);
-      setBlocked(false);
       setNotice(reason);
     } catch (error) {
+      if (!ownsOperation(attempt)) return;
       if (error instanceof ApiError && error.status === 404) {
         putTask(null, task.id);
         setNotice('taskMissing');
         setOpened(null);
-        setBlocked(false);
       } else {
-        setNotice(
-          error instanceof ApiError && [401, 403].includes(error.status)
-            ? 'accessDenied'
-            : 'taskReconcileFailed',
-        );
+        setOperation({
+          ...attempt,
+          phase: 'blocked',
+          notice:
+            error instanceof ApiError && [401, 403].includes(error.status)
+              ? 'accessDenied'
+              : 'taskReconcileFailed',
+        });
         if (error instanceof ApiError && [401, 403].includes(error.status))
           void client.invalidateQueries({ queryKey: ['session'] });
       }
@@ -164,31 +217,33 @@ export function Board({
   }
 
   async function save(task: Task, status: TaskStatus) {
-    if (lock.current || blocked || !mayEdit(task)) return;
-    failedTask.current = task;
-    lock.current = true;
-    setBusy(true);
+    if (client.getQueryData(operationKey) || !mayEdit(task)) return;
+    const attempt = beginOperation(task);
     setNotice(null);
     try {
       await client.cancelQueries({ queryKey: key });
+      if (!ownsOperation(attempt)) return;
       const changed = await changeTaskStatus(task, status);
+      if (!ownsOperation(attempt)) return;
       putTask(changed, task.id);
       setOpened(null);
       await client.invalidateQueries({ queryKey: key });
     } catch (error) {
+      if (!ownsOperation(attempt)) return;
       if (error instanceof ApiError && error.status === 409) {
-        await reconcile(task, 'taskConflict');
+        await reconcile(attempt, 'taskConflict');
       } else if (
         !(error instanceof ApiError) ||
         error.status === 0 ||
         error.status >= 500
       ) {
-        await reconcile(task, 'taskUnknown');
+        await reconcile(attempt, 'taskUnknown');
       } else if (error.status === 403) {
-        await reconcile(task, 'accessDenied');
-        void client.invalidateQueries({ queryKey: ['session'] });
+        await reconcile(attempt, 'accessDenied');
+        if (ownsOperation(attempt))
+          void client.invalidateQueries({ queryKey: ['session'] });
       } else if (error.status === 404) {
-        await reconcile(task, 'taskMissing');
+        await reconcile(attempt, 'taskMissing');
       } else {
         setNotice(
           error instanceof ApiError && [401, 403].includes(error.status)
@@ -201,21 +256,18 @@ export function Board({
           void client.invalidateQueries({ queryKey: ['session'] });
       }
     } finally {
-      lock.current = false;
-      setBusy(false);
+      finishOperation(attempt);
     }
   }
 
   async function retryReconcile() {
-    const task = failedTask.current;
-    if (!task || lock.current) return;
-    lock.current = true;
-    setBusy(true);
+    const current = client.getQueryData<TaskOperation | null>(operationKey);
+    if (current?.phase !== 'blocked') return;
+    const attempt = beginOperation(current.task, current.notice);
     try {
-      await reconcile(task, 'taskUnknown');
+      await reconcile(attempt, 'taskUnknown');
     } finally {
-      lock.current = false;
-      setBusy(false);
+      finishOperation(attempt);
     }
   }
 
@@ -393,7 +445,7 @@ export function Board({
                             if (
                               suppressClick.current ||
                               busy ||
-                              (blocked && failedTask.current?.id !== task.id)
+                              (blocked && operation?.task.id !== task.id)
                             )
                               return;
                             setOpened(task);
@@ -437,7 +489,6 @@ export function Board({
           dateFormat={dateFormat}
           close={() => setOpened(null)}
           save={() => {
-            failedTask.current = opened;
             void save(opened, selected);
           }}
           retry={() => void retryReconcile()}

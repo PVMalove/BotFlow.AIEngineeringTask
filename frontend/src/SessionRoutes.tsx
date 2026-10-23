@@ -20,6 +20,17 @@ import { AdminAccess } from './AdminAccess';
 import { errorMessage } from './errors';
 import type { Locale, Messages } from './locale';
 
+const navigationTabSx = {
+  px: 0,
+  borderRadius: 0,
+  fontWeight: 400,
+  '&.active': {
+    fontWeight: 600,
+    borderBottom: '2px solid',
+    borderColor: 'primary.main',
+  },
+};
+
 function clearNonSessionQueries(
   client: ReturnType<typeof useQueryClient>,
 ): void {
@@ -262,16 +273,7 @@ export function SessionRoutes({
                       to="/"
                       end
                       color="secondary"
-                      sx={{
-                        px: 0,
-                        borderRadius: 0,
-                        fontWeight: 400,
-                        '&.active': {
-                          fontWeight: 600,
-                          borderBottom: '2px solid',
-                          borderColor: 'primary.main',
-                        },
-                      }}
+                      sx={navigationTabSx}
                     >
                       {messages.board}
                     </Button>
@@ -280,16 +282,7 @@ export function SessionRoutes({
                         component={NavLink}
                         to="/admin"
                         color="secondary"
-                        sx={{
-                          px: 0,
-                          borderRadius: 0,
-                          fontWeight: 400,
-                          '&.active': {
-                            fontWeight: 600,
-                            borderBottom: '2px solid',
-                            borderColor: 'primary.main',
-                          },
-                        }}
+                        sx={navigationTabSx}
                       >
                         {messages.adminTitle}
                       </Button>
