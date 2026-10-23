@@ -34,8 +34,95 @@
 в приватном bucket S3 хранилища MinIO. Панель получает сигнал через WebSocket и перечитывает
 данные по REST.
 
-**Стек:** Python 3.12, FastAPI, SQLAlchemy, PostgreSQL, RabbitMQ, Redis, MinIO,
-Whisper, React, TypeScript, Vite, Docker Compose.
+## Стек
+
+| Область | Технологии |
+| --- | --- |
+| Backend | Python 3.12, FastAPI, Pydantic Settings, SQLAlchemy async, asyncpg, Alembic |
+| Архитектура | Hexagonal Architecture, локальный CQRS, UoW, outbox/inbox, DI |
+| Telegram | aiogram 3, long polling |
+| Распознавание | Официальный локальный OpenAI Whisper, ffmpeg; подключение после проверки модели |
+| Межсервисный обмен | RabbitMQ, aio-pika |
+| Внутренние задания | Redis Streams: транскрипция и Telegram-уведомления |
+| Realtime | Redis Pub/Sub, WebSocket, REST-синхронизация |
+| Хранение | PostgreSQL, приватный MinIO bucket для аудио |
+| Frontend | React, TypeScript, Vite, Material UI, TanStack Query, React Router |
+| Инструменты | uv/uv.lock, Node 24 LTS/npm/package-lock, Ruff, mypy, ESLint, Prettier |
+| Проверки | pytest, HTTPX, Vitest, React Testing Library, Playwright — сценарии добавляются с функциональностью |
+| Контейнеры | Docker Compose, отдельные образы сервисов, nginx для SPA/API/WS |
+
+## Структура проекта
+
+```text
+BotFlow.AIEngineeringTask/
+├── README.md
+├── CONTEXT.md                         # язык предметной области
+├── Makefile                           # общие команды
+├── docker-compose.yml                 # инфраструктура и процессы
+├── .env.example                       # открытые параметры и пути секретов
+├── scripts/
+│   └── init-local-secrets.py           # локальные credentials без вывода значений
+├── docs/
+│   ├── architecture.md                # границы, потоки, надёжность и статус каркаса
+│   ├── frontend-design.md             # визуальное направление и RU/HY
+│   └── adr/                           # архитектурные решения
+├── infra/
+│   ├── minio/Dockerfile                # сборка официального MinIO по commit SHA
+│   └── redis/redis.conf                # AOF и ACL
+├── frontend/
+│   ├── Dockerfile
+│   ├── nginx.conf                     # единый origin SPA/API/WebSocket
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── vite.config.ts
+│   ├── playwright.config.ts
+│   ├── e2e/                           # место браузерных сценариев
+│   └── src/
+│       ├── components/
+│       ├── hooks/
+│       ├── App.tsx
+│       └── main.tsx
+└── backend/
+    ├── Makefile
+    ├── pyproject.toml                  # uv workspace
+    ├── uv.lock
+    ├── libs/                           # общие технические библиотеки, не бизнес-модели
+    │   ├── kernel-domain/              # Result, Error, Entity, DomainEvent
+    │   ├── kernel-platform/            # HTTP-контракт, UoW, outbox, воркеры
+    │   ├── observability/              # request id, логи
+    │   └── test-support/               # общие тестовые двойники
+    └── services/
+        ├── identity-service/
+        ├── tasks-service/
+        └── automation-service/
+            ├── Dockerfile             # у каждого сервиса свой образ
+            ├── pyproject.toml
+            ├── src/                   # корень импортов конкретного сервиса
+            │   ├── domain/            # чистая модель и инварианты
+            │   │   ├── entities/
+            │   │   ├── value_objects/
+            │   │   ├── events/
+            │   │   ├── repositories.py
+            │   │   └── unit_of_work.py
+            │   ├── application/       # commands/, queries/, ports.py
+            │   ├── infrastructure/    # реализации портов: db/, security/
+            │   │   └── db/
+            │   │       ├── alembic.ini
+            │   │       └── alembic/
+            │   ├── api/               # HTTP, схемы, containers.py, worker/bot/bootstrap
+            │   ├── contracts/         # framework-independent View: frozen dataclasses
+            │   ├── core/              # кросс-срезная политика сервиса
+            │   └── common/            # локальные утилиты
+            ├── tests/
+            │   ├── unit/
+            │   ├── integration/
+            │   ├── e2e/
+            │   └── performance/
+            ├── k8s/
+            ├── docs/
+            ├── ci/
+            └── scripts/               # служебные CLI (voice_latency, whisper_validate)
+```
 
 ## Запуск
 
