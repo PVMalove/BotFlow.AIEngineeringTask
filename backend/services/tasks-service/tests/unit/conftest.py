@@ -1,7 +1,9 @@
 """In-memory ports of the tasks service: a board, repositories, a transaction."""
 
+import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
@@ -182,3 +184,35 @@ def _copy(task: Task) -> Task:
         updated_at=task.updated_at,
         source_type=task.source_type,
     )
+
+
+class FakeBoardSubscription:
+    """`wait` answers from a script (True: a signal, False: a quiet interval);
+    when the script is over the connection stays quiet until it is closed."""
+
+    def __init__(self, script: Sequence[bool], timeouts: list[float]) -> None:
+        self._script = list(script)
+        self._timeouts = timeouts
+
+    async def wait(self, timeout: float) -> bool:
+        self._timeouts.append(timeout)
+        if self._script:
+            return self._script.pop(0)
+        await asyncio.Event().wait()
+        return False
+
+
+class FakeBoardFeed:
+    def __init__(self, script: Sequence[bool] = ()) -> None:
+        self.script = list(script)
+        self.timeouts: list[float] = []
+        self.subscribed = 0
+        self.unsubscribed = 0
+
+    @asynccontextmanager
+    async def subscribe(self) -> AsyncIterator[FakeBoardSubscription]:
+        self.subscribed += 1
+        try:
+            yield FakeBoardSubscription(self.script, self.timeouts)
+        finally:
+            self.unsubscribed += 1

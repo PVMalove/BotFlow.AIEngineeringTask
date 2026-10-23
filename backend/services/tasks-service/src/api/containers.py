@@ -15,9 +15,10 @@ from kernel_platform.settings import Settings
 
 from application.commands.change_task_status import ChangeTaskStatusCommandHandler
 from application.commands.create_task import CreateTaskCommandHandler
+from application.ports import BoardFeed
 from application.queries.get_task import GetTaskQueryHandler
 from application.queries.list_tasks import ListTasksQueryHandler
-from infrastructure.board_signal import RedisBoardSignal
+from infrastructure.board_signal import RedisBoardFeed, RedisBoardSignal
 from infrastructure.db.tables import outbox
 from infrastructure.db.task_reader import SqlTaskReader
 from infrastructure.db.unit_of_work import SqlTasksUnitOfWork
@@ -63,6 +64,11 @@ def build_worker(resources: Resources) -> TaskWorker:
     )
 
 
+# Shorter than the ingress read timeout (75 s): a quiet board keeps its socket,
+# and a revoked member is dropped within one interval.
+BOARD_HEARTBEAT = 25.0
+
+
 @dataclass(frozen=True, slots=True)
 class Services:
     """Use cases the HTTP layer needs, wired to the process resources."""
@@ -71,6 +77,8 @@ class Services:
     list_tasks: ListTasksQueryHandler
     get_task: GetTaskQueryHandler
     change_task_status: ChangeTaskStatusCommandHandler
+    board_feed: BoardFeed
+    board_heartbeat: float = BOARD_HEARTBEAT
 
 
 async def open_services(resources: Resources) -> AsyncIterator[Services]:
@@ -81,6 +89,7 @@ async def open_services(resources: Resources) -> AsyncIterator[Services]:
     ) as client:
         identity = HttpIdentityGateway(client)
         reader = SqlTaskReader(resources.sessions)
+        assert resources.redis is not None  # Tasks always opens Redis
         yield Services(
             identity=identity,
             list_tasks=ListTasksQueryHandler(reader),
@@ -88,6 +97,7 @@ async def open_services(resources: Resources) -> AsyncIterator[Services]:
             change_task_status=ChangeTaskStatusCommandHandler(
                 tasks_unit_of_work(resources)
             ),
+            board_feed=RedisBoardFeed(resources.redis),
         )
 
 

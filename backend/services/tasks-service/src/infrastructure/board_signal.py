@@ -3,9 +3,12 @@
 import asyncio
 import json
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from kernel_domain.domain_event import DomainEvent
 from redis.asyncio import Redis
+from redis.asyncio.client import PubSub
 
 from domain.events.task_domain_event import TaskCreated, TaskStatusChanged
 
@@ -37,3 +40,41 @@ class RedisBoardSignal:
                 )
         except Exception:
             logger.warning("board.changed signal was not published", exc_info=False)
+
+
+SUBSCRIBE_TIMEOUT = 2.0
+
+
+class RedisBoardSubscription:
+    def __init__(self, pubsub: PubSub) -> None:
+        self._pubsub = pubsub
+
+    async def wait(self, timeout: float) -> bool:
+        message = await self._pubsub.get_message(
+            ignore_subscribe_messages=True, timeout=timeout
+        )
+        return message is not None
+
+
+class RedisBoardFeed:
+    """Reads the board signal; each subscriber owns a Redis subscription.
+
+    Pub/Sub keeps no history: what is published while nobody listens is gone.
+    """
+
+    def __init__(self, redis: Redis, subscribe_timeout: float = SUBSCRIBE_TIMEOUT):
+        self._redis = redis
+        self._subscribe_timeout = subscribe_timeout
+
+    @asynccontextmanager
+    async def subscribe(self) -> AsyncIterator[RedisBoardSubscription]:
+        pubsub = self._redis.pubsub()
+        try:
+            await pubsub.subscribe(CHANNEL)
+            # Wait for Redis to confirm: signals published after this are not lost.
+            await pubsub.get_message(
+                ignore_subscribe_messages=False, timeout=self._subscribe_timeout
+            )
+            yield RedisBoardSubscription(pubsub)
+        finally:
+            await pubsub.aclose()  # type: ignore[no-untyped-call]
