@@ -13,12 +13,16 @@ import httpx
 from api.containers import build_bot_command
 from application.commands.handle_bot_command import HandleBotCommandDto
 from auth_flow import TelegramPort
+from domain.value_objects.job_status import JobKind
 from infrastructure.identity_gateway import HttpIdentityGateway
-from kernel_platform.resources import open_database
+from infrastructure.messaging.envelopes import create_task_envelope, outbox_id_for
+from kernel_platform.messaging import ConfirmedPublisher, declare_task_topology
+from kernel_platform.resources import open_database, open_resources
 from kernel_platform.settings import Settings
 from sqlalchemy import text
 
 APPLICANT = 4_200_000_008
+REALTIME_BOT_ID = 7_700_035
 
 
 async def board_fixture(action: str, author_id: UUID) -> None:
@@ -26,8 +30,27 @@ async def board_fixture(action: str, author_id: UUID) -> None:
     async with open_database(Settings(service="tasks")) as database:
         async with database.sessions() as session:
             if action == "reset":
+                jobs = await session.scalars(
+                    text(
+                        "SELECT correlation_id FROM tasks WHERE source_key LIKE :source"
+                    ),
+                    {"source": f"{REALTIME_BOT_ID}:%"},
+                )
+                for job_id in jobs:
+                    await session.execute(
+                        text("DELETE FROM inbox_messages WHERE message_id = :id"),
+                        {"id": str(outbox_id_for(job_id))},
+                    )
+                    await session.execute(
+                        text("DELETE FROM outbox WHERE correlation_id = :id"),
+                        {"id": job_id},
+                    )
                 await session.execute(
-                    text("DELETE FROM tasks WHERE source_key LIKE 'browser-board:%'")
+                    text(
+                        "DELETE FROM tasks WHERE source_key LIKE 'browser-board:%' "
+                        "OR source_key LIKE :source"
+                    ),
+                    {"source": f"{REALTIME_BOT_ID}:%"},
                 )
             elif action in {"board", "dnd-board"}:
                 statuses = (
@@ -88,6 +111,43 @@ async def board_fixture(action: str, author_id: UUID) -> None:
             await session.commit()
 
 
+async def realtime_task(author_id: UUID) -> dict[str, str]:
+    """Publish the production command through real RabbitMQ to tasks-worker."""
+    job_id = uuid4()
+    task_text = f"Realtime #35 / Թարմացում {job_id}"
+    telegram_id = int(os.environ["INITIAL_ADMIN_TELEGRAM_ID"])
+    message_id, routing, envelope = create_task_envelope(
+        job_id=job_id,
+        bot_id=REALTIME_BOT_ID,
+        chat_id=telegram_id,
+        message_id=uuid4().int % (2**63),
+        author_id=author_id,
+        author_telegram_id=telegram_id,
+        author_name="Анна / Աննա",
+        text=task_text,
+        source_type=JobKind.TEXT,
+        received_at=datetime.now(UTC),
+    )
+    async with open_resources(Settings(service="automation")) as resources:
+        await ConfirmedPublisher(resources.rabbitmq, declare_task_topology).publish(
+            routing,
+            json.dumps(envelope).encode(),
+            message_id=str(message_id),
+            type="CreateTask",
+        )
+    async with open_database(Settings(service="tasks")) as database:
+        async with asyncio.timeout(15):
+            while True:
+                async with database.sessions() as session:
+                    task_id = await session.scalar(
+                        text("SELECT id FROM tasks WHERE correlation_id = :id"),
+                        {"id": job_id},
+                    )
+                if task_id is not None:
+                    return {"task_id": str(task_id), "text": task_text}
+                await asyncio.sleep(0.1)
+
+
 async def run(action: str) -> dict[str, str]:
     run_id = UUID(os.environ["BOTFLOW_SMOKE_ID"]).hex
     if (
@@ -97,12 +157,14 @@ async def run(action: str) -> dict[str, str]:
         raise RuntimeError("Browser fixtures require an isolated test project")
 
     async with open_database(Settings(service="identity")) as identity:
-        if action in {"reset", "board", "board-change", "dnd-board"}:
+        if action in {"reset", "board", "board-change", "dnd-board", "realtime-task"}:
             async with identity.sessions() as session:
                 author_id = await session.scalar(
                     text("SELECT id FROM members WHERE telegram_id = :telegram"),
                     {"telegram": int(os.environ["INITIAL_ADMIN_TELEGRAM_ID"])},
                 )
+            if action == "realtime-task":
+                return await realtime_task(author_id)
             await board_fixture(action, author_id)
             if action != "reset":
                 return {"status": "ok"}
@@ -187,6 +249,7 @@ if __name__ == "__main__":
             "board",
             "board-change",
             "dnd-board",
+            "realtime-task",
         ],
     )
     arguments = parser.parse_args()

@@ -5,6 +5,10 @@ export type Messages = (typeof messages)['ru'];
 
 const messages = {
   ru: {
+    connecting: 'Подключаемся к обновлениям…',
+    connected: 'Обновления подключены',
+    reconnecting: 'Восстанавливаем связь. Доска обновляется периодически.',
+    denied: 'Обновления приостановлены. Проверяем доступ.',
     defaultBoardName: 'BotFlow',
     taskDetails: 'Задача',
     taskStatus: 'Статус',
@@ -122,6 +126,10 @@ const messages = {
     teamDescription: 'Общая картина работы для всей команды.',
   },
   hy: {
+    connecting: 'Միանում ենք թարմացումներին…',
+    connected: 'Թարմացումները միացված են',
+    reconnecting: 'Վերականգնում ենք կապը։ Վահանակը պարբերաբար թարմացվում է։',
+    denied: 'Թարմացումները դադարեցված են։ Ստուգում ենք մուտքը։',
     defaultBoardName: 'BotFlow',
     taskDetails: 'Առաջադրանք',
     taskStatus: 'Կարգավիճակ',

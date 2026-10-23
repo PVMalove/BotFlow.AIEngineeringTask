@@ -9,6 +9,7 @@ export default defineConfig({
     'board-ui.spec.ts',
     'task-status-ui.spec.ts',
     'dnd-ui.spec.ts',
+    'realtime-ui.spec.ts',
   ],
   use: { baseURL: 'http://127.0.0.1:4174' },
   webServer: {
