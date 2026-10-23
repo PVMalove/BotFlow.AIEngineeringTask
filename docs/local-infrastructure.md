@@ -237,7 +237,7 @@ RU/hy и живой Telegram проверяются отдельно (#17).
 ## Тесты на Redis
 
 `tests/integration/test_board_realtime.py` проверяет сигнал `board.changed` и WS `/ws/board`
-на настоящем Redis и пропускается, пока не задан `BOTFLOW_TEST_REDIS_URL` — URL одноразового
+на настоящем Redis (в том числе на живом сокете uvicorn: отказ при подключении — HTTP 403) и пропускается, пока не задан `BOTFLOW_TEST_REDIS_URL` — URL одноразового
 Redis без ACL, например `redis://localhost:6379/0`. Тесты только публикуют и подписываются на
 канал `botflow.board.changed`, но указывать рабочий Redis нельзя. Compose-Redis закрыт ACL с
 паролем из `.secrets` и для этого не подходит. Одноразовый Redis:

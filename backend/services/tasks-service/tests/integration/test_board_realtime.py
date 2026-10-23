@@ -10,13 +10,16 @@ import asyncio
 import json
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
 import pytest
 import redis as sync_redis
+import uvicorn
+import websockets
 from kernel_domain.errors import Error
 from kernel_domain.result import Result
 from kernel_platform.security.actor import Actor, ActorRole
@@ -25,6 +28,7 @@ from redis.asyncio import Redis
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from support.fakes import AUTHOR, Board, FakeTasksUnitOfWork, TrackedApp, connected
+from websockets.exceptions import ConnectionClosedError, InvalidStatus
 
 from api.containers import Services
 from api.dependencies import get_services
@@ -71,6 +75,17 @@ class Identity:
 class NoDatabase:
     def __getattr__(self, name: str) -> Any:
         raise AssertionError(f"the board socket used the database: {name}")
+
+
+def board_services(identity: Identity, feed: RedisBoardFeed) -> Services:
+    return Services(
+        identity=identity,  # type: ignore[arg-type]
+        list_tasks=NoDatabase(),  # type: ignore[arg-type]
+        get_task=NoDatabase(),  # type: ignore[arg-type]
+        change_task_status=NoDatabase(),  # type: ignore[arg-type]
+        board_feed=feed,
+        board_heartbeat=HEARTBEAT,
+    )
 
 
 def command(**overrides: Any) -> CreateTaskCommand:
@@ -131,14 +146,7 @@ def client(identity: Identity) -> Iterator[TestClient]:
     async def override() -> Services:
         if not feeds:  # created in the loop that serves the sockets
             feeds.append(RedisBoardFeed(Redis.from_url(REDIS_URL or "")))
-        return Services(
-            identity=identity,  # type: ignore[arg-type]
-            list_tasks=NoDatabase(),  # type: ignore[arg-type]
-            get_task=NoDatabase(),  # type: ignore[arg-type]
-            change_task_status=NoDatabase(),  # type: ignore[arg-type]
-            board_feed=feeds[0],
-            board_heartbeat=HEARTBEAT,
-        )
+        return board_services(identity, feeds[0])
 
     app.dependency_overrides[get_services] = override
     with TestClient(TrackedApp(app)) as test_client:
@@ -269,3 +277,85 @@ def test_identity_not_answering_on_connect_refuses_the_socket(
             pass
 
     assert refused.value.code == 1013
+
+
+# What a browser sees. Starlette's TestClient above reports a refusal made before
+# `accept` as a close code (1008/1013); on a real socket the same refusal is an HTTP
+# 403 handshake failure and no close code exists. Only a close after `accept` has one.
+
+
+@asynccontextmanager
+async def live_board(identity: Identity) -> AsyncIterator[str]:
+    """The board on a real uvicorn socket and a real Redis feed; yields host:port."""
+    redis = Redis.from_url(REDIS_URL or "")
+    app = create_tasks_app()
+
+    async def override() -> Services:
+        return board_services(identity, RedisBoardFeed(redis))
+
+    app.dependency_overrides[get_services] = override
+    server = uvicorn.Server(
+        uvicorn.Config(
+            app, host="127.0.0.1", port=0, log_level="warning", lifespan="off"
+        )
+    )
+    serving = asyncio.create_task(server.serve())
+    try:
+        while not server.started:
+            await asyncio.sleep(0.01)
+        port = server.servers[0].sockets[0].getsockname()[1]
+        yield f"127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        await serving
+        await redis.aclose()
+
+
+async def handshake_status(host: str, origin: str) -> int:
+    with pytest.raises(InvalidStatus) as refused:
+        async with websockets.connect(
+            f"ws://{host}/ws/board",
+            origin=origin,  # type: ignore[arg-type]
+            additional_headers={"cookie": HEADERS["cookie"]},
+        ):
+            pass
+    return int(refused.value.response.status_code)
+
+
+async def test_on_a_real_socket_a_foreign_origin_fails_the_handshake_with_403() -> None:
+    async with live_board(Identity()) as host:
+        assert await handshake_status(host, "http://evil.example") == 403
+
+
+async def test_on_a_real_socket_identity_down_at_connect_is_the_same_403() -> None:
+    identity = Identity()
+    identity.unavailable = True
+    async with live_board(identity) as host:
+        # "no access" and "temporarily unavailable" cannot be told apart here
+        assert await handshake_status(host, f"http://{host}") == 403
+
+
+async def test_on_a_real_socket_a_block_after_accept_closes_with_1008() -> None:
+    identity = Identity()
+    redis = Redis.from_url(REDIS_URL or "")
+    try:
+        async with live_board(identity) as host:
+            async with websockets.connect(
+                f"ws://{host}/ws/board",
+                origin=f"http://{host}",  # type: ignore[arg-type]
+                additional_headers={"cookie": HEADERS["cookie"]},
+            ) as socket:
+                identity.blocked = True
+                await RedisBoardSignal(redis).handle(
+                    TaskCreated(
+                        task_id=TaskId(uuid4()),
+                        correlation_id=uuid4(),
+                        source_key="1:2:3",
+                    )
+                )
+                with pytest.raises(ConnectionClosedError):
+                    async with asyncio.timeout(5):
+                        await socket.recv()  # the check before any frame fails
+            assert socket.close_code == 1008
+    finally:
+        await redis.aclose()
