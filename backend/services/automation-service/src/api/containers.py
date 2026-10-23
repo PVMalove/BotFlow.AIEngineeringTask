@@ -36,8 +36,8 @@ from application.commands.store_member_decision import (
 )
 from application.ports import IdentityGateway, Messenger
 from infrastructure.db.inbox import SqlUpdateInbox
+from infrastructure.db.models import OutboxModel
 from infrastructure.db.relay_hooks import fail_job, fail_voice_job
-from infrastructure.db.tables import outbox
 from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
 from infrastructure.messaging.identity_event_consumer import (
     IdentityEventConsumer,
@@ -147,7 +147,7 @@ def build_task_flow(resources: Resources) -> TaskFlow:
         results=QueueConsumer(resources.rabbitmq, results_queue, process.handle),
         relay=RelayOutbox(
             sql_transactions(
-                resources.sessions, outbox, routing_keys=(TASK_CREATE_ROUTING_KEY,)
+                resources.sessions, OutboxModel, routing_keys=(TASK_CREATE_ROUTING_KEY,)
             ),
             ConfirmedPublisher(resources.rabbitmq, declare_task_topology),
             on_exhausted=fail_job,
@@ -177,7 +177,9 @@ def build_voice_flow(
     stream = RedisStream(resources.redis, VOICE_STREAM, VOICE_GROUP, consumer_name)
     return VoiceFlow(
         relay=RelayOutbox(
-            sql_transactions(resources.sessions, outbox, routing_keys=("voice.*",)),
+            sql_transactions(
+                resources.sessions, OutboxModel, routing_keys=("voice.*",)
+            ),
             RedisVoicePublisher(stream),
             on_exhausted=fail_voice_job,
         ),

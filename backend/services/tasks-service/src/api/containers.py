@@ -19,7 +19,7 @@ from application.ports import BoardFeed
 from application.queries.get_task import GetTaskQueryHandler
 from application.queries.list_tasks import ListTasksQueryHandler
 from infrastructure.board_signal import RedisBoardFeed, RedisBoardSignal
-from infrastructure.db.tables import outbox
+from infrastructure.db.models import OutboxModel
 from infrastructure.db.task_reader import SqlTaskReader
 from infrastructure.db.unit_of_work import SqlTasksUnitOfWork
 from infrastructure.identity_gateway import HttpIdentityGateway
@@ -58,7 +58,7 @@ def build_worker(resources: Resources) -> TaskWorker:
     return TaskWorker(
         consumer=QueueConsumer(resources.rabbitmq, commands_queue, create.handle),
         relay=RelayOutbox(
-            sql_transactions(resources.sessions, outbox),
+            sql_transactions(resources.sessions, OutboxModel),
             ConfirmedPublisher(resources.rabbitmq, declare_task_topology),
         ),
     )

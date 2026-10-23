@@ -1,18 +1,17 @@
-"""NotificationIntent aggregates and the consumer inbox in PostgreSQL."""
+"""NotificationIntent aggregates in PostgreSQL."""
 
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
 
 from kernel_domain.entity import Entity
-from sqlalchemy import Row, select, update
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.entities.notification_intent import NotificationIntent
 from domain.value_objects.intent_id import IntentId
 from domain.value_objects.intent_status import IntentStatus
-from infrastructure.db.tables import inbox_messages, notification_intents
+from infrastructure.db.models import NotificationIntentModel
 
 
 class SqlIntentRepository:
@@ -28,9 +27,9 @@ class SqlIntentRepository:
 
     async def get(self, intent_id: IntentId) -> NotificationIntent | None:
         row = (
-            await self._session.execute(
-                select(notification_intents).where(
-                    notification_intents.c.id == intent_id.value
+            await self._session.scalars(
+                select(NotificationIntentModel).where(
+                    NotificationIntentModel.id == intent_id.value
                 )
             )
         ).one_or_none()
@@ -39,7 +38,7 @@ class SqlIntentRepository:
     async def add(self, intent: NotificationIntent) -> bool:
         now = self._clock()
         added = await self._session.execute(
-            insert(notification_intents)
+            insert(NotificationIntentModel)
             .values(
                 id=intent.id.value,
                 chat_id=intent.chat_id,
@@ -52,8 +51,8 @@ class SqlIntentRepository:
                 created_at=now,
                 updated_at=now,
             )
-            .on_conflict_do_nothing(index_elements=[notification_intents.c.id])
-            .returning(notification_intents.c.id)
+            .on_conflict_do_nothing(index_elements=[NotificationIntentModel.id])
+            .returning(NotificationIntentModel.id)
         )
         if added.scalar_one_or_none() is None:
             return False
@@ -62,17 +61,17 @@ class SqlIntentRepository:
 
     async def pending(self, limit: int) -> list[IntentId]:
         rows = await self._session.scalars(
-            select(notification_intents.c.id)
-            .where(notification_intents.c.status == IntentStatus.PENDING.value)
-            .order_by(notification_intents.c.created_at, notification_intents.c.id)
+            select(NotificationIntentModel.id)
+            .where(NotificationIntentModel.status == IntentStatus.PENDING.value)
+            .order_by(NotificationIntentModel.created_at, NotificationIntentModel.id)
             .limit(limit)
         )
         return [IntentId(row) for row in rows]
 
     async def update(self, intent: NotificationIntent) -> None:
         await self._session.execute(
-            update(notification_intents)
-            .where(notification_intents.c.id == intent.id.value)
+            update(NotificationIntentModel)
+            .where(NotificationIntentModel.id == intent.id.value)
             .values(
                 status=intent.status.value,
                 attempts=intent.attempts,
@@ -82,22 +81,7 @@ class SqlIntentRepository:
         self._track(intent)
 
 
-class SqlInbox:
-    def __init__(self, session: AsyncSession, clock: Callable[[], datetime]) -> None:
-        self._session = session
-        self._clock = clock
-
-    async def claim(self, message_id: str) -> bool:
-        claimed = await self._session.execute(
-            insert(inbox_messages)
-            .values(message_id=message_id, received_at=self._clock())
-            .on_conflict_do_nothing(index_elements=[inbox_messages.c.message_id])
-            .returning(inbox_messages.c.message_id)
-        )
-        return claimed.scalar_one_or_none() is not None
-
-
-def _intent(row: Row[Any]) -> NotificationIntent:
+def _intent(row: NotificationIntentModel) -> NotificationIntent:
     return NotificationIntent.reconstitute(
         IntentId(row.id),
         chat_id=row.chat_id,

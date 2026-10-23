@@ -248,7 +248,7 @@ class World:
             )
         )
 
-    def outbox_decisions(self) -> list[str]:
+    def outbox_decisions(self) -> list[object]:
         return [e.payload["decision"] for e in self.store.outbox.values()]
 
 

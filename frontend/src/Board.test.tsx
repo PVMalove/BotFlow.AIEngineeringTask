@@ -22,6 +22,8 @@ test.each([
           role: 'user',
           status: 'approved',
           telegram_id: 1,
+          display_name: null,
+          access_version: 1,
         }}
         messages={messages}
         locale={locale}

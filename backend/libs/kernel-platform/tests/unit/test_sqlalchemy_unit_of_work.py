@@ -1,5 +1,7 @@
-from dataclasses import dataclass
-from typing import Any
+"""Atomic storage and event delivery through the public Unit of Work contract."""
+
+from unittest.mock import AsyncMock, Mock
+from uuid import uuid4
 
 import pytest
 from kernel_domain.domain_event import DomainEvent
@@ -9,92 +11,83 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from kernel_platform.sqlalchemy_unit_of_work import SqlAlchemyUnitOfWork
 
 
-@dataclass(frozen=True, kw_only=True)
-class Happened(DomainEvent):
-    event_type: str = "happened"
-
-
-class FakeSession:
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    async def commit(self) -> None:
-        self.calls.append("commit")
-
-    async def rollback(self) -> None:
-        self.calls.append("rollback")
-
-    async def close(self) -> None:
-        self.calls.append("close")
-
-
-class Unit(SqlAlchemyUnitOfWork):
-    def __init__(self, session: FakeSession, **kwargs: Any) -> None:
-        super().__init__(lambda: session, **kwargs)  # type: ignore[arg-type]
-
-
-def aggregate() -> Entity[int]:
-    entity = Entity(1)
-    entity.add_domain_event(Happened())
-    return entity
-
-
-async def test_leaving_without_a_commit_rolls_back_and_closes() -> None:
-    session = FakeSession()
-
-    async with Unit(session):
+@pytest.mark.parametrize("fail", [False, True])
+async def test_exit_without_commit_rolls_back_and_closes(fail: bool) -> None:
+    session = AsyncMock(spec=AsyncSession)
+    uow = SqlAlchemyUnitOfWork(Mock(return_value=session))
+    try:
+        async with uow:
+            if fail:
+                raise ValueError("operation failed")
+    except ValueError:
         pass
+    session.commit.assert_not_awaited()
+    session.rollback.assert_awaited_once()
+    session.close.assert_awaited_once()
 
-    assert session.calls == ["rollback", "close"]
 
+@pytest.mark.parametrize("failure", [None, "stage", "commit"])
+async def test_outbox_is_staged_before_commit_and_handlers_run_only_after_it(
+    failure: str | None,
+) -> None:
+    operations: list[str] = []
+    event = DomainEvent()
+    entity = Entity(uuid4())
+    entity.add_domain_event(event)
+    session = AsyncMock(spec=AsyncSession)
 
-async def test_events_are_staged_before_the_commit_and_handled_after_it() -> None:
-    session = FakeSession()
-    order: list[str] = []
+    async def stage(actual_session: AsyncSession, actual_event: DomainEvent) -> None:
+        assert actual_session is session
+        assert actual_event is event
+        operations.append("stage")
+        if failure == "stage":
+            raise ValueError("staging failed")
 
-    async def stage(_: AsyncSession, event: DomainEvent) -> None:
-        order.append(f"stage after {session.calls}")
+    async def commit() -> None:
+        operations.append("commit")
+        if failure == "commit":
+            raise ValueError("commit failed")
 
-    async def handle(event: DomainEvent) -> None:
-        order.append(f"handle after {session.calls}")
+    async def deliver(actual_event: DomainEvent) -> None:
+        assert actual_event is event
+        operations.append("deliver")
 
-    async with Unit(session, stage_outbox=stage, event_handlers=[handle]) as uow:
-        entity = aggregate()
-        uow.track(entity)
-        uow.track(entity)  # tracked once
-        await uow.commit()
-
-    assert order == ["stage after []", "handle after ['commit']"]
-    assert session.calls == ["commit", "close"]
+    session.commit.side_effect = commit
+    uow = SqlAlchemyUnitOfWork(
+        Mock(return_value=session), stage_outbox=stage, event_handlers=[deliver]
+    )
+    if failure:
+        with pytest.raises(ValueError):
+            async with uow:
+                uow.track(entity)
+                await uow.commit()
+        session.rollback.assert_awaited_once()
+        assert operations == (["stage"] if failure == "stage" else ["stage", "commit"])
+    else:
+        async with uow:
+            uow.track(entity)
+            uow.track(entity)  # one event despite loading the same aggregate twice
+            await uow.commit()
+        session.rollback.assert_not_awaited()
+        assert operations == ["stage", "commit", "deliver"]
+    session.close.assert_awaited_once()
 
 
 async def test_a_failing_handler_does_not_undo_the_commit() -> None:
-    session = FakeSession()
-
-    async def broken(event: DomainEvent) -> None:
-        raise OSError("redis down")
-
-    async with Unit(session, event_handlers=[broken]) as uow:
-        uow.track(aggregate())
+    session = AsyncMock(spec=AsyncSession)
+    handler = AsyncMock(side_effect=OSError("redis down"))
+    uow = SqlAlchemyUnitOfWork(Mock(return_value=session), event_handlers=[handler])
+    entity = Entity(uuid4())
+    entity.add_domain_event(DomainEvent())
+    async with uow:
+        uow.track(entity)
         await uow.commit()
-
-    assert session.calls == ["commit", "close"]
-
-
-async def test_a_failing_stage_keeps_the_transaction_uncommitted() -> None:
-    session = FakeSession()
-
-    async def stage(_: AsyncSession, event: DomainEvent) -> None:
-        raise ValueError("cannot stage")
-
-    with pytest.raises(ValueError):
-        async with Unit(session, stage_outbox=stage) as uow:
-            uow.track(aggregate())
-            await uow.commit()
-
-    assert session.calls == ["rollback", "close"]
+    session.commit.assert_awaited_once()
+    session.rollback.assert_not_awaited()
+    session.close.assert_awaited_once()
 
 
-async def test_the_session_is_unavailable_outside_the_block() -> None:
+async def test_commit_is_unavailable_outside_the_block() -> None:
+    uow = SqlAlchemyUnitOfWork(Mock())
     with pytest.raises(RuntimeError):
-        await Unit(FakeSession()).commit()
+        await uow.commit()

@@ -2,18 +2,10 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, Column, DateTime, MetaData, Table
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-metadata = MetaData()
-
-telegram_updates = Table(
-    "telegram_updates",
-    metadata,
-    Column("update_id", BigInteger, primary_key=True, autoincrement=False),
-    Column("received_at", DateTime(timezone=True), nullable=False),
-)
+from infrastructure.db.models import TelegramUpdateModel
 
 
 class SqlUpdateInbox:
@@ -23,12 +15,11 @@ class SqlUpdateInbox:
     async def claim(self, update_id: int) -> bool:
         """Record the update; False when it was already claimed."""
         async with self._sessions() as session:
-            result = await session.execute(
-                insert(telegram_updates)
+            claimed = await session.scalar(
+                insert(TelegramUpdateModel)
                 .values(update_id=update_id, received_at=datetime.now(UTC))
-                .on_conflict_do_nothing(index_elements=[telegram_updates.c.update_id])
-                .returning(telegram_updates.c.update_id)
+                .on_conflict_do_nothing(index_elements=[TelegramUpdateModel.update_id])
+                .returning(TelegramUpdateModel.update_id)
             )
-            claimed = result.scalar_one_or_none() is not None
             await session.commit()
-        return claimed
+        return claimed is not None

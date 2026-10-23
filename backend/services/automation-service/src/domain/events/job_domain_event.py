@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 from kernel_domain.domain_event import DomainEvent
@@ -20,7 +19,7 @@ class JobEvent(DomainEvent):
     def aggregate_id(self) -> UUID:
         return self.job_id.value
 
-    def to_payload(self) -> dict[str, Any]:
+    def to_payload(self) -> dict[str, object]:
         return {"job_id": str(self.job_id.value)}
 
 

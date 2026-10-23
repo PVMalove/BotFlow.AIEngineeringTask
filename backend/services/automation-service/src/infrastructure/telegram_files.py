@@ -5,6 +5,7 @@ this adapter never stores it and never lets an exception message escape.
 """
 
 import io
+from collections.abc import Buffer
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramNotFound
@@ -43,7 +44,7 @@ class TelegramFileSource:
 class _CappedBuffer(io.BytesIO):
     """Refuses to grow past the cap, whatever size Telegram declared."""
 
-    def write(self, buffer: bytes, /) -> int:  # type: ignore[override]
-        if self.tell() + len(buffer) > MAX_FILE_BYTES:
+    def write(self, buffer: Buffer, /) -> int:
+        if self.tell() + memoryview(buffer).nbytes > MAX_FILE_BYTES:
             raise AudioTooLarge()
         return super().write(buffer)

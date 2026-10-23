@@ -1,6 +1,5 @@
 """Domain events of the Task aggregate that leave the service through the outbox."""
 
-from typing import Any
 from uuid import UUID, uuid5
 
 from kernel_domain.domain_event import DomainEvent
@@ -10,7 +9,7 @@ from kernel_platform.outbox import enqueue
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from domain.events.task_domain_event import TaskCreated
-from infrastructure.db.tables import outbox
+from infrastructure.db.models import OutboxModel
 
 RESULT_TYPE = "TaskCreated"
 # The result id is a function of the task id: a replayed event is the same row.
@@ -22,7 +21,7 @@ async def stage_task_event(session: AsyncSession, event: DomainEvent) -> None:
     if not isinstance(event, TaskCreated):
         return  # the other task events stay inside the service
     message_id = uuid5(_RESULT_NAMESPACE, str(event.task_id.value))
-    envelope: dict[str, Any] = {
+    envelope: dict[str, object] = {
         "envelope_version": ENVELOPE_VERSION,
         "message_id": str(message_id),
         "type": RESULT_TYPE,
@@ -36,7 +35,7 @@ async def stage_task_event(session: AsyncSession, event: DomainEvent) -> None:
     }
     await enqueue(
         session,
-        outbox,
+        OutboxModel,
         entry_id=message_id,
         type=RESULT_TYPE,
         routing_key=TASK_CREATED_ROUTING_KEY,

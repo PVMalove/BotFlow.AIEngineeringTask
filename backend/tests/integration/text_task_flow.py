@@ -40,8 +40,8 @@ from domain.entities.job import Job
 from domain.job_limits import JobLimits
 from domain.value_objects.job_id import JobId
 from infrastructure.db.job_status_reader import read_job_status
+from infrastructure.db.models import OutboxModel
 from infrastructure.db.relay_hooks import fail_job
-from infrastructure.db.tables import outbox
 from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
 from infrastructure.identity_gateway import HttpIdentityGateway
 from infrastructure.messaging.envelopes import outbox_id_for
@@ -567,7 +567,7 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
         resources, flow, pipeline = await self.start_flow()
         start = datetime.now(UTC)
         relay = RelayOutbox(
-            sql_transactions(resources.sessions, outbox),
+            sql_transactions(resources.sessions, OutboxModel),
             BrokerDown(),
             clock=lambda: start,
             policy=POLICY,
@@ -608,7 +608,7 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
         resources, flow, pipeline = await self.start_flow()
         clock = datetime.now(UTC) + timedelta(seconds=1)
         relay = RelayOutbox(
-            sql_transactions(resources.sessions, outbox),
+            sql_transactions(resources.sessions, OutboxModel),
             ConfirmedPublisher(resources.rabbitmq, declare_task_topology),
             clock=lambda: clock,
             policy=POLICY,

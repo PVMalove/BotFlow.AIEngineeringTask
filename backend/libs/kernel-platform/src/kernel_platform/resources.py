@@ -10,7 +10,7 @@ from aio_pika import connect_robust
 from aio_pika.abc import AbstractRobustConnection
 from botocore.config import Config  # type: ignore[import-untyped]
 from redis.asyncio import Redis
-from sqlalchemy import text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -43,7 +43,7 @@ async def open_database(settings: Settings) -> AsyncIterator[Database]:
     engine = _create_engine(settings)
     try:
         async with engine.connect() as connection:
-            await connection.execute(text("SELECT 1"))
+            await connection.execute(select(1))
     except Exception:
         await engine.dispose()
         # Driver exceptions can contain credential-bearing connection arguments.
@@ -114,7 +114,7 @@ async def open_resources(settings: Settings) -> AsyncIterator[Resources]:
             engine = _create_engine(settings)
             stack.push_async_callback(engine.dispose)
             async with engine.connect() as connection:
-                await connection.execute(text("SELECT 1"))
+                await connection.execute(select(1))
             rabbitmq = await connect_robust(
                 host=settings.rabbitmq_host,
                 login="botflow",

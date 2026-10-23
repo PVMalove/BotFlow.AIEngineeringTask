@@ -2,14 +2,13 @@
 
 from kernel_platform.pagination import Cursor
 from sqlalchemy import select, tuple_
-from sqlalchemy.engine import Row
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from domain.entities.task import Task
 from domain.value_objects.task_id import TaskId
-from domain.value_objects.task_source import TaskSource
 from domain.value_objects.task_status import TaskStatus
-from infrastructure.db.tables import tasks
+from infrastructure.db.models import TaskModel
+from infrastructure.db.task_mapper import to_task
 
 
 class SqlTaskReader:
@@ -19,37 +18,21 @@ class SqlTaskReader:
     async def list_page(
         self, status: TaskStatus | None, after: Cursor | None, limit: int
     ) -> list[Task]:
-        query = select(tasks).order_by(tasks.c.created_at.desc(), tasks.c.id.desc())
+        query = select(TaskModel).order_by(
+            TaskModel.created_at.desc(), TaskModel.id.desc()
+        )
         if status is not None:
-            query = query.where(tasks.c.status == status.value)
+            query = query.where(TaskModel.status == status.value)
         if after is not None:
             query = query.where(
-                tuple_(tasks.c.created_at, tasks.c.id) < (after.created_at, after.id)
+                tuple_(TaskModel.created_at, TaskModel.id)
+                < (after.created_at, after.id)
             )
         async with self._sessions() as session:
-            rows = await session.execute(query.limit(limit))
+            rows = await session.scalars(query.limit(limit))
             return [to_task(row) for row in rows]
 
     async def get(self, task_id: TaskId) -> Task | None:
         async with self._sessions() as session:
-            row = (
-                await session.execute(select(tasks).where(tasks.c.id == task_id.value))
-            ).one_or_none()
+            row = await session.get(TaskModel, task_id.value)
         return to_task(row) if row else None
-
-
-def to_task(row: Row[tuple[object, ...]]) -> Task:
-    return Task.reconstitute(
-        TaskId(row.id),
-        text=row.text,
-        status=TaskStatus(row.status),
-        version=row.version,
-        author_id=row.author_id,
-        author_telegram_id=row.author_telegram_id,
-        author_name=row.author_name,
-        source_key=row.source_key,
-        correlation_id=row.correlation_id,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-        source_type=TaskSource(row.source_type) if row.source_type else None,
-    )

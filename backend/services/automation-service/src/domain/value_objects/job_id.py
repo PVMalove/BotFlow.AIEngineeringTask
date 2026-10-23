@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Any
 from uuid import UUID, uuid5
 
 from kernel_domain.value_object import ValueObject
@@ -17,5 +16,5 @@ class JobId(ValueObject):
     def from_source(cls, bot_id: int, chat_id: int, message_id: int) -> "JobId":
         return cls(uuid5(_JOB_NAMESPACE, f"{bot_id}:{chat_id}:{message_id}"))
 
-    def _equality_components(self) -> tuple[Any, ...]:
+    def _equality_components(self) -> tuple[UUID]:
         return (self.value,)

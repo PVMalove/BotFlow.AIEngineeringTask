@@ -3,7 +3,6 @@
 from kernel_platform.migrations import configure_environment
 from kernel_platform.settings import Settings
 
-from infrastructure.db import tables  # noqa: F401
-from infrastructure.db.inbox import metadata
+from infrastructure.db.models import Base
 
-configure_environment(metadata, Settings(service="automation"))
+configure_environment(Base.metadata, Settings(service="automation"))

@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 from uuid import UUID
 
 ACCESS_DECIDED = "member.access-decided"
@@ -12,7 +11,7 @@ ACCESS_DECIDED = "member.access-decided"
 class OutboxEntry:
     id: UUID
     type: str
-    payload: dict[str, Any]
+    payload: dict[str, object]
     created_at: datetime
     attempts: int = 0
     next_attempt_at: datetime | None = None

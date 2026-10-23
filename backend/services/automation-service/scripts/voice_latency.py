@@ -8,24 +8,11 @@ import argparse
 import asyncio
 import inspect
 
-from sqlalchemy import text
+from sqlalchemy import and_, case, select
 
 from api.containers import Container
 from application.queries.voice_latency import VoiceRecord, analyze, render
-
-_QUERY = text(
-    """
-    SELECT j.id, j.status, v.duration_seconds, v.cold_start, j.received_at,
-           j.acked_at, o.published_at, v.started_at, v.stored_at,
-           v.stt_started_at, v.stt_finished_at,
-           CASE WHEN j.status = 'completed' THEN j.updated_at END
-    FROM jobs j
-    JOIN voice_jobs v ON v.job_id = j.id
-    LEFT JOIN outbox o ON o.correlation_id = j.id AND o.type = 'TranscribeVoice'
-    ORDER BY j.received_at DESC
-    LIMIT :last
-    """
-)
+from infrastructure.db.models import JobModel, OutboxModel, VoiceJobModel
 
 
 async def main(last: int) -> None:
@@ -33,12 +20,42 @@ async def main(last: int) -> None:
     try:
         database = await container.database.async_()
         async with database.sessions() as session:
-            rows = (await session.execute(_QUERY, {"last": last})).all()
+            completed_at = case(
+                (JobModel.status == "completed", JobModel.updated_at)
+            ).label("completed_at")
+            rows = (
+                await session.execute(
+                    select(
+                        JobModel.id.label("job_id"),
+                        JobModel.status,
+                        VoiceJobModel.duration_seconds,
+                        VoiceJobModel.cold_start,
+                        JobModel.received_at,
+                        JobModel.acked_at,
+                        OutboxModel.published_at,
+                        VoiceJobModel.started_at,
+                        VoiceJobModel.stored_at,
+                        VoiceJobModel.stt_started_at,
+                        VoiceJobModel.stt_finished_at,
+                        completed_at,
+                    )
+                    .join(JobModel.voice)
+                    .outerjoin(
+                        OutboxModel,
+                        and_(
+                            OutboxModel.correlation_id == JobModel.id,
+                            OutboxModel.type == "TranscribeVoice",
+                        ),
+                    )
+                    .order_by(JobModel.received_at.desc())
+                    .limit(last)
+                )
+            ).all()
     finally:
         shutdown = container.shutdown_resources()
         if inspect.isawaitable(shutdown):
             await shutdown
-    print(render(analyze([VoiceRecord(*row) for row in rows])))
+    print(render(analyze([VoiceRecord(**row._asdict()) for row in rows])))
 
 
 if __name__ == "__main__":
