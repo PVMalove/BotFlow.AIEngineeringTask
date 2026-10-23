@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from conftest import Board, FakeTasksUnitOfWork
 from kernel_domain.errors import ErrorType
 from kernel_platform.consumer import InvalidMessage
+from support.fakes import Board, FakeTasksUnitOfWork
 
 from application.commands.create_task import (
     CreateTaskCommand,

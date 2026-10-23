@@ -30,10 +30,10 @@ extend = "../../pyproject.toml"
 [tool.mypy]
 python_version = "3.12"
 strict = true
-mypy_path = "src:tests/unit"
+mypy_path = "src:tests"
 explicit_package_bases = true
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-pythonpath = ["src", "tests/unit"]
+pythonpath = ["src", "tests"]

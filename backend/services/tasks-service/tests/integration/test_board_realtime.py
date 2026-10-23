@@ -17,7 +17,6 @@ from uuid import uuid4
 
 import pytest
 import redis as sync_redis
-from conftest import AUTHOR, Board, FakeTasksUnitOfWork, TrackedApp, connected
 from kernel_domain.errors import Error
 from kernel_domain.result import Result
 from kernel_platform.security.actor import Actor, ActorRole
@@ -25,6 +24,7 @@ from kernel_platform.security.errors import AuthErrors
 from redis.asyncio import Redis
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
+from support.fakes import AUTHOR, Board, FakeTasksUnitOfWork, TrackedApp, connected
 
 from api.containers import Services
 from api.dependencies import get_services
