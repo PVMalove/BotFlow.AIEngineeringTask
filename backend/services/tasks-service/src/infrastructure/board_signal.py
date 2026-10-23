@@ -4,12 +4,14 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from kernel_domain.domain_event import DomainEvent
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
+from redis.exceptions import RedisError
 
+from application.ports import BoardFeedUnavailable
 from domain.events.task_domain_event import TaskCreated, TaskStatusChanged
 
 CHANNEL = "botflow.board.changed"
@@ -43,6 +45,7 @@ class RedisBoardSignal:
 
 
 SUBSCRIBE_TIMEOUT = 2.0
+_REDIS_FAILURES = (RedisError, OSError, TimeoutError)
 
 
 class RedisBoardSubscription:
@@ -50,10 +53,19 @@ class RedisBoardSubscription:
         self._pubsub = pubsub
 
     async def wait(self, timeout: float) -> bool:
-        message = await self._pubsub.get_message(
+        try:
+            if await self._receive(timeout) is None:
+                return False
+            while await self._receive(0) is not None:
+                pass  # the board is re-read once for a burst of changes
+            return True
+        except _REDIS_FAILURES as exc:
+            raise BoardFeedUnavailable from exc
+
+    async def _receive(self, timeout: float) -> object:
+        return await self._pubsub.get_message(
             ignore_subscribe_messages=True, timeout=timeout
         )
-        return message is not None
 
 
 class RedisBoardFeed:
@@ -70,11 +82,17 @@ class RedisBoardFeed:
     async def subscribe(self) -> AsyncIterator[RedisBoardSubscription]:
         pubsub = self._redis.pubsub()
         try:
-            await pubsub.subscribe(CHANNEL)
-            # Wait for Redis to confirm: signals published after this are not lost.
-            await pubsub.get_message(
-                ignore_subscribe_messages=False, timeout=self._subscribe_timeout
-            )
+            try:
+                await pubsub.subscribe(CHANNEL)
+                # Wait for Redis to confirm: signals published after this are not lost.
+                confirmation = await pubsub.get_message(
+                    ignore_subscribe_messages=False, timeout=self._subscribe_timeout
+                )
+            except _REDIS_FAILURES as exc:
+                raise BoardFeedUnavailable from exc
+            if confirmation is None:
+                raise BoardFeedUnavailable
             yield RedisBoardSubscription(pubsub)
         finally:
-            await pubsub.aclose()  # type: ignore[no-untyped-call]
+            with suppress(*_REDIS_FAILURES):
+                await pubsub.aclose()  # type: ignore[no-untyped-call]

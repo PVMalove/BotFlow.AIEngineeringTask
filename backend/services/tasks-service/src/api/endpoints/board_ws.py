@@ -13,7 +13,11 @@ from starlette.websockets import WebSocketDisconnect
 
 from api.containers import Services
 from api.dependencies import ServicesDI
-from application.ports import BoardSubscription, IdentityUnavailable
+from application.ports import (
+    BoardFeedUnavailable,
+    BoardSubscription,
+    IdentityUnavailable,
+)
 from infrastructure.identity_gateway import SESSION_COOKIE
 
 router = APIRouter()
@@ -56,6 +60,27 @@ async def _relay(
             await websocket.send_json(BOARD_CHANGED if changed else PING)
 
 
+async def _serve(
+    websocket: WebSocket,
+    services: Services,
+    token: str,
+    subscription: BoardSubscription,
+) -> None:
+    reader = asyncio.create_task(_until_disconnect(websocket))
+    sender = asyncio.create_task(_relay(websocket, services, token, subscription))
+    try:
+        done, _ = await asyncio.wait(
+            {reader, sender}, return_when=asyncio.FIRST_COMPLETED
+        )
+    finally:
+        for task in (reader, sender):
+            task.cancel()
+        await asyncio.gather(reader, sender, return_exceptions=True)
+    for task in done:
+        with suppress(WebSocketDisconnect, TimeoutError):
+            task.result()
+
+
 @router.websocket("/ws/board")
 async def board(websocket: WebSocket, services: ServicesDI) -> None:
     token = websocket.cookies.get(SESSION_COOKIE)
@@ -66,18 +91,11 @@ async def board(websocket: WebSocket, services: ServicesDI) -> None:
     if denial is not None:
         await websocket.close(code=denial)
         return
-    async with services.board_feed.subscribe() as subscription:
-        await websocket.accept()
-        reader = asyncio.create_task(_until_disconnect(websocket))
-        sender = asyncio.create_task(_relay(websocket, services, token, subscription))
-        try:
-            done, _ = await asyncio.wait(
-                {reader, sender}, return_when=asyncio.FIRST_COMPLETED
-            )
-        finally:
-            for task in (reader, sender):
-                task.cancel()
-            await asyncio.gather(reader, sender, return_exceptions=True)
-        for task in done:
-            with suppress(WebSocketDisconnect, TimeoutError):
-                task.result()
+    try:
+        async with services.board_feed.subscribe() as subscription:
+            await websocket.accept()
+            await _serve(websocket, services, token, subscription)
+    except BoardFeedUnavailable:
+        # Not a storage error: nothing to roll back. The client reconnects and
+        # re-reads the board, which also recovers anything it missed.
+        await websocket.close(code=TRY_AGAIN_LATER)

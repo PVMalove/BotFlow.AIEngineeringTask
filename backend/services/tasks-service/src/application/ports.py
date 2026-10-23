@@ -24,6 +24,11 @@ class IdentityUnavailable(Exception):
     """Identity cannot confirm the session; access is never assumed."""
 
 
+class BoardFeedUnavailable(Exception):
+    """The signal source failed. Not a storage error: nothing is lost or rolled
+    back, the client reconnects and re-reads the board."""
+
+
 class BoardSubscription(Protocol):
     async def wait(self, timeout: float) -> bool:
         """True when the board changed since the last call, False after `timeout`.

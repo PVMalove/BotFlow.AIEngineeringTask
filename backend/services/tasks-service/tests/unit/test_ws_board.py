@@ -14,8 +14,9 @@ from starlette.websockets import WebSocketDisconnect
 
 from api.containers import Services
 from api.dependencies import get_services
+from api.endpoints.board_ws import router
 from api.main import create_tasks_app
-from application.ports import IdentityUnavailable
+from application.ports import BoardFeedUnavailable, IdentityUnavailable
 
 TOKEN = "session-token"
 HEADERS = {"origin": "http://testserver", "cookie": f"botflow_session={TOKEN}"}
@@ -207,3 +208,32 @@ def test_a_clients_departure_releases_the_subscription(
         pass
 
     assert feed.subscribed == 1 and feed.unsubscribed == 1
+
+
+def test_a_redis_that_cannot_subscribe_refuses_with_try_again_later(
+    client: TestClient, identity: Identity, feed: FakeBoardFeed
+) -> None:
+    feed.subscribe_error = BoardFeedUnavailable()
+
+    assert refused_with(client, HEADERS) == TRY_AGAIN_LATER
+
+
+def test_a_redis_that_fails_while_listening_closes_with_try_again_later(
+    client: TestClient, feed: FakeBoardFeed
+) -> None:
+    feed.script = [True, BoardFeedUnavailable()]
+
+    with client.websocket_connect("/ws/board", headers=HEADERS) as socket:
+        assert socket.receive_json() == SIGNAL
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_json()
+
+    assert closed.value.code == TRY_AGAIN_LATER
+    assert feed.unsubscribed == 1
+
+
+def test_the_board_socket_depends_on_services_only_not_on_a_database_session() -> None:
+    (route,) = router.routes
+    dependencies = [d.call for d in route.dependant.dependencies]  # type: ignore[attr-defined]
+
+    assert dependencies == [get_services]
