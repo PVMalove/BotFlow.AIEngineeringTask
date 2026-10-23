@@ -33,7 +33,7 @@ export default function App() {
             spacing={1.5}
             sx={{
               justifyContent: 'space-between',
-              alignItems: { xs: 'flex-start', sm: 'center' },
+              alignItems: 'center',
             }}
           >
             <Stack
@@ -71,34 +71,48 @@ export default function App() {
               }}
               sx={{
                 flexShrink: 0,
-                columnGap: 1,
-                '& .MuiToggleButton-root': {
-                  px: { xs: 0.75, sm: 1.5 },
-                  fontSize: { xs: 11, sm: 13 },
+                p: '3px',
+                gap: '3px',
+                bgcolor: 'background.default',
+                border: 1,
+                borderColor: 'divider',
+                borderRadius: '12px',
+                '& .MuiToggleButtonGroup-grouped': {
+                  m: 0,
                   border: 0,
-                  minHeight: 40,
+                  borderRadius: '8px',
+                  minWidth: 48,
+                  minHeight: 36,
+                  px: 1.5,
+                  py: 0.75,
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                  color: 'text.secondary',
+                  '&:hover': { bgcolor: 'action.hover' },
                   '&.Mui-selected': {
-                    bgcolor: 'transparent',
+                    bgcolor: 'background.paper',
                     color: 'text.primary',
-                    textDecoration: 'underline',
-                    textDecorationColor: '#D9A74A',
-                    textUnderlineOffset: '6px',
+                    boxShadow: '0 1px 4px rgba(31, 30, 28, 0.12)',
+                    '&:hover': { bgcolor: 'background.paper' },
                   },
                 },
               }}
             >
-              <ToggleButton value="ru" lang="ru" aria-label="Русский">
-                Русский
-                <Box
-                  component="span"
-                  aria-hidden="true"
-                  sx={{ ml: 1, color: 'text.secondary' }}
-                >
-                  /
-                </Box>
+              <ToggleButton
+                value="ru"
+                lang="ru"
+                aria-label="Русский"
+                title="Русский"
+              >
+                RU
               </ToggleButton>
-              <ToggleButton value="hy" lang="hy">
-                Հայերեն
+              <ToggleButton
+                value="hy"
+                lang="hy"
+                aria-label="Հայերեն"
+                title="Հայերեն"
+              >
+                ՀԱՅ
               </ToggleButton>
             </ToggleButtonGroup>
           </Stack>
