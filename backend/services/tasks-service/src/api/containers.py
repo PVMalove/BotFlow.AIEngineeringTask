@@ -1,7 +1,7 @@
 """Service composition root; each process owns its infrastructure lifecycle."""
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 
 import httpx
@@ -33,11 +33,22 @@ class TaskWorker:
     relay: RelayOutbox[SqlOutboxTx]
 
 
-def build_worker(resources: Resources) -> TaskWorker:
-    def uow() -> SqlTasksUnitOfWork:
-        return SqlTasksUnitOfWork(resources.sessions)
+def tasks_unit_of_work(resources: Resources) -> Callable[[], SqlTasksUnitOfWork]:
+    """The one transaction factory of the API and the worker: after every commit
+    the board signal is published, whichever process changed the board."""
+    assert resources.redis is not None  # Tasks always opens Redis
+    board_signal = RedisBoardSignal(resources.redis)
 
-    create = CreateTaskConsumer(CreateTaskCommandHandler(uow))
+    def uow() -> SqlTasksUnitOfWork:
+        return SqlTasksUnitOfWork(
+            resources.sessions, event_handlers=[board_signal.handle]
+        )
+
+    return uow
+
+
+def build_worker(resources: Resources) -> TaskWorker:
+    create = CreateTaskConsumer(CreateTaskCommandHandler(tasks_unit_of_work(resources)))
 
     async def commands_queue(channel: AbstractChannel) -> AbstractQueue:
         _, commands, _ = await declare_task_topology(channel)
@@ -70,19 +81,13 @@ async def open_services(resources: Resources) -> AsyncIterator[Services]:
     ) as client:
         identity = HttpIdentityGateway(client)
         reader = SqlTaskReader(resources.sessions)
-        assert resources.redis is not None  # Tasks always opens Redis
-        board_signal = RedisBoardSignal(resources.redis)
-
-        def uow() -> SqlTasksUnitOfWork:
-            return SqlTasksUnitOfWork(
-                resources.sessions, event_handlers=[board_signal.handle]
-            )
-
         yield Services(
             identity=identity,
             list_tasks=ListTasksQueryHandler(reader),
             get_task=GetTaskQueryHandler(reader),
-            change_task_status=ChangeTaskStatusCommandHandler(uow),
+            change_task_status=ChangeTaskStatusCommandHandler(
+                tasks_unit_of_work(resources)
+            ),
         )
 
 

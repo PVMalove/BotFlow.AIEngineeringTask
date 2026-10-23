@@ -1,6 +1,7 @@
 """In-memory ports of the tasks service: a board, repositories, a transaction."""
 
-from collections.abc import Callable
+import logging
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
@@ -14,6 +15,10 @@ from domain.entities.task import Task
 from domain.repositories import InboxRepository, TaskRepository
 from domain.value_objects.task_id import TaskId
 from domain.value_objects.task_status import TaskStatus
+
+logger = logging.getLogger(__name__)
+
+EventHandler = Callable[[DomainEvent], Awaitable[None]]
 
 BASE = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 AUTHOR = uuid4()
@@ -111,8 +116,11 @@ class FakeInbox:
 
 
 class FakeTasksUnitOfWork:
-    def __init__(self, board: Board) -> None:
+    def __init__(
+        self, board: Board, event_handlers: Sequence[EventHandler] = ()
+    ) -> None:
         self._board = board
+        self._event_handlers = tuple(event_handlers)
         self._tracked: list[Task] = []
         self.committed = False
         self.rolled_back = False
@@ -136,8 +144,15 @@ class FakeTasksUnitOfWork:
 
     async def commit(self) -> None:
         self.committed = True
-        for task in self._tracked:
-            self._board.events.extend(task.pull_events())
+        events = [e for task in self._tracked for e in task.pull_events()]
+        self._board.events.extend(events)
+        # Like SqlAlchemyUnitOfWork: after the commit a failing handler is only logged.
+        for event in events:
+            for handler in self._event_handlers:
+                try:
+                    await handler(event)
+                except Exception:
+                    logger.warning("handler failed after commit", exc_info=False)
 
     async def rollback(self) -> None:
         self.rolled_back = True

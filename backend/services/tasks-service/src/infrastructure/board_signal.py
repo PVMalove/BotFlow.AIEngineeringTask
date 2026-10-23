@@ -7,7 +7,7 @@ import logging
 from kernel_domain.domain_event import DomainEvent
 from redis.asyncio import Redis
 
-from domain.events.task_domain_event import TaskStatusChanged
+from domain.events.task_domain_event import TaskCreated, TaskStatusChanged
 
 CHANNEL = "botflow.board.changed"
 
@@ -15,14 +15,14 @@ logger = logging.getLogger(__name__)
 
 
 class RedisBoardSignal:
-    """Handler of `TaskStatusChanged`, run after the change is committed."""
+    """Handler of `TaskCreated` and `TaskStatusChanged`, run after the commit."""
 
     def __init__(self, redis: Redis, timeout: float = 1.0) -> None:
         self._redis = redis
         self._timeout = timeout
 
     async def handle(self, event: DomainEvent) -> None:
-        if not isinstance(event, TaskStatusChanged):
+        if not isinstance(event, TaskCreated | TaskStatusChanged):
             return
         # Pub/Sub never replays; a lost signal is covered by the panel's refresh.
         try:
