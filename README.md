@@ -122,7 +122,11 @@ BotFlow.AIEngineeringTask/
     ├── Makefile
     ├── pyproject.toml                  # uv workspace
     ├── uv.lock
-    ├── libs/kernel-platform/                 # общие технические адаптеры, не бизнес-модели
+    ├── libs/                           # общие технические библиотеки, не бизнес-модели
+    │   ├── kernel-domain/              # Result, Error, Entity, DomainEvent
+    │   ├── kernel-platform/            # HTTP-контракт, UoW, outbox, воркеры
+    │   ├── observability/              # request id, логи
+    │   └── test-support/               # общие тестовые двойники
     └── services/
         ├── identity-service/
         ├── tasks-service/
@@ -136,12 +140,12 @@ BotFlow.AIEngineeringTask/
             │   │   ├── events/
             │   │   ├── repositories.py
             │   │   └── unit_of_work.py
-            │   ├── application/       # commands/, queries/, ports/
+            │   ├── application/       # commands/, queries/, ports.py
             │   ├── infrastructure/    # реализации портов: db/, security/
             │   │   └── db/
             │   │       ├── alembic.ini
             │   │       └── alembic/
-            │   ├── api/               # HTTP, схемы, containers.py — composition root
+            │   ├── api/               # HTTP, схемы, containers.py, worker/bot/bootstrap
             │   ├── contracts/         # framework-independent View: frozen dataclasses
             │   ├── core/              # кросс-срезная политика сервиса
             │   └── common/            # локальные утилиты
@@ -153,7 +157,7 @@ BotFlow.AIEngineeringTask/
             ├── k8s/
             ├── docs/
             ├── ci/
-            └── scripts/               # bootstrap.py, worker.py, bot.py (Automation)
+            └── scripts/               # служебные CLI (voice_latency, whisper_validate)
 ```
 
 Identity и Tasks имеют такую же структуру, собственные миграции и workers.

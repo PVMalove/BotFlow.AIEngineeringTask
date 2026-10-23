@@ -38,7 +38,7 @@
 
 Слои лежат прямо в `backend/services/<service>/src/`, без промежуточного
 пакета с именем сервиса. Каждый сервис запускается с собственным `src` в пути
-импортов; исходники других сервисов в этот процесс не подключаются. Служебные
+импортов; исходники других сервисов в этот процесс не подключаются. Процессы bootstrap, worker и bot — в слое `api`; служебные
 CLI (`voice_latency`, `whisper_validate`) находятся в `scripts/`, тесты разделены на `unit/`, `integration/`, `e2e/`,
 `performance/`. Рядом с `src/` предусмотрены `k8s/`, `docs/` и `ci/`.
 
@@ -55,14 +55,23 @@ CQRS локальный, без отдельной read DB/универсаль�
 DB-транзакцию и не блокирует ingress, уведомления или heartbeat брокера.
 
 Общие библиотеки — `backend/libs`: `kernel-domain` (`Result`, `Error`, `Entity`,
-`DomainEvent`), `kernel-platform` (HTTP-конверт и обработчики ошибок, пагинация, `Actor`,
-`SqlAlchemyUnitOfWork` с outbox-staging и обработчиками событий после commit, outbox, messaging),
+`DomainEvent`), `kernel-platform` (HTTP-конверт и обработчики ошибок, пагинация, `Actor`, протокол `UnitOfWork` и
+`SqlAlchemyUnitOfWork` в отдельном модуле — с outbox-staging и обработчиками событий после commit,
+outbox, messaging, общие `utcnow`, конверт сообщения и циклы воркеров),
 `observability` (request id, JSON-логи, access-log), `test-support` (фикстуры тестов).
 
 HTTP-контракт: успех — `{data, meta}`; ошибка — `{error: {code, message, details?, request_id?}}`
 (`code` — стабильный snake_case из `domain/errors.py`; статус выводится из типа `Error`:
 validation 400, unauthorized 401, forbidden 403, not_found 404, conflict 409, rate_limited 429
-с `Retry-After`; недоступность БД/Identity — 503 `service_unavailable`).
+с `Retry-After`). Ошибку тела запроса, не прошедшую схему, отдаёт FastAPI как 422
+`validation_error`; значение, отклонённое доменным правилом, — 400 с кодом правила.
+
+Ожидаемый исход бизнес-операции — `Result`; технический сбой (БД, Identity) — исключение
+(`IdentityUnavailable`, `DBAPIError`, `OSError`), которое сервис перечисляет в
+`unavailable_error_types` и которое отвечает 503 `service_unavailable` с `Retry-After`. Любое
+другое необработанное исключение — 500 `internal_error` без деталей; `request_id` и заголовок
+`X-Request-ID` есть и у него. Изменение `change_status` на уже установленный статус с актуальной
+версией — успех без изменений (`Result.ok(False)`), событие не создаётся.
 
 Референс — [ProductsFlow](https://github.com/PVMalove/ProductsFlow). Подходы
 адаптированы к контекстам BotFlow; наличие workers само по себе не определяет
