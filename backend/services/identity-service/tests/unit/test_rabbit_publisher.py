@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from conftest import NOW
 
-from domain.access import ACCESS_DECIDED, OutboxEntry
+from domain.outbox import ACCESS_DECIDED, OutboxEntry
 from infrastructure.messaging.publisher import RabbitEventPublisher
 
 

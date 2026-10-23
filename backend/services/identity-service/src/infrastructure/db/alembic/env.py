@@ -1,7 +1,7 @@
-"""Identity migration environment; run through `scripts/bootstrap.py migrate`."""
+"""Identity migration environment; run through `python -m api.bootstrap migrate`."""
 
-from botflow_platform.migrations import configure_environment
-from botflow_platform.settings import Settings
+from kernel_platform.migrations import configure_environment
+from kernel_platform.settings import Settings
 
 from infrastructure.db.tables import metadata
 

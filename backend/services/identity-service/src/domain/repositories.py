@@ -4,8 +4,12 @@ from datetime import datetime
 from typing import Protocol
 from uuid import UUID
 
-from domain.access import OutboxEntry
-from domain.entities.auth import AuthSession, LoginCode, Member, MemberStatus
+from domain.entities.auth_session import AuthSession
+from domain.entities.login_code import LoginCode
+from domain.entities.member import Member
+from domain.outbox import OutboxEntry
+from domain.value_objects.member_id import MemberId
+from domain.value_objects.member_status import MemberStatus
 
 
 class MemberRepository(Protocol):
@@ -13,7 +17,9 @@ class MemberRepository(Protocol):
         """Insert unless the Telegram identity exists; True when inserted."""
         ...
 
-    async def get(self, member_id: UUID, *, lock: bool = False) -> Member | None: ...
+    async def get(
+        self, member_id: MemberId, *, lock: bool = False
+    ) -> Member | None: ...
 
     async def get_by_telegram_id(
         self, telegram_id: int, *, lock: bool = False
@@ -39,8 +45,9 @@ class MemberRepository(Protocol):
         """Ordered by created_at, then id, so pages are stable."""
         ...
 
-    async def update_access(self, member: Member, *, expected_version: int) -> bool:
-        """Store the access fields if the stored version is still `expected_version`."""
+    async def update_access(self, member: Member, *, loaded_version: int) -> bool:
+        """Store the access fields if the stored version is still `loaded_version`;
+        the comparison and the write are one statement."""
         ...
 
 

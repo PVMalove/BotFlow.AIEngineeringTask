@@ -1,74 +1,59 @@
 """Admin API: join requests, members and access decisions (browser contract)."""
 
-from typing import Annotated, Literal
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query
+from kernel_platform.http.cache import no_store
+from kernel_platform.http.envelope import ApiResponse
+from kernel_platform.http.match import match_result
+from kernel_platform.security.origin import require_same_origin
 
-from api.dependencies import AdminDI, DecideMemberDI, ListMembersDI
-from api.schemas import DecisionBody
-from api.security import require_same_origin
-from application.commands.access import DecideMemberCommand
-from application.queries.members import ListMembersQuery, admin_member_view
+from api.dependencies import AdminAuth, DecideMemberDI, ListMembersDI
+from api.schemas import DecisionBody, JoinRequestsListRequest, MembersListRequest
 from contracts.views import AdminMemberView, DecisionView
-from domain.access import Action
-from domain.entities.auth import MemberStatus
+from domain.value_objects.access import Action
 
-router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
-
-Limit = Annotated[int, Query(ge=1, le=100)]
-Offset = Annotated[int, Query(ge=0)]
-RequestStatus = Annotated[
-    Literal["pending", "rejected"], Query(description="pending|rejected")
-]
+router = APIRouter(
+    prefix="/api/v1/admin", tags=["admin"], dependencies=[Depends(no_store)]
+)
 
 
 @router.get(
     "/join-requests",
-    response_model=list[AdminMemberView],
+    response_model=ApiResponse[list[AdminMemberView]],
     summary="Заявки на доступ",
     description="Ожидающие (по умолчанию) или отклонённые заявки, по created_at и id.",
 )
 async def join_requests(
-    admin: AdminDI,
+    request: Annotated[JoinRequestsListRequest, Query()],
+    _: AdminAuth,
     handler: ListMembersDI,
-    response: Response,
-    status: RequestStatus = "pending",
-    limit: Limit = 50,
-    offset: Offset = 0,
-) -> list[AdminMemberView]:
+) -> ApiResponse[list[AdminMemberView]]:
     """Список заявок для администратора."""
-    response.headers["Cache-Control"] = "no-store"
-    return await handler.execute(
-        ListMembersQuery((MemberStatus(status),), limit, offset)
-    )
+    return match_result(await handler.execute(request.to_query()))
 
 
 @router.get(
     "/members",
-    response_model=list[AdminMemberView],
+    response_model=ApiResponse[list[AdminMemberView]],
     summary="Участники",
     description=(
         "Допущенные и заблокированные участники; параметр status выбирает любой статус."
     ),
 )
 async def members(
-    admin: AdminDI,
+    request: Annotated[MembersListRequest, Query()],
+    _: AdminAuth,
     handler: ListMembersDI,
-    response: Response,
-    status: MemberStatus | None = None,
-    limit: Limit = 50,
-    offset: Offset = 0,
-) -> list[AdminMemberView]:
+) -> ApiResponse[list[AdminMemberView]]:
     """Список участников для администратора."""
-    response.headers["Cache-Control"] = "no-store"
-    statuses = (status,) if status else (MemberStatus.APPROVED, MemberStatus.BLOCKED)
-    return await handler.execute(ListMembersQuery(statuses, limit, offset))
+    return match_result(await handler.execute(request.to_query()))
 
 
 @router.post(
     "/members/{member_id}/{action}",
-    response_model=DecisionView,
+    response_model=ApiResponse[DecisionView],
     summary="Решение по заявке или участнику",
     description=(
         "approve, reject, block или unblock с проверкой expected_version; "
@@ -80,21 +65,13 @@ async def decide_member(
     member_id: UUID,
     action: Action,
     body: DecisionBody,
-    admin: AdminDI,
+    admin: AdminAuth,
     handler: DecideMemberDI,
-    response: Response,
-) -> DecisionView:
+) -> ApiResponse[DecisionView]:
     """Принять решение от имени текущего администратора."""
-    result = await handler.execute(
-        DecideMemberCommand(
-            actor_id=admin.member.id,
-            member_id=member_id,
-            action=action,
-            expected_version=body.expected_version,
-        )
+    return match_result(
+        await handler.execute(body.to_command(admin.member.id.value, member_id, action))
     )
-    response.headers["Cache-Control"] = "no-store"
-    return DecisionView(member=admin_member_view(result.member), changed=result.changed)
 
 
 __all__ = ["router"]

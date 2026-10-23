@@ -1,101 +1,65 @@
 """CreateTask command: one source message becomes at most one Pending task."""
 
-import json
+import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
-from typing import Any
+from dataclasses import dataclass
+from datetime import datetime
 from uuid import UUID
 
-from botflow_platform.consumer import InvalidMessage
-from botflow_platform.messaging import TASK_CREATED_ROUTING_KEY
+from kernel_domain.result import Result
+from kernel_platform.clock import utcnow
 
-from application.ports import NewTask, TaskCommandStore, TaskCreatedMessage
-from domain.tasks import created_message_id_for, source_key, task_id_for
+from domain.entities.task import Task
+from domain.unit_of_work import TasksUnitOfWork
+from domain.value_objects.source_key import source_key
+from domain.value_objects.task_id import TaskId
 
-COMMAND_TYPE = "CreateTask"
-RESULT_TYPE = "TaskCreated"
-ENVELOPE_VERSION = 1
-MAX_TEXT = 4096
-MAX_NAME = 64
+logger = logging.getLogger(__name__)
 
 
-def _integer(value: object) -> int:
-    if not isinstance(value, int) or isinstance(value, bool):
-        raise ValueError
-    return value
+@dataclass(frozen=True)
+class CreateTaskCommand:
+    message_id: str  # the broker message, for the inbox
+    correlation_id: UUID  # the Automation job that asked for the task
+    bot_id: int
+    chat_id: int
+    source_message_id: int
+    text: str
+    author_id: UUID
+    author_telegram_id: int
+    author_name: str
 
 
-def _text(value: object, limit: int) -> str:
-    if not isinstance(value, str) or not 1 <= len(value) <= limit:
-        raise ValueError
-    return value
-
-
-class CreateTaskFromCommand:
+class CreateTaskCommandHandler:
     def __init__(
         self,
-        store: TaskCommandStore,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        uow_factory: Callable[[], TasksUnitOfWork],
+        clock: Callable[[], datetime] = utcnow,
     ) -> None:
-        self._store = store
+        self._uow_factory = uow_factory
         self._clock = clock
 
-    async def execute(
-        self, message_id: str | None, message_type: str | None, body: bytes
-    ) -> bool:
-        """True when this message was new; a storage failure propagates."""
-        if message_id is None or message_type != COMMAND_TYPE:
-            raise InvalidMessage
-        task = self._parse(body)
-        return await self._store.create(message_id, task, self._created(task))
-
-    async def handle(
-        self, message_id: str | None, message_type: str | None, body: bytes
-    ) -> None:
-        """Queue-consumer entry point."""
-        await self.execute(message_id, message_type, body)
-
-    def _parse(self, body: bytes) -> NewTask:
-        try:
-            envelope = json.loads(body)
-            if envelope["envelope_version"] != ENVELOPE_VERSION:
-                raise ValueError
-            payload: dict[str, Any] = envelope["payload"]
-            source = source_key(
-                _integer(payload["bot_id"]),
-                _integer(payload["chat_id"]),
-                _integer(payload["message_id"]),
-            )
-            return NewTask(
-                id=task_id_for(source),
-                source_key=source,
-                correlation_id=UUID(payload["job_id"]),
-                text=_text(payload["text"], MAX_TEXT),
-                author_id=UUID(payload["author_id"]),
-                author_telegram_id=_integer(payload["author_telegram_id"]),
-                author_name=_text(payload["author_name"], MAX_NAME),
-                created_at=self._clock(),
-            )
-        except (ValueError, KeyError, TypeError, AttributeError):
-            raise InvalidMessage from None
-
-    def _created(self, task: NewTask) -> TaskCreatedMessage:
-        message_id = created_message_id_for(task.id)
-        return TaskCreatedMessage(
-            id=message_id,
-            correlation_id=task.correlation_id,
-            type=RESULT_TYPE,
-            routing_key=TASK_CREATED_ROUTING_KEY,
-            payload={
-                "envelope_version": ENVELOPE_VERSION,
-                "message_id": str(message_id),
-                "type": RESULT_TYPE,
-                "correlation_id": str(task.correlation_id),
-                "occurred_at": task.created_at.isoformat(),
-                "payload": {
-                    "job_id": str(task.correlation_id),
-                    "task_id": str(task.id),
-                    "source_key": task.source_key,
-                },
-            },
+    async def execute(self, command: CreateTaskCommand) -> Result[bool]:
+        """True when the message was new; a redelivery changes nothing."""
+        source = source_key(command.bot_id, command.chat_id, command.source_message_id)
+        created = Task.create(
+            TaskId.from_source(source),
+            text=command.text,
+            author_id=command.author_id,
+            author_telegram_id=command.author_telegram_id,
+            author_name=command.author_name,
+            source_key=source,
+            correlation_id=command.correlation_id,
+            now=self._clock(),
         )
+        if created.is_err:
+            return Result[bool].fail(created.error)
+        async with self._uow_factory() as uow:
+            if not await uow.inbox.claim(command.message_id):
+                return Result[bool].ok(False)  # the first copy already did everything
+            # The unique source makes a second message for it a no-op: the task id
+            # is derived from the source, so the repository stores one row and the
+            # TaskCreated event, hence the result message, exists once.
+            await uow.tasks.add(created.value)
+            await uow.commit()  # the broker message is acknowledged only after this
+        return Result[bool].ok(True)

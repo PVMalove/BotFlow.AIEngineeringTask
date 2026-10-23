@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import jwt
 import pytest
-from conftest import Clock, FakeRateLimiter, FakeUnitOfWork, Store
+from conftest import Clock, FakeRateLimiter, FakeUnitOfWork, Store, with_status
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy.exc import OperationalError, TimeoutError
@@ -17,22 +17,22 @@ from api.containers import Services
 from api.dependencies import get_services
 from api.main import create_identity_app
 from api.security import CookiePolicy, Operation, ServiceKeys
-from application.commands.access import DecideMember
+from application.commands.access import DecideMemberCommandHandler
 from application.commands.auth import (
-    EnsureInitialAdmin,
     EnsureInitialAdminCommand,
-    ExchangeLoginCode,
-    IssueLoginCode,
+    EnsureInitialAdminCommandHandler,
+    ExchangeLoginCodeCommandHandler,
     IssueLoginCodeCommand,
-    Logout,
+    IssueLoginCodeCommandHandler,
+    LogoutCommandHandler,
 )
-from application.commands.join import SubmitJoinRequest
+from application.commands.join import SubmitJoinRequestCommandHandler
 from application.queries.members import (
-    AuthenticateSession,
-    FindMemberByTelegram,
-    ListMembers,
+    AuthenticateSessionQueryHandler,
+    FindMemberByTelegramQueryHandler,
+    ListMembersQueryHandler,
 )
-from domain.entities.auth import MemberStatus
+from domain.value_objects.member_status import MemberStatus
 from infrastructure.security.jwt import Rs256Tokens
 
 ADMIN = 4_200_000_001
@@ -57,17 +57,19 @@ class Env:
         def uow() -> FakeUnitOfWork:
             return FakeUnitOfWork(self.store)
 
-        self.issue = IssueLoginCode(uow, limiter, self.clock)
+        self.issue = IssueLoginCodeCommandHandler(uow, limiter, self.clock.now)
         self.services = Services(
-            exchange=ExchangeLoginCode(uow, limiter, self.clock, tokens),
-            logout=Logout(uow, self.clock),
-            authenticate=AuthenticateSession(uow, tokens, self.clock),
+            exchange=ExchangeLoginCodeCommandHandler(
+                uow, limiter, self.clock.now, tokens
+            ),
+            logout=LogoutCommandHandler(uow, self.clock.now),
+            authenticate=AuthenticateSessionQueryHandler(uow, tokens, self.clock.now),
             cookies=CookiePolicy(secure=secure),
             issue_code=self.issue,
-            find_member=FindMemberByTelegram(uow),
-            submit_join=SubmitJoinRequest(uow, limiter, self.clock),
-            decide=DecideMember(uow, self.clock),
-            list_members=ListMembers(uow),
+            find_member=FindMemberByTelegramQueryHandler(uow),
+            submit_join=SubmitJoinRequestCommandHandler(uow, limiter, self.clock.now),
+            decide=DecideMemberCommandHandler(uow, self.clock.now),
+            list_members=ListMembersQueryHandler(uow),
             service_keys=ServiceKeys(
                 {
                     "automation-key-for-tests": (
@@ -80,14 +82,21 @@ class Env:
         )
 
     async def login_code(self) -> str:
-        admin_uow = EnsureInitialAdmin(lambda: FakeUnitOfWork(self.store), self.clock)
+        admin_uow = EnsureInitialAdminCommandHandler(
+            lambda: FakeUnitOfWork(self.store), self.clock.now
+        )
         await admin_uow.execute(EnsureInitialAdminCommand(ADMIN))
-        return (await self.issue.execute(IssueLoginCodeCommand(ADMIN))).code
+        return (await self.issue.execute(IssueLoginCodeCommand(ADMIN))).value.code
 
 
 @pytest.fixture
 def env() -> Env:
     return Env(secure=False)
+
+
+def error_code(response: httpx.Response) -> str:
+    code: str = response.json()["error"]["code"]
+    return code
 
 
 async def client_for(env: Env) -> AsyncIterator[httpx.AsyncClient]:
@@ -117,7 +126,7 @@ async def test_exchange_sets_an_http_only_8_hour_session_cookie(
     response = await login(client, env)
 
     assert response.status_code == 200
-    assert response.json()["telegram_id"] == ADMIN
+    assert response.json()["data"]["telegram_id"] == ADMIN
     cookie = response.headers["set-cookie"]
     assert "HttpOnly" in cookie
     assert "SameSite=strict" in cookie
@@ -218,8 +227,8 @@ async def test_me_returns_the_current_member(
     response = await client.get("/api/v1/users/me")
 
     assert response.status_code == 200
-    assert response.json()["telegram_id"] == ADMIN
-    assert response.json()["role"] == "admin"
+    assert response.json()["data"]["telegram_id"] == ADMIN
+    assert response.json()["data"]["role"] == "admin"
     assert response.headers["cache-control"] == "no-store"
 
 
@@ -247,7 +256,7 @@ async def test_me_rechecks_access_on_every_request(
 ) -> None:
     await login(client, env)
     (member,) = env.store.members.values()
-    env.store.members[member.id] = member.with_status(MemberStatus.BLOCKED)
+    env.store.members[member.id] = with_status(member, MemberStatus.BLOCKED)
 
     assert (await client.get("/api/v1/users/me")).status_code == 401
 
@@ -312,7 +321,7 @@ async def test_unavailable_storage_gives_503_not_access(
         )
 
     assert response.status_code == 503
-    assert response.json() == {"detail": "identity_unavailable"}
+    assert error_code(response) == "service_unavailable"
     assert response.headers["retry-after"] == "5"
     assert "set-cookie" not in response.headers
 
@@ -327,8 +336,8 @@ async def test_internal_lookup_returns_the_member_for_a_service_key(
     )
 
     assert response.status_code == 200
-    assert response.json()["role"] == "admin"
-    assert response.json()["status"] == "approved"
+    assert response.json()["data"]["role"] == "admin"
+    assert response.json()["data"]["status"] == "approved"
 
 
 async def test_internal_lookup_of_unknown_telegram_id_is_404(
@@ -384,11 +393,13 @@ async def test_internal_issue_gives_a_code_the_browser_can_exchange(
         "/internal/v1/login-codes", json={"telegram_id": ADMIN}, headers=SERVICE_KEY
     )
     exchanged = await client.post(
-        "/api/v1/auth/exchange", json={"code": issued.json()["code"]}, headers=ORIGIN
+        "/api/v1/auth/exchange",
+        json={"code": issued.json()["data"]["code"]},
+        headers=ORIGIN,
     )
 
     assert issued.status_code == 200
-    assert len(issued.json()["code"]) == 32
+    assert len(issued.json()["data"]["code"]) == 32
     assert issued.headers["cache-control"] == "no-store"
     assert exchanged.status_code == 200
 
@@ -456,7 +467,7 @@ async def test_internal_join_creates_a_pending_member_without_access(
     )
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["data"]
     assert body["outcome"] == "submitted"
     assert body["member"]["status"] == "pending"
     assert body["member"]["role"] == "user"
@@ -481,14 +492,14 @@ async def test_internal_join_is_idempotent_and_never_unblocks(
         "/internal/v1/join-requests", json=join, headers=SERVICE_KEY
     )
     (member,) = env.store.members.values()
-    env.store.members[member.id] = replace(member, status=MemberStatus.BLOCKED)
+    env.store.members[member.id] = with_status(member, MemberStatus.BLOCKED)
     blocked = await client.post(
         "/internal/v1/join-requests", json=join, headers=SERVICE_KEY
     )
 
-    assert again.json()["outcome"] == "already_pending"
-    assert blocked.json()["outcome"] == "blocked"
-    assert blocked.json()["member"]["status"] == "blocked"
+    assert again.json()["data"]["outcome"] == "already_pending"
+    assert blocked.json()["data"]["outcome"] == "blocked"
+    assert blocked.json()["data"]["member"]["status"] == "blocked"
 
 
 async def test_internal_join_demands_its_own_operation(

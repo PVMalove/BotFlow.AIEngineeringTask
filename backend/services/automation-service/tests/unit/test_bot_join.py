@@ -4,6 +4,8 @@ from typing import Any
 
 import httpx
 import pytest
+from kernel_domain.errors import Error, ErrorType
+from kernel_domain.result import Result
 
 from application.commands.handle_bot_command import (
     HandleBotCommand,
@@ -11,17 +13,17 @@ from application.commands.handle_bot_command import (
 )
 from application.ports import (
     IdentityUnavailable,
-    JoinOutcome,
-    LoginDenied,
-    LoginRateLimited,
     TelegramMember,
 )
+from domain.errors import AutomationErrors
+from domain.value_objects.join_outcome import JoinOutcome
 
 USER = 7_000_000_001
 
 
 class Identity:
     failure: Exception | None = None
+    error: Error | None = None
     outcome = JoinOutcome.SUBMITTED
     member: TelegramMember | None = None
 
@@ -32,17 +34,19 @@ class Identity:
     async def find_member(self, telegram_id: int) -> TelegramMember | None:
         return self.member
 
-    async def issue_login_code(self, telegram_id: int) -> str:
+    async def issue_login_code(self, telegram_id: int) -> Result[str]:
         self.codes += 1
-        return "A" * 32
+        return Result[str].ok("A" * 32)
 
     async def submit_join_request(
         self, telegram_id: int, display_name: str | None
-    ) -> JoinOutcome:
+    ) -> Result[JoinOutcome]:
         if self.failure:
             raise self.failure
+        if self.error:
+            return Result[JoinOutcome].fail(self.error)
         self.joins.append((telegram_id, display_name))
-        return self.outcome
+        return Result[JoinOutcome].ok(self.outcome)
 
 
 class Messages:
@@ -113,7 +117,7 @@ async def test_join_replies_according_to_the_identity_outcome(
 
 async def test_join_is_rate_limited_with_a_retry_hint() -> None:
     identity, messages = Identity(), Messages()
-    identity.failure = LoginRateLimited()
+    identity.error = AutomationErrors.rate_limited()
 
     await send(bot(identity, messages), "/join")
 
@@ -122,12 +126,9 @@ async def test_join_is_rate_limited_with_a_retry_hint() -> None:
     ]
 
 
-@pytest.mark.parametrize("failure", [IdentityUnavailable(), LoginDenied()])
-async def test_join_with_unavailable_identity_gets_a_safe_retry_message(
-    failure: Exception,
-) -> None:
+async def test_join_with_unavailable_identity_gets_a_safe_retry_message() -> None:
     identity, messages = Identity(), Messages()
-    identity.failure = failure
+    identity.failure = IdentityUnavailable()
 
     await send(bot(identity, messages), "/join")
 
@@ -201,8 +202,14 @@ async def test_http_gateway_posts_the_join_request_with_the_automation_key() -> 
         return httpx.Response(
             200,
             json={
-                "outcome": "submitted",
-                "member": {"telegram_id": USER, "role": "user", "status": "pending"},
+                "data": {
+                    "outcome": "submitted",
+                    "member": {
+                        "telegram_id": USER,
+                        "role": "user",
+                        "status": "pending",
+                    },
+                }
             },
         )
 
@@ -211,23 +218,48 @@ async def test_http_gateway_posts_the_join_request_with_the_automation_key() -> 
     ) as client:
         sut = HttpIdentityGateway(client, "test-automation-key")
 
-        outcome = await sut.submit_join_request(USER, "Ann")
+        joined = await sut.submit_join_request(USER, "Ann")
 
-    assert outcome is JoinOutcome.SUBMITTED
+    assert joined.is_ok and joined.value is JoinOutcome.SUBMITTED
 
 
 @pytest.mark.parametrize(
-    ("status", "body", "expected"),
+    ("status", "body", "error_type"),
     [
-        (429, {}, LoginRateLimited),
-        (403, {}, LoginDenied),
-        (500, {}, IdentityUnavailable),
-        (200, {"outcome": "approved-by-gateway"}, IdentityUnavailable),
-        (200, {}, IdentityUnavailable),
+        (429, {}, ErrorType.RATE_LIMITED),
+        (403, {"error": {"code": "not_approved"}}, ErrorType.FORBIDDEN),
+    ],
+)
+async def test_http_gateway_returns_the_refusals_it_understands(
+    status: int, body: dict[str, Any], error_type: ErrorType
+) -> None:
+    from infrastructure.identity_gateway import HttpIdentityGateway
+
+    async with httpx.AsyncClient(
+        base_url="http://identity",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(status, json=body)
+        ),
+    ) as client:
+        joined = await HttpIdentityGateway(client, "secret-key").submit_join_request(
+            USER, None
+        )
+
+    assert joined.is_err and joined.error.type is error_type
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [
+        (403, {"error": {"code": "operation_not_allowed"}}),
+        (403, {}),
+        (500, {}),
+        (200, {"data": {"outcome": "approved-by-gateway"}}),
+        (200, {}),
     ],
 )
 async def test_http_gateway_fails_closed_on_join_errors(
-    status: int, body: dict[str, Any], expected: type[Exception]
+    status: int, body: dict[str, Any]
 ) -> None:
     from infrastructure.identity_gateway import HttpIdentityGateway
 
@@ -239,7 +271,7 @@ async def test_http_gateway_fails_closed_on_join_errors(
     ) as client:
         sut = HttpIdentityGateway(client, "secret-key")
 
-        with pytest.raises(expected) as failure:
+        with pytest.raises(IdentityUnavailable) as failure:
             await sut.submit_join_request(USER, None)
 
     assert "secret-key" not in str(failure.value)

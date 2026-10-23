@@ -572,7 +572,7 @@ class FakeClock:
     def __init__(self) -> None:
         self.now = 100.0
 
-    def __call__(self) -> float:
+    def read(self) -> float:
         return self.now
 
 
@@ -633,7 +633,11 @@ def bench(
 ) -> tuple[list[CorpusSample], list[Any]]:
     corpus = corpus_of(directory)
     runs = run_bench(
-        corpus, model, warm_repeats=repeats, clock=clock, sampler_factory=FakeSampler
+        corpus,
+        model,
+        warm_repeats=repeats,
+        clock=clock.read,
+        sampler_factory=FakeSampler,
     )
     return corpus, runs
 

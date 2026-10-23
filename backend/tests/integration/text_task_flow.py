@@ -17,28 +17,38 @@ import unittest
 from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import httpx
 from api.containers import build_bot_command, build_notifications, build_task_flow
-from application.commands.accept_text import ACK, AcceptTextDto, AcceptTextMessage
+from application.commands.accept_text import (
+    ACK,
+    AcceptTextCommand,
+    AcceptTextCommandHandler,
+)
 from application.commands.handle_bot_command import HandleBotCommandDto
-from application.commands.process_task_result import ProcessTaskResult
-from application.ports import AcceptOutcome, NewJob, OutboxMessage
-from botflow_platform.messaging import (
+from application.commands.job_acceptance import AcceptOutcome, JobAcceptance
+from application.commands.record_task_result import RecordTaskResultCommandHandler
+from domain.entities.job import Job
+from domain.value_objects.job_id import JobId
+from infrastructure.db.relay_hooks import fail_job
+from infrastructure.db.replay import replay_job
+from infrastructure.db.tables import outbox
+from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
+from infrastructure.identity_gateway import HttpIdentityGateway
+from infrastructure.messaging.envelopes import outbox_id_for
+from infrastructure.messaging.task_result_consumer import TaskResultConsumer
+from infrastructure.streams import NOTIFICATION_STREAM
+from kernel_platform.messaging import (
     TASK_CREATE_ROUTING_KEY,
     ConfirmedPublisher,
     declare_task_topology,
 )
-from botflow_platform.outbox import RelayOutbox, sql_transactions
-from botflow_platform.resources import open_database, open_resources
-from botflow_platform.retry import RetryPolicy
-from botflow_platform.settings import Settings
-from domain.jobs import job_id_for, outbox_id_for
-from infrastructure.db.jobs import SqlJobStore, outbox
-from infrastructure.db.results import SqlTaskResultStore, fail_job, replay_job
-from infrastructure.identity_gateway import HttpIdentityGateway
-from infrastructure.streams import NOTIFICATION_STREAM
+from kernel_platform.outbox import RelayOutbox, sql_transactions
+from kernel_platform.resources import open_database, open_resources
+from kernel_platform.retry import RetryPolicy
+from kernel_platform.settings import Settings
 from sqlalchemy import text
 
 IDENTITY_URL = "http://identity-api:8000"
@@ -102,9 +112,7 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
         self.gateway = HttpIdentityGateway(self.internal, key.get_secret_value())
         self.telegram = TelegramPort()  # replies of the bot
         self.notifications = TelegramPort()  # messages sent by the notifier
-        self.accept = AcceptTextMessage(
-            self.gateway, SqlJobStore(self.automation_db.sessions), self.telegram
-        )
+        self.accept = AcceptTextCommandHandler(self.gateway, self.uow, self.telegram)
         self.login_bot = build_bot_command(
             self.automation_db, self.gateway, self.telegram
         )
@@ -113,6 +121,9 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.stop_background)
         await self.wipe()
         self.addAsyncCleanup(self.wipe)
+
+    def uow(self) -> SqlAutomationUnitOfWork:
+        return SqlAutomationUnitOfWork(self.automation_db.sessions)
 
     # ---- state --------------------------------------------------------------
 
@@ -222,9 +233,9 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
 
     async def send_text(
         self, telegram_id: int, message_id: int, body: str = "Купить молоко"
-    ) -> AcceptTextDto:
+    ) -> AcceptTextCommand:
         now = datetime.now(UTC)
-        command = AcceptTextDto(
+        command = AcceptTextCommand(
             bot_id=BOT_ID,
             chat_id=telegram_id,
             message_id=message_id,
@@ -305,7 +316,7 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.telegram.to(AUTHOR_A), [ACK])
         job_id, status, task_id, _, acked_at, received_at = await self.job(AUTHOR_A, 1)
         self.assertEqual((status, task_id), ("accepted", None))
-        self.assertEqual(job_id, job_id_for(BOT_ID, AUTHOR_A, 1))
+        self.assertEqual(job_id, JobId.from_source(BOT_ID, AUTHOR_A, 1).value)
         self.assertLess(acked_at - received_at, timedelta(seconds=2))
         self.assertGreaterEqual(acked_at, received_at)
         self.assertEqual(received_at, sent.received_at)
@@ -413,11 +424,9 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
 
     # ---- atomicity and limits -------------------------------------------------
 
-    def new_job(self, author_id: UUID, telegram_id: int, message_id: int):  # type: ignore[no-untyped-def]
+    def new_job(self, author_id: UUID, telegram_id: int, message_id: int) -> Job:
         now = datetime.now(UTC)
-        job_id = job_id_for(BOT_ID, telegram_id, message_id)
-        job = NewJob(
-            id=job_id,
+        return Job.accept_text(
             bot_id=BOT_ID,
             chat_id=telegram_id,
             message_id=message_id,
@@ -427,18 +436,11 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
             text="лимит",
             message_date=now,
             received_at=now,
+            now=now,
         )
-        message = OutboxMessage(
-            id=outbox_id_for(job_id),
-            correlation_id=job_id,
-            type="CreateTask",
-            routing_key=TASK_CREATE_ROUTING_KEY,
-            payload={"job_id": str(job_id)},
-        )
-        return job, message
 
     async def test_the_limits_hold_under_concurrent_acceptance(self) -> None:
-        store = SqlJobStore(self.automation_db.sessions)
+        acceptance = JobAcceptance(self.uow)
         authors = [(uuid4(), LIMIT_AUTHORS + n) for n in range(12)]
         batch = [
             self.new_job(author_id, telegram_id, number)
@@ -446,14 +448,12 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
             for number in range(12)
         ]
 
-        outcomes = await asyncio.gather(
-            *(store.accept(job, message) for job, message in batch)
-        )
+        outcomes = await asyncio.gather(*(acceptance.accept(job) for job in batch))
 
         stored = [
-            pair
-            for pair, outcome in zip(batch, outcomes, strict=True)
-            if outcome.outcome is AcceptOutcome.ACCEPTED
+            job
+            for job, outcome in zip(batch, outcomes, strict=True)
+            if outcome.is_ok and outcome.value.outcome is AcceptOutcome.ACCEPTED
         ]
         self.assertEqual(len(stored), 100)  # 100 in total
         per_author = await self.rows(
@@ -467,37 +467,43 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
             [(100,)],
         )
         # A repeated message is not new load, even at the limit.
-        finished, command = stored[0]
-        again = await store.accept(finished, command)
-        self.assertIs(again.outcome, AcceptOutcome.DUPLICATE)
+        finished = stored[0]
+        again = await acceptance.accept(finished)
+        self.assertTrue(again.is_ok)
+        self.assertIs(again.value.outcome, AcceptOutcome.DUPLICATE)
 
         # The slot is freed by the result, not by the notification.
         result = {
             "envelope_version": 1,
-            "payload": {"job_id": str(finished.id), "task_id": str(uuid4())},
+            "payload": {"job_id": str(finished.id.value), "task_id": str(uuid4())},
         }
-        await ProcessTaskResult(
-            SqlTaskResultStore(self.automation_db.sessions)
-        ).execute(str(uuid4()), "TaskCreated", json.dumps(result).encode())
-        freed = await store.accept(*self.new_job(finished.author_id, LIMIT_AUTHORS, 99))
-        self.assertIs(freed.outcome, AcceptOutcome.ACCEPTED)
-        full = await store.accept(*self.new_job(finished.author_id, LIMIT_AUTHORS, 98))
-        self.assertIs(full.outcome, AcceptOutcome.LIMIT)
+        await TaskResultConsumer(RecordTaskResultCommandHandler(self.uow)).handle(
+            str(uuid4()), "TaskCreated", json.dumps(result).encode()
+        )
+        freed = await acceptance.accept(
+            self.new_job(finished.author_id, LIMIT_AUTHORS, 99)
+        )
+        self.assertTrue(freed.is_ok)
+        self.assertIs(freed.value.outcome, AcceptOutcome.ACCEPTED)
+        full = await acceptance.accept(
+            self.new_job(finished.author_id, LIMIT_AUTHORS, 98)
+        )
+        self.assertTrue(full.is_err)
+        self.assertEqual(full.error.code, "job_limit")
 
     async def test_a_failed_transaction_leaves_no_job_and_sends_no_ack(self) -> None:
         member_id = await self.put_member(AUTHOR_A)
-        job, message = self.new_job(member_id, AUTHOR_A, 1)
-        bad = OutboxMessage(
-            id=message.id,
-            correlation_id=message.correlation_id,
-            type=message.type,
-            routing_key=message.routing_key,
-            payload={"not json": {1, 2}},  # the outbox insert fails after the job's
-        )
-        store = SqlJobStore(self.automation_db.sessions)
+        job = self.new_job(member_id, AUTHOR_A, 1)
 
-        with self.assertRaises(Exception):
-            await store.accept(job, bad)
+        # The outbox insert fails after the job's own insert, in the same transaction.
+        with (
+            patch(
+                "infrastructure.db.outbox_events.enqueue",
+                side_effect=RuntimeError("outbox down"),
+            ),
+            self.assertRaises(RuntimeError),
+        ):
+            await JobAcceptance(self.uow).accept(job)
 
         for table in ("jobs", "outbox"):
             self.assertEqual(
@@ -516,14 +522,18 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
             "postgresql+asyncpg://automation:none@127.0.0.1:1/automation"
         )
         self.addAsyncCleanup(engine.dispose)
-        accept = AcceptTextMessage(
-            self.gateway, SqlJobStore(async_sessionmaker(engine)), self.telegram
+        accept = AcceptTextCommandHandler(
+            self.gateway,
+            lambda: SqlAutomationUnitOfWork(async_sessionmaker(engine)),
+            self.telegram,
         )
         now = datetime.now(UTC)
 
         with self.assertRaises(Exception):
             await accept.execute(
-                AcceptTextDto(BOT_ID, AUTHOR_A, 1, AUTHOR_A, "текст", "Smoke", now, now)
+                AcceptTextCommand(
+                    BOT_ID, AUTHOR_A, 1, AUTHOR_A, "текст", "Smoke", now, now
+                )
             )
 
         self.assertEqual(self.telegram.messages, [])
@@ -572,7 +582,7 @@ class TextTaskFlow(unittest.IsolatedAsyncioTestCase):
     ) -> None:
         await self.put_member(AUTHOR_B)
         await self.send_text(AUTHOR_B, 10, "Позвонить маме")
-        job_id = job_id_for(BOT_ID, AUTHOR_B, 10)
+        job_id = JobId.from_source(BOT_ID, AUTHOR_B, 10).value
         entry = outbox_id_for(job_id)
         await self.rows_exec(
             "UPDATE outbox SET routing_key = :k WHERE id = :id",

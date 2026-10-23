@@ -13,15 +13,6 @@ from application.commands.accept_voice import MAX_FILE_BYTES
 from application.ports import AudioTooLarge, TelegramFileUnavailable, TransientIoError
 
 
-class _CappedBuffer(io.BytesIO):
-    """Refuses to grow past the cap, whatever size Telegram declared."""
-
-    def write(self, buffer: bytes, /) -> int:  # type: ignore[override]
-        if self.tell() + len(buffer) > MAX_FILE_BYTES:
-            raise AudioTooLarge()
-        return super().write(buffer)
-
-
 class TelegramFileSource:
     def __init__(self, bot: Bot) -> None:
         self._bot = bot
@@ -47,3 +38,12 @@ class TelegramFileSource:
                 raise TelegramFileUnavailable() from None
             raise TransientIoError() from None
         return buffer.getvalue()
+
+
+class _CappedBuffer(io.BytesIO):
+    """Refuses to grow past the cap, whatever size Telegram declared."""
+
+    def write(self, buffer: bytes, /) -> int:  # type: ignore[override]
+        if self.tell() + len(buffer) > MAX_FILE_BYTES:
+            raise AudioTooLarge()
+        return super().write(buffer)

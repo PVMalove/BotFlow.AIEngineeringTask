@@ -13,9 +13,11 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
-from uuid import UUID
 
-from application.commands.transcribe_voice import TranscribeResult
+from application.commands.transcribe_voice import (
+    TranscribeResult,
+    TranscribeVoiceCommand,
+)
 from application.ports import VoiceQueue
 from infrastructure.stt.whisper_transcriber import DEFAULT_TIMEOUT_SECONDS
 
@@ -24,7 +26,7 @@ FAILURE_SECONDS = 5.0
 
 
 class Handler(Protocol):
-    async def execute(self, job_id: UUID) -> TranscribeResult: ...
+    async def execute(self, command: TranscribeVoiceCommand) -> TranscribeResult: ...
 
 
 class ReadinessMarker:
@@ -94,7 +96,7 @@ async def run_worker(
                     if entry.job_id is None:
                         await queue.ack(entry.entry_id)
                         continue
-                    result = await handler.execute(entry.job_id)
+                    result = await handler.execute(TranscribeVoiceCommand(entry.job_id))
                     await queue.ack(entry.entry_id)
                 except Exception as error:
                     if getattr(error, "restart_required", False):

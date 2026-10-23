@@ -3,32 +3,14 @@
 from dataclasses import dataclass
 from uuid import UUID
 
+from kernel_domain.result import Result
+
 from application.ports import Clock, TokenService, UnitOfWorkFactory
 from contracts.views import AdminMemberView, MemberView
-from domain.entities.auth import InvalidSession, Member, MemberStatus
-
-
-def member_view(member: Member) -> MemberView:
-    return MemberView(
-        id=member.id,
-        telegram_id=member.telegram_id,
-        role=member.role.value,
-        status=member.status.value,
-        access_version=member.access_version,
-    )
-
-
-def admin_member_view(member: Member) -> AdminMemberView:
-    return AdminMemberView(
-        id=member.id,
-        telegram_id=member.telegram_id,
-        display_name=member.display_name,
-        role=member.role.value,
-        status=member.status.value,
-        access_version=member.access_version,
-        created_at=member.created_at,
-        status_changed_at=member.status_changed_at,
-    )
+from domain.entities.member import Member
+from domain.errors import IdentityErrors
+from domain.value_objects.member_id import MemberId
+from domain.value_objects.member_status import MemberStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +26,7 @@ class AuthenticateSessionQuery:
     token: str
 
 
-class AuthenticateSession:
+class AuthenticateSessionQueryHandler:
     """A valid signature is not enough: the stored session and access are rechecked."""
 
     def __init__(
@@ -54,22 +36,22 @@ class AuthenticateSession:
         self._tokens = tokens
         self._clock = clock
 
-    async def execute(self, query: AuthenticateSessionQuery | str) -> CurrentSession:
-        token = query.token if isinstance(query, AuthenticateSessionQuery) else query
-        claims = self._tokens.verify(token)
+    async def execute(self, query: AuthenticateSessionQuery) -> Result[CurrentSession]:
+        claims = self._tokens.verify(query.token)
+        if claims.is_err:
+            return Result[CurrentSession].fail(claims.error)
         async with self._uow_factory() as uow:
-            session = await uow.sessions.get(claims.session_id)
-            if (
-                session is None
-                or session.member_id != claims.member_id
-                or session.revoked_at is not None
-                or session.expires_at <= self._clock()
+            session = await uow.sessions.get(claims.value.session_id)
+            if session is None or not session.is_usable(
+                claims.value.member_id, self._clock()
             ):
-                raise InvalidSession
-            member = await uow.members.get(session.member_id)
+                return Result[CurrentSession].fail(IdentityErrors.invalid_session())
+            member = await uow.members.get(MemberId(session.member_id))
         if member is None or member.status is not MemberStatus.APPROVED:
-            raise InvalidSession
-        return CurrentSession(session_id=session.id, member=member)
+            return Result[CurrentSession].fail(IdentityErrors.invalid_session())
+        return Result[CurrentSession].ok(
+            CurrentSession(session_id=session.id, member=member)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,19 +61,16 @@ class FindMemberByTelegramQuery:
     telegram_id: int
 
 
-class FindMemberByTelegram:
+class FindMemberByTelegramQueryHandler:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
 
-    async def execute(
-        self, query: FindMemberByTelegramQuery | int
-    ) -> MemberView | None:
-        telegram_id = (
-            query.telegram_id if isinstance(query, FindMemberByTelegramQuery) else query
-        )
+    async def execute(self, query: FindMemberByTelegramQuery) -> Result[MemberView]:
         async with self._uow_factory() as uow:
-            member = await uow.members.get_by_telegram_id(telegram_id)
-        return member_view(member) if member else None
+            member = await uow.members.get_by_telegram_id(query.telegram_id)
+        if member is None:
+            return Result[MemberView].fail(IdentityErrors.member_not_found())
+        return Result[MemberView].ok(MemberView.from_domain(member))
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,26 +82,26 @@ class ListMembersQuery:
     offset: int = 0
 
 
-class ListMembers:
+class ListMembersQueryHandler:
     def __init__(self, uow_factory: UnitOfWorkFactory) -> None:
         self._uow_factory = uow_factory
 
-    async def execute(self, query: ListMembersQuery) -> list[AdminMemberView]:
+    async def execute(self, query: ListMembersQuery) -> Result[list[AdminMemberView]]:
         async with self._uow_factory() as uow:
             found = await uow.members.list_by_status(
                 query.statuses, limit=query.limit, offset=query.offset
             )
-        return [admin_member_view(member) for member in found]
+        return Result[list[AdminMemberView]].ok(
+            [AdminMemberView.from_domain(member) for member in found]
+        )
 
 
 __all__ = [
-    "ListMembers",
+    "ListMembersQueryHandler",
     "ListMembersQuery",
-    "admin_member_view",
-    "AuthenticateSession",
+    "AuthenticateSessionQueryHandler",
     "AuthenticateSessionQuery",
     "CurrentSession",
-    "FindMemberByTelegram",
+    "FindMemberByTelegramQueryHandler",
     "FindMemberByTelegramQuery",
-    "member_view",
 ]

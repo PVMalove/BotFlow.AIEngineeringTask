@@ -1,20 +1,15 @@
 """Deliver a queued notification, unless access has moved on."""
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import StrEnum
 from uuid import UUID
 
-from application.ports import (
-    IdentityGateway,
-    IntentStore,
-    Messenger,
-    NotificationQueue,
-)
-from domain.notifications import (
-    IntentStatus,
-    UnknownNotificationKind,
-    Verdict,
-    delivery_verdict,
-)
+from application.ports import IdentityGateway, Messenger, NotificationQueue
+from domain.entities.notification_intent import NotificationIntent
+from domain.unit_of_work import AutomationUnitOfWork
+from domain.value_objects.intent_id import IntentId
+from domain.value_objects.intent_status import IntentStatus, Verdict
 
 MAX_ATTEMPTS = 3
 TEXTS = {
@@ -29,55 +24,75 @@ class Delivery(StrEnum):
     RETRY = "retry"  # leave the entry pending; it is claimed again when idle
 
 
-class DeliverNotification:
+@dataclass(frozen=True)
+class DeliverNotificationCommand:
+    intent_id: UUID
+
+
+class DeliverNotificationCommandHandler:
     def __init__(
-        self, store: IntentStore, identity: IdentityGateway, messenger: Messenger
+        self,
+        uow_factory: Callable[[], AutomationUnitOfWork],
+        identity: IdentityGateway,
+        messenger: Messenger,
     ) -> None:
-        self._store = store
+        self._uow_factory = uow_factory
         self._identity = identity
         self._messenger = messenger
 
-    async def execute(self, intent_id: UUID) -> Delivery:
-        intent = await self._store.get(intent_id)
-        if intent is None or intent.status not in {
-            IntentStatus.PENDING,
-            IntentStatus.ENQUEUED,
-        }:
+    async def execute(self, command: DeliverNotificationCommand) -> Delivery:
+        intent_id = IntentId(command.intent_id)
+        async with self._uow_factory() as uow:
+            intent = await uow.intents.get(intent_id)
+        if intent is None or not intent.is_open:
             return Delivery.DONE  # unknown, or a duplicate stream entry
         try:
             member = await self._identity.find_member(intent.chat_id)
-            verdict = delivery_verdict(
-                intent.kind,
-                intent.access_version,
-                member.status if member else None,
-                member.access_version if member else 0,
-            )
-        except UnknownNotificationKind:
-            await self._store.settle(intent_id, IntentStatus.FAILED)
-            return Delivery.DONE
         except Exception:
             return await self._failed(intent_id)
-        if verdict is not Verdict.SEND:
-            await self._store.settle(
+        verdict = intent.delivery_verdict(
+            member.status if member else None, member.access_version if member else 0
+        )
+        if verdict.is_err:
+            await self._settle(intent_id, IntentStatus.FAILED)
+            return Delivery.DONE
+        if verdict.value is not Verdict.SEND:
+            await self._settle(
                 intent_id,
                 IntentStatus.SUPPRESSED_STALE
-                if verdict is Verdict.STALE
+                if verdict.value is Verdict.STALE
                 else IntentStatus.SUPPRESSED_BLOCKED,
             )
             return Delivery.DONE
+        return await self._send(intent)
+
+    async def _send(self, intent: NotificationIntent) -> Delivery:
         text = intent.body or TEXTS.get(intent.kind)
         if text is None:  # a kind with a rule but no text to send
-            await self._store.settle(intent_id, IntentStatus.FAILED)
+            await self._settle(intent.id, IntentStatus.FAILED)
             return Delivery.DONE
         try:
             await self._messenger.send(intent.chat_id, text)
         except Exception:
-            return await self._failed(intent_id)
-        await self._store.settle(intent_id, IntentStatus.SENT)
+            return await self._failed(intent.id)
+        await self._settle(intent.id, IntentStatus.SENT)
         return Delivery.DONE
 
-    async def _failed(self, intent_id: UUID) -> Delivery:
-        status = await self._store.record_failure(intent_id, MAX_ATTEMPTS)
+    async def _settle(self, intent_id: IntentId, status: IntentStatus) -> None:
+        async with self._uow_factory() as uow:
+            intent = await uow.intents.get(intent_id)
+            if intent is not None and intent.settle(status):
+                await uow.intents.update(intent)
+                await uow.commit()
+
+    async def _failed(self, intent_id: IntentId) -> Delivery:
+        async with self._uow_factory() as uow:
+            intent = await uow.intents.get(intent_id)
+            if intent is None:
+                return Delivery.DONE
+            status = intent.record_failure(MAX_ATTEMPTS)
+            await uow.intents.update(intent)
+            await uow.commit()
         return Delivery.DONE if status is IntentStatus.FAILED else Delivery.RETRY
 
 
@@ -85,7 +100,7 @@ class RunNotifier:
     def __init__(
         self,
         queue: NotificationQueue,
-        deliver: DeliverNotification,
+        deliver: DeliverNotificationCommandHandler,
         batch_size: int = 10,
     ) -> None:
         self._queue = queue
@@ -99,7 +114,10 @@ class RunNotifier:
         for entry in entries:
             if (
                 entry.intent_id is None
-                or await self._deliver.execute(entry.intent_id) is Delivery.DONE
+                or await self._deliver.execute(
+                    DeliverNotificationCommand(entry.intent_id)
+                )
+                is Delivery.DONE
             ):
                 await self._queue.ack(entry.entry_id)
         return len(entries)

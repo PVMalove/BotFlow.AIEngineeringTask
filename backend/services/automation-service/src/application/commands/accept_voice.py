@@ -2,28 +2,17 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from typing import Any
-from uuid import UUID, uuid5
+from datetime import datetime
+
+from kernel_platform.clock import utcnow
 
 from application.commands.admission import Admission
-from application.ports import (
-    Accepted,
-    AcceptOutcome,
-    MemberDirectory,
-    Messenger,
-    NewVoiceJob,
-    OutboxMessage,
-    VoiceJobStore,
-)
-from domain.jobs import job_id_for
+from application.commands.job_acceptance import Accepted, JobAcceptance
+from application.ports import MemberDirectory, Messenger
+from domain.entities.job import Job
+from domain.entities.voice_message import VoiceMessage
+from domain.unit_of_work import AutomationUnitOfWork
 
-# Distinct from `outbox_id_for`: the CreateTask row of the same job comes later.
-_TRANSCRIBE_NAMESPACE = UUID("2c9d6f4e-5a0b-4b57-8e57-0e6f1b3a7d04")
-
-COMMAND_TYPE = "TranscribeVoice"
-VOICE_ROUTING_KEY = "voice.transcribe"
-ENVELOPE_VERSION = 1
 MAX_DURATION_SECONDS = 60
 MAX_FILE_BYTES = 5 * 1024 * 1024
 ACK = (
@@ -40,7 +29,7 @@ VOICE_LIMIT_REPLY = (
 
 
 @dataclass(frozen=True, slots=True)
-class AcceptVoiceDto:
+class AcceptVoiceCommand:
     bot_id: int
     chat_id: int
     message_id: int
@@ -55,19 +44,19 @@ class AcceptVoiceDto:
     received_at: datetime
 
 
-class AcceptVoiceMessage:
+class AcceptVoiceCommandHandler:
     def __init__(
         self,
         identity: MemberDirectory,
-        jobs: VoiceJobStore,
+        uow_factory: Callable[[], AutomationUnitOfWork],
         messenger: Messenger,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self._admission = Admission(identity, messenger)
-        self._jobs = jobs
+        self._acceptance = JobAcceptance(uow_factory, clock=clock)
         self._clock = clock
 
-    async def execute(self, command: AcceptVoiceDto) -> None:
+    async def execute(self, command: AcceptVoiceCommand) -> None:
         """Storage failures propagate: the update is then not acknowledged."""
         author_id = await self._admission.admit(command.telegram_id, command.chat_id)
         if author_id is None:
@@ -76,63 +65,44 @@ class AcceptVoiceMessage:
         if refusal is not None:
             await self._admission.reply(command.chat_id, refusal)
             return
-        job = NewVoiceJob(
-            id=job_id_for(command.bot_id, command.chat_id, command.message_id),
+        job = Job.accept_voice(
+            VoiceMessage(
+                file_id=command.file_id,
+                file_unique_id=command.file_unique_id,
+                duration_seconds=command.duration_seconds,
+                file_size_bytes=command.file_size_bytes,
+                mime_type=command.mime_type,
+            ),
             bot_id=command.bot_id,
             chat_id=command.chat_id,
             message_id=command.message_id,
             author_id=author_id,
             author_telegram_id=command.telegram_id,
             author_name=command.display_name,
-            file_id=command.file_id,
-            file_unique_id=command.file_unique_id,
-            duration_seconds=command.duration_seconds,
-            file_size_bytes=command.file_size_bytes,
-            mime_type=command.mime_type,
             message_date=command.message_date,
             received_at=command.received_at,
+            now=self._clock(),
         )
-        accepted = await self._jobs.accept_voice(job, _transcribe(job))
-        if accepted.outcome is AcceptOutcome.LIMIT:
-            await self._admission.reply(command.chat_id, LIMIT_REPLY)
-        elif accepted.outcome is AcceptOutcome.VOICE_LIMIT:
-            await self._admission.reply(command.chat_id, VOICE_LIMIT_REPLY)
-        elif not accepted.acknowledged:
-            await self._acknowledge(command.chat_id, accepted)
+        accepted = await self._acceptance.accept(job)
+        if accepted.is_err:
+            reply = (
+                VOICE_LIMIT_REPLY
+                if accepted.error.code == "voice_limit"
+                else LIMIT_REPLY
+            )
+            await self._admission.reply(command.chat_id, reply)
+        elif not accepted.value.acknowledged:
+            await self._acknowledge(command.chat_id, accepted.value)
 
     async def _acknowledge(self, chat_id: int, accepted: Accepted) -> None:
         # Only now, after the commit, does the author hear that the voice is safe.
         if await self._admission.reply(chat_id, ACK):
-            await self._jobs.mark_acked(accepted.job_id, self._clock())
+            await self._acceptance.acknowledge(accepted.job_id)
 
 
-def _invalid(command: AcceptVoiceDto) -> str | None:
+def _invalid(command: AcceptVoiceCommand) -> str | None:
     if command.duration_seconds > MAX_DURATION_SECONDS:
         return TOO_LONG
     if command.file_size_bytes is not None and command.file_size_bytes > MAX_FILE_BYTES:
         return TOO_LARGE
     return None
-
-
-def transcribe_outbox_id_for(job_id: UUID) -> UUID:
-    return uuid5(_TRANSCRIBE_NAMESPACE, str(job_id))
-
-
-def _transcribe(job: NewVoiceJob) -> OutboxMessage:
-    """The audio is addressed through the job's voice record, never by a URL."""
-    message_id = transcribe_outbox_id_for(job.id)
-    payload: dict[str, Any] = {"job_id": str(job.id)}
-    return OutboxMessage(
-        id=message_id,
-        correlation_id=job.id,
-        type=COMMAND_TYPE,
-        routing_key=VOICE_ROUTING_KEY,
-        payload={
-            "envelope_version": ENVELOPE_VERSION,
-            "message_id": str(message_id),
-            "type": COMMAND_TYPE,
-            "correlation_id": str(job.id),
-            "occurred_at": job.received_at.isoformat(),
-            "payload": payload,
-        },
-    )

@@ -11,10 +11,10 @@ from access_flow import AccessFlow
 from aio_pika import DeliveryMode, Message
 from api.containers import Container as AutomationContainer
 from auth_flow import AuthFlow
-from botflow_platform.http import create_app
-from botflow_platform.resources import open_database, open_resources
-from botflow_platform.settings import Settings
 from botocore.exceptions import ClientError
+from kernel_platform.http.app import create_app
+from kernel_platform.resources import open_database, open_resources
+from kernel_platform.settings import Settings
 from sqlalchemy import text
 from text_task_flow import TextTaskFlow
 from voice_task_flow import VoiceTaskFlow

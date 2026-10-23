@@ -160,140 +160,8 @@ def load_corpus(
     return samples
 
 
-def _read_entries(manifest: Path) -> list[dict[str, Any]]:
-    try:
-        document = json.loads(manifest.read_text(encoding="utf-8"))
-    except FileNotFoundError as error:
-        raise CorpusError(f"manifest {manifest} not found") from error
-    except (OSError, ValueError) as error:
-        raise CorpusError(f"manifest {manifest} is not valid JSON") from error
-    entries = document.get("samples") if isinstance(document, dict) else None
-    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
-        raise CorpusError("manifest must contain a 'samples' list of objects")
-    return entries
-
-
-def _load_sample(
-    entry: dict[str, Any], directory: Path, probe: DurationProbe
-) -> CorpusSample:
-    sample_id = _text(entry, "id", "<unknown>")
-    language = _text(entry, "language", sample_id)
-    if language not in LANGUAGES:
-        raise CorpusError(f"{sample_id}: language must be one of {LANGUAGES}")
-    texts = {field: _text(entry, field, sample_id) for field in STRING_FIELDS}
-    lists = {field: _list(entry, field, sample_id) for field in LIST_FIELDS}
-    audio = _audio_path(_text(entry, "audio", sample_id), directory, sample_id)
-    size = audio.stat().st_size
-    if size == 0:
-        raise CorpusError(f"{sample_id}: audio file is empty")
-    if size > MAX_SIZE_BYTES:
-        raise CorpusError(f"{sample_id}: audio exceeds the 5 MiB limit")
-    duration = probe(audio)
-    if duration > MAX_DURATION_SECONDS:
-        raise CorpusError(f"{sample_id}: audio exceeds 61 seconds")
-    return CorpusSample(
-        id=sample_id,
-        language=language,
-        audio=audio,
-        expected_names=lists["expected_names"],
-        expected_numbers=lists["expected_numbers"],
-        duration_seconds=duration,
-        size_bytes=size,
-        **texts,
-    )
-
-
-def _text(entry: dict[str, Any], field: str, sample_id: str) -> str:
-    value = entry.get(field)
-    if not isinstance(value, str) or not value.strip():
-        raise CorpusError(f"{sample_id}: {field} must be a non-empty string")
-    return value
-
-
-def _list(entry: dict[str, Any], field: str, sample_id: str) -> tuple[str, ...]:
-    """Absence is stated explicitly: the key is required and `[]` means none."""
-    value = entry.get(field)
-    if isinstance(value, str):
-        value = [value]
-    if not isinstance(value, list) or not all(
-        isinstance(item, str) and item.strip() for item in value
-    ):
-        raise CorpusError(
-            f"{sample_id}: {field} must be a list of non-empty strings "
-            "(use [] when none are expected)"
-        )
-    return tuple(value)
-
-
-def _audio_path(name: str, directory: Path, sample_id: str) -> Path:
-    root = directory.resolve()
-    audio = (root / name).resolve()
-    if not audio.is_relative_to(root):
-        raise CorpusError(f"{sample_id}: audio path is outside the corpus directory")
-    if not audio.is_file():
-        raise CorpusError(f"{sample_id}: audio file {name} not found")
-    if not os.access(audio, os.R_OK):
-        raise CorpusError(
-            f"{sample_id}: audio file {name} is not readable (permissions: the "
-            "container user needs read access)"
-        )
-    return audio
-
-
-def _check_unique_ids(samples: list[CorpusSample]) -> None:
-    duplicates = [i for i, count in Counter(s.id for s in samples).items() if count > 1]
-    if duplicates:
-        raise CorpusError(f"duplicate sample id: {', '.join(duplicates)}")
-
-
-def _check_composition(samples: list[CorpusSample]) -> None:
-    for language in LANGUAGES:
-        group = [s for s in samples if s.language == language]
-        if len(group) != SAMPLES_PER_LANGUAGE:
-            raise CorpusError(
-                f"corpus needs three samples per language, {language} has {len(group)}"
-            )
-        durations = sorted(s.duration_seconds for s in group)
-        if not all(
-            low <= duration <= high
-            for duration, (_, low, high) in zip(durations, DURATION_BUCKETS)
-        ):
-            raise CorpusError(
-                f"{language} durations must be about 10, 30 and 60 seconds "
-                f"(allowed 7-13, 25-35 and 50-61), got {durations}"
-            )
-        for field in LIST_FIELDS:
-            if not any(getattr(s, field) for s in group):
-                raise CorpusError(
-                    f"language {language} needs at least one sample with {field}"
-                )
-
-
 def weights_path(models_dir: Path, model: str) -> Path:
     return models_dir / f"{model}.pt"
-
-
-def _trusted(model: str, trusted: Mapping[str, ModelWeights] | None) -> ModelWeights:
-    table = TRUSTED_WEIGHTS if trusted is None else trusted
-    if model not in table:
-        raise WeightsError(f"{model!r} is not a pinned multilingual model")
-    return table[model]
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _check_digest(path: Path, expected: str) -> None:
-    actual = _sha256(path)
-    if actual != expected:
-        raise WeightsError(
-            f"SHA-256 mismatch for {path.name}: expected {expected}, got {actual}"
-        )
 
 
 def verify_weights(
@@ -363,13 +231,6 @@ class Run:
     language: str
 
 
-def _optional_psutil() -> Any:
-    try:
-        return importlib.import_module("psutil")
-    except ImportError:
-        return None
-
-
 class RssSampler:
     """Peak RSS of this process plus its children (ffmpeg) while active.
 
@@ -385,18 +246,6 @@ class RssSampler:
         self._thread = threading.Thread(target=self._poll, daemon=True)
         self._peak = 0
 
-    def _sample(self) -> None:
-        total = self._process.memory_info().rss
-        with suppress(self._psutil.Error):
-            for child in self._process.children(recursive=True):
-                with suppress(self._psutil.Error):
-                    total += child.memory_info().rss
-        self._peak = max(self._peak, total)
-
-    def _poll(self) -> None:
-        while not self._stop.wait(self._interval):
-            self._sample()
-
     def __enter__(self) -> Self:
         self._sample()
         self._thread.start()
@@ -410,6 +259,18 @@ class RssSampler:
     @property
     def peak_mib(self) -> float:
         return self._peak / MIB
+
+    def _sample(self) -> None:
+        total = self._process.memory_info().rss
+        with suppress(self._psutil.Error):
+            for child in self._process.children(recursive=True):
+                with suppress(self._psutil.Error):
+                    total += child.memory_info().rss
+        self._peak = max(self._peak, total)
+
+    def _poll(self) -> None:
+        while not self._stop.wait(self._interval):
+            self._sample()
 
 
 def run_bench(
@@ -532,31 +393,6 @@ def read_cgroup_limits(root: Path = Path("/sys/fs/cgroup")) -> dict[str, Any]:
     }
 
 
-def _version(package: str) -> str:
-    try:
-        return metadata.version(package)
-    except metadata.PackageNotFoundError:
-        return "unavailable"
-
-
-def _tool_version(tool: str) -> str:
-    try:
-        output = subprocess.run(
-            [tool, "-version"], capture_output=True, text=True, check=False
-        ).stdout
-    except OSError:
-        return "unavailable"
-    return output.splitlines()[0] if output else "unavailable"
-
-
-def _cpu_model() -> str:
-    with suppress(OSError):
-        for line in Path("/proc/cpuinfo").read_text().splitlines():
-            if line.startswith("model name"):
-                return line.partition(":")[2].strip()
-    return "unavailable"
-
-
 def collect_environment() -> dict[str, Any]:
     psutil = _optional_psutil()
     memory = psutil.virtual_memory() if psutil else None
@@ -575,13 +411,6 @@ def collect_environment() -> dict[str, Any]:
         "ram_available_mib": memory.available / MIB if memory else "unavailable",
         "cgroup": read_cgroup_limits(),
     }
-
-
-def _torch_threads() -> int | str:
-    try:
-        return int(importlib.import_module("torch").get_num_threads())
-    except ImportError:
-        return "unavailable"
 
 
 def run_validation(
@@ -633,3 +462,174 @@ def run_validation(
         "environment": environment,
         "samples": samples,
     }
+
+
+def _read_entries(manifest: Path) -> list[dict[str, Any]]:
+    try:
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+    except FileNotFoundError as error:
+        raise CorpusError(f"manifest {manifest} not found") from error
+    except (OSError, ValueError) as error:
+        raise CorpusError(f"manifest {manifest} is not valid JSON") from error
+    entries = document.get("samples") if isinstance(document, dict) else None
+    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+        raise CorpusError("manifest must contain a 'samples' list of objects")
+    return entries
+
+
+def _load_sample(
+    entry: dict[str, Any], directory: Path, probe: DurationProbe
+) -> CorpusSample:
+    sample_id = _text(entry, "id", "<unknown>")
+    language = _text(entry, "language", sample_id)
+    if language not in LANGUAGES:
+        raise CorpusError(f"{sample_id}: language must be one of {LANGUAGES}")
+    texts = {field: _text(entry, field, sample_id) for field in STRING_FIELDS}
+    lists = {field: _list(entry, field, sample_id) for field in LIST_FIELDS}
+    audio = _audio_path(_text(entry, "audio", sample_id), directory, sample_id)
+    size = audio.stat().st_size
+    if size == 0:
+        raise CorpusError(f"{sample_id}: audio file is empty")
+    if size > MAX_SIZE_BYTES:
+        raise CorpusError(f"{sample_id}: audio exceeds the 5 MiB limit")
+    duration = probe(audio)
+    if duration > MAX_DURATION_SECONDS:
+        raise CorpusError(f"{sample_id}: audio exceeds 61 seconds")
+    return CorpusSample(
+        id=sample_id,
+        language=language,
+        audio=audio,
+        expected_names=lists["expected_names"],
+        expected_numbers=lists["expected_numbers"],
+        duration_seconds=duration,
+        size_bytes=size,
+        **texts,
+    )
+
+
+def _text(entry: dict[str, Any], field: str, sample_id: str) -> str:
+    value = entry.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise CorpusError(f"{sample_id}: {field} must be a non-empty string")
+    return value
+
+
+def _list(entry: dict[str, Any], field: str, sample_id: str) -> tuple[str, ...]:
+    """Absence is stated explicitly: the key is required and `[]` means none."""
+    value = entry.get(field)
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        raise CorpusError(
+            f"{sample_id}: {field} must be a list of non-empty strings "
+            "(use [] when none are expected)"
+        )
+    return tuple(value)
+
+
+def _audio_path(name: str, directory: Path, sample_id: str) -> Path:
+    root = directory.resolve()
+    audio = (root / name).resolve()
+    if not audio.is_relative_to(root):
+        raise CorpusError(f"{sample_id}: audio path is outside the corpus directory")
+    if not audio.is_file():
+        raise CorpusError(f"{sample_id}: audio file {name} not found")
+    if not os.access(audio, os.R_OK):
+        raise CorpusError(
+            f"{sample_id}: audio file {name} is not readable (permissions: the "
+            "container user needs read access)"
+        )
+    return audio
+
+
+def _check_unique_ids(samples: list[CorpusSample]) -> None:
+    duplicates = [i for i, count in Counter(s.id for s in samples).items() if count > 1]
+    if duplicates:
+        raise CorpusError(f"duplicate sample id: {', '.join(duplicates)}")
+
+
+def _check_composition(samples: list[CorpusSample]) -> None:
+    for language in LANGUAGES:
+        group = [s for s in samples if s.language == language]
+        if len(group) != SAMPLES_PER_LANGUAGE:
+            raise CorpusError(
+                f"corpus needs three samples per language, {language} has {len(group)}"
+            )
+        durations = sorted(s.duration_seconds for s in group)
+        if not all(
+            low <= duration <= high
+            for duration, (_, low, high) in zip(durations, DURATION_BUCKETS)
+        ):
+            raise CorpusError(
+                f"{language} durations must be about 10, 30 and 60 seconds "
+                f"(allowed 7-13, 25-35 and 50-61), got {durations}"
+            )
+        for field in LIST_FIELDS:
+            if not any(getattr(s, field) for s in group):
+                raise CorpusError(
+                    f"language {language} needs at least one sample with {field}"
+                )
+
+
+def _trusted(model: str, trusted: Mapping[str, ModelWeights] | None) -> ModelWeights:
+    table = TRUSTED_WEIGHTS if trusted is None else trusted
+    if model not in table:
+        raise WeightsError(f"{model!r} is not a pinned multilingual model")
+    return table[model]
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _check_digest(path: Path, expected: str) -> None:
+    actual = _sha256(path)
+    if actual != expected:
+        raise WeightsError(
+            f"SHA-256 mismatch for {path.name}: expected {expected}, got {actual}"
+        )
+
+
+def _optional_psutil() -> Any:
+    try:
+        return importlib.import_module("psutil")
+    except ImportError:
+        return None
+
+
+def _version(package: str) -> str:
+    try:
+        return metadata.version(package)
+    except metadata.PackageNotFoundError:
+        return "unavailable"
+
+
+def _tool_version(tool: str) -> str:
+    try:
+        output = subprocess.run(
+            [tool, "-version"], capture_output=True, text=True, check=False
+        ).stdout
+    except OSError:
+        return "unavailable"
+    return output.splitlines()[0] if output else "unavailable"
+
+
+def _cpu_model() -> str:
+    with suppress(OSError):
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.partition(":")[2].strip()
+    return "unavailable"
+
+
+def _torch_threads() -> int | str:
+    try:
+        return int(importlib.import_module("torch").get_num_threads())
+    except ImportError:
+        return "unavailable"

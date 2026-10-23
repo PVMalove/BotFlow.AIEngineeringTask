@@ -26,10 +26,18 @@ export interface Task {
   updated_at: string;
 }
 
-export interface TaskPage {
-  data: Task[];
-  meta: { next_cursor: string | null; has_more: boolean };
+export interface Envelope<T, M = Record<string, never>> {
+  data: T;
+  meta: M;
 }
+
+export type TaskPage = Envelope<
+  Task[],
+  {
+    next_cursor: string | null;
+    has_more: boolean;
+  }
+>;
 
 export function listTasks(
   status: TaskStatus,
@@ -38,7 +46,7 @@ export function listTasks(
 ): Promise<TaskPage> {
   const params = new URLSearchParams({ status, limit: '50' });
   if (cursor !== null) params.set('cursor', cursor);
-  return request(`/api/v1/tasks?${params}`, { signal });
+  return send(`/api/v1/tasks?${params}`, { signal });
 }
 export type AccessList = 'pending' | 'rejected' | 'members';
 export const accessPageSize = 20;
@@ -52,7 +60,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+async function send<E>(path: string, options?: RequestInit): Promise<E> {
   let response: Response;
   try {
     response = await fetch(path, {
@@ -65,25 +73,34 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => null);
-    const detail =
-      body && typeof body === 'object' && 'detail' in body
-        ? body.detail
-        : undefined;
-    const code =
-      typeof detail === 'string' &&
-      [
-        'version_conflict',
-        'invalid_transition',
-        'cannot_block_self',
-        'last_admin',
-      ].includes(detail)
-        ? detail
-        : undefined;
-    throw new ApiError(response.status, code);
+    throw new ApiError(response.status, publicCode(body));
   }
   return response.status === 204
-    ? (undefined as T)
-    : (response.json() as Promise<T>);
+    ? ({ data: undefined, meta: {} } as E)
+    : (response.json() as Promise<E>);
+}
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  return (await send<Envelope<T>>(path, options)).data;
+}
+
+// Only these codes may reach the screen; anything else stays server-side.
+const publicCodes = [
+  'version_conflict',
+  'invalid_transition',
+  'cannot_block_self',
+  'last_admin',
+];
+
+function publicCode(body: unknown): string | undefined {
+  if (!body || typeof body !== 'object' || !('error' in body)) return undefined;
+  const error = body.error;
+  if (!error || typeof error !== 'object' || !('code' in error)) {
+    return undefined;
+  }
+  return typeof error.code === 'string' && publicCodes.includes(error.code)
+    ? error.code
+    : undefined;
 }
 
 export function getCurrentMember(): Promise<Member> {

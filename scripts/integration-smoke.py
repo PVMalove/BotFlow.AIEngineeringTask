@@ -23,7 +23,8 @@ BOOTSTRAP = (
         "--no-deps",
         "identity-bootstrap",
         "python",
-        "scripts/bootstrap.py",
+        "-m",
+        "api.bootstrap",
         "admin",
     ],
 )

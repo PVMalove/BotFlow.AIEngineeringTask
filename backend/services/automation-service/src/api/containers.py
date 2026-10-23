@@ -3,39 +3,49 @@
 from dataclasses import dataclass
 
 from aio_pika.abc import AbstractChannel, AbstractQueue
-from botflow_platform.consumer import QueueConsumer
-from botflow_platform.messaging import (
+from dependency_injector import containers, providers
+from kernel_platform.consumer import QueueConsumer
+from kernel_platform.messaging import (
     TASK_CREATE_ROUTING_KEY,
     ConfirmedPublisher,
     declare_task_topology,
 )
-from botflow_platform.outbox import RelayOutbox, SqlOutboxTx, sql_transactions
-from botflow_platform.resources import (
+from kernel_platform.outbox import RelayOutbox, SqlOutboxTx, sql_transactions
+from kernel_platform.resources import (
     Database,
     Resources,
     open_database,
     open_resources,
 )
-from botflow_platform.settings import Settings
-from botflow_platform.streams import RedisStream
-from dependency_injector import containers, providers
+from kernel_platform.settings import Settings
+from kernel_platform.streams import RedisStream
 from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from application.commands.accept_text import AcceptTextMessage
-from application.commands.accept_voice import AcceptVoiceMessage
-from application.commands.deliver_notification import DeliverNotification, RunNotifier
+from application.commands.accept_text import AcceptTextCommandHandler
+from application.commands.accept_voice import AcceptVoiceCommandHandler
+from application.commands.deliver_notification import (
+    DeliverNotificationCommandHandler,
+    RunNotifier,
+)
 from application.commands.handle_bot_command import HandleBotCommand
-from application.commands.process_identity_event import ProcessIdentityEvent
-from application.commands.process_task_result import ProcessTaskResult
+from application.commands.record_task_result import RecordTaskResultCommandHandler
 from application.commands.relay_intents import RelayIntents
+from application.commands.store_member_decision import (
+    StoreMemberDecisionCommandHandler,
+)
 from application.ports import IdentityGateway, Messenger
 from infrastructure.db.inbox import SqlUpdateInbox
-from infrastructure.db.jobs import SqlJobStore, outbox
-from infrastructure.db.notifications import SqlIntentStore
-from infrastructure.db.results import SqlTaskResultStore, fail_job
-from infrastructure.db.voice import fail_voice_job
-from infrastructure.messaging import IdentityEventConsumer
+from infrastructure.db.relay_hooks import fail_job, fail_voice_job
+from infrastructure.db.tables import outbox
+from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
+from infrastructure.messaging.identity_event_consumer import (
+    IdentityEventConsumer,
+)
+from infrastructure.messaging.identity_event_consumer import (
+    declare_queue as declare_identity_queue,
+)
+from infrastructure.messaging.task_result_consumer import TaskResultConsumer
 from infrastructure.streams import (
     NOTIFICATION_GROUP,
     NOTIFICATION_STREAM,
@@ -56,21 +66,25 @@ def build_bot_command(
 
 def build_accept_text(
     database: Database, identity: IdentityGateway, messenger: Messenger
-) -> AcceptTextMessage:
-    return AcceptTextMessage(identity, SqlJobStore(database.sessions), messenger)
+) -> AcceptTextCommandHandler:
+    return AcceptTextCommandHandler(
+        identity, lambda: SqlAutomationUnitOfWork(database.sessions), messenger
+    )
 
 
 def build_accept_voice(
     database: Database, identity: IdentityGateway, messenger: Messenger
-) -> AcceptVoiceMessage:
-    return AcceptVoiceMessage(identity, SqlJobStore(database.sessions), messenger)
+) -> AcceptVoiceCommandHandler:
+    return AcceptVoiceCommandHandler(
+        identity, lambda: SqlAutomationUnitOfWork(database.sessions), messenger
+    )
 
 
 @dataclass(frozen=True, slots=True)
 class NotificationPipeline:
     """RabbitMQ -> PostgreSQL intent -> Redis Stream -> Telegram, as separate steps."""
 
-    consumer: IdentityEventConsumer
+    consumer: QueueConsumer
     relay: RelayIntents
     notifier: RunNotifier
     queue: RedisNotificationQueue
@@ -86,7 +100,11 @@ def build_notifications(
 ) -> NotificationPipeline:
     if resources.redis is None:
         raise RuntimeError("Notifications need the Redis connection.")
-    store = SqlIntentStore(resources.sessions)
+    sessions = resources.sessions
+
+    def uow() -> SqlAutomationUnitOfWork:
+        return SqlAutomationUnitOfWork(sessions)
+
     queue = RedisNotificationQueue(
         RedisStream(
             resources.redis, NOTIFICATION_STREAM, NOTIFICATION_GROUP, consumer_name
@@ -94,9 +112,15 @@ def build_notifications(
         stuck_after_ms,
     )
     return NotificationPipeline(
-        consumer=IdentityEventConsumer(resources.rabbitmq, ProcessIdentityEvent(store)),
-        relay=RelayIntents(store, queue),
-        notifier=RunNotifier(queue, DeliverNotification(store, identity, messenger)),
+        consumer=QueueConsumer(
+            resources.rabbitmq,
+            declare_identity_queue,
+            IdentityEventConsumer(StoreMemberDecisionCommandHandler(uow)).handle,
+        ),
+        relay=RelayIntents(uow, queue),
+        notifier=RunNotifier(
+            queue, DeliverNotificationCommandHandler(uow, identity, messenger)
+        ),
         queue=queue,
     )
 
@@ -114,7 +138,11 @@ def build_task_flow(resources: Resources) -> TaskFlow:
         *_, results = await declare_task_topology(channel)
         return results
 
-    process = ProcessTaskResult(SqlTaskResultStore(resources.sessions))
+    process = TaskResultConsumer(
+        RecordTaskResultCommandHandler(
+            lambda: SqlAutomationUnitOfWork(resources.sessions)
+        )
+    )
     return TaskFlow(
         results=QueueConsumer(resources.rabbitmq, results_queue, process.handle),
         relay=RelayOutbox(

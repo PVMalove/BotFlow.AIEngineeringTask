@@ -34,7 +34,7 @@ test('logs in through real Identity, restores the bilingual session and logs out
   expect(cookie?.sameSite).toBe('Strict');
   const me = await page.request.get('/api/v1/users/me');
   expect(me.status()).toBe(200);
-  expect((await me.json()).role).toBe('admin');
+  expect((await me.json()).data.role).toBe('admin');
 
   await page.reload();
   await expect(

@@ -16,7 +16,7 @@ async function checkRequestList(response: import('@playwright/test').Response) {
     `Join request list returned HTTP ${response.status()}`,
   ).toBe(200);
   expect(
-    await response.json(),
+    (await response.json()).data,
     'The real join request must retain the applicant name',
   ).toContainEqual(
     expect.objectContaining({
@@ -75,7 +75,7 @@ test('manages real join decisions and revokes and restores a regular user access
       userPage.getByRole('link', { name: 'Управление доступом' }),
     ).toHaveCount(0);
     const members = await page.request.get('/api/v1/admin/members');
-    const target = (await members.json()).find(
+    const target = (await members.json()).data.find(
       (member: { telegram_id: number }) => member.telegram_id === 4200000008,
     );
     expect(target.status).toBe('approved');
@@ -146,7 +146,7 @@ test('rereads a real concurrent decision without overwriting it', async ({
     .filter({ hasText: 'Анна / Աննա' });
   await expect(applicant).toBeVisible();
   const response = await page.request.get('/api/v1/admin/join-requests');
-  const target = (await response.json()).find(
+  const target = (await response.json()).data.find(
     (member: { telegram_id: number }) => member.telegram_id === 4200000008,
   );
   const concurrent = await page.request.post(

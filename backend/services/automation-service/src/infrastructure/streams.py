@@ -3,7 +3,7 @@
 import json
 from uuid import UUID
 
-from botflow_platform.streams import RedisStream, StreamEntry
+from kernel_platform.streams import RedisStream, StreamEntry
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
 
@@ -17,13 +17,6 @@ VOICE_GROUP = "stt"
 # Twice the slowest decode timeout and more (docs/whisper-validation.md): a record
 # still pending after this long belongs to a worker that died.
 VOICE_STUCK_AFTER_MS = 180_000
-
-
-def _queued(entry: StreamEntry) -> QueuedIntent:
-    try:
-        return QueuedIntent(entry.id, UUID(entry.fields["intent_id"]))
-    except (KeyError, ValueError):
-        return QueuedIntent(entry.id, None)
 
 
 class RedisNotificationQueue:
@@ -71,13 +64,6 @@ class RedisVoicePublisher:
             raise ConnectionError("Redis is unavailable.") from None
 
 
-def _queued_voice(entry: StreamEntry) -> QueuedVoice:
-    try:
-        return QueuedVoice(entry.id, UUID(entry.fields["job_id"]))
-    except (KeyError, ValueError):
-        return QueuedVoice(entry.id, None)
-
-
 class RedisVoiceQueue:
     def __init__(
         self, stream: RedisStream, stuck_after_ms: int = VOICE_STUCK_AFTER_MS
@@ -100,3 +86,17 @@ class RedisVoiceQueue:
 
     async def ack(self, entry_id: str) -> None:
         await self._stream.ack(entry_id)
+
+
+def _queued(entry: StreamEntry) -> QueuedIntent:
+    try:
+        return QueuedIntent(entry.id, UUID(entry.fields["intent_id"]))
+    except (KeyError, ValueError):
+        return QueuedIntent(entry.id, None)
+
+
+def _queued_voice(entry: StreamEntry) -> QueuedVoice:
+    try:
+        return QueuedVoice(entry.id, UUID(entry.fields["job_id"]))
+    except (KeyError, ValueError):
+        return QueuedVoice(entry.id, None)

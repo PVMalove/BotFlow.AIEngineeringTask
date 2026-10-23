@@ -22,16 +22,19 @@ test('approves a request with its observed version and refreshes the members lis
 }) => {
   let approved = false;
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ json: admin }),
+    route.fulfill({ json: { data: admin, meta: {} } }),
   );
   await page.route('**/api/v1/admin/join-requests?*', (route) =>
-    route.fulfill({ json: approved ? [] : [applicant] }),
+    route.fulfill({ json: { data: approved ? [] : [applicant], meta: {} } }),
   );
   await page.route('**/api/v1/admin/members?*', (route) =>
     route.fulfill({
-      json: approved
-        ? [{ ...applicant, status: 'approved', access_version: 2 }]
-        : [],
+      json: {
+        data: approved
+          ? [{ ...applicant, status: 'approved', access_version: 2 }]
+          : [],
+        meta: {},
+      },
     }),
   );
   await page.route(
@@ -42,8 +45,11 @@ test('approves a request with its observed version and refreshes the members lis
       approved = true;
       await route.fulfill({
         json: {
-          changed: true,
-          member: { ...applicant, status: 'approved', access_version: 2 },
+          data: {
+            changed: true,
+            member: { ...applicant, status: 'approved', access_version: 2 },
+          },
+          meta: {},
         },
       });
     },
@@ -73,7 +79,7 @@ test('denies the admin route to a regular user without requesting admin data', a
       adminRequests.push(request.url());
   });
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ json: { ...admin, role: 'user' } }),
+    route.fulfill({ json: { data: { ...admin, role: 'user' }, meta: {} } }),
   );
   await page.goto('/admin');
 
@@ -107,10 +113,10 @@ for (const { status, detail, expectedRu, expectedHy } of [
     let decided = false;
     let posts = 0;
     await page.route('**/api/v1/users/me', (route) =>
-      route.fulfill({ json: admin }),
+      route.fulfill({ json: { data: admin, meta: {} } }),
     );
     await page.route('**/api/v1/admin/join-requests?*', (route) =>
-      route.fulfill({ json: decided ? [] : [applicant] }),
+      route.fulfill({ json: { data: decided ? [] : [applicant], meta: {} } }),
     );
     await page.route(
       `**/api/v1/admin/members/${applicant.id}/approve`,
@@ -119,7 +125,7 @@ for (const { status, detail, expectedRu, expectedHy } of [
         decided = true;
         await route.fulfill({
           status,
-          json: { detail },
+          json: { error: { code: detail, message: detail } },
         });
       },
     );
@@ -140,10 +146,12 @@ test('hides stale decisions when reconciliation fails and allows a manual list r
 }) => {
   let failed = false;
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ json: admin }),
+    route.fulfill({ json: { data: admin, meta: {} } }),
   );
   await page.route('**/api/v1/admin/join-requests?*', (route) =>
-    route.fulfill(failed ? { status: 503 } : { json: [applicant] }),
+    route.fulfill(
+      failed ? { status: 503 } : { json: { data: [applicant], meta: {} } },
+    ),
   );
   await page.route(
     `**/api/v1/admin/members/${applicant.id}/approve`,
@@ -177,17 +185,23 @@ test('explains an already applied decision and preserves Armenian on reload with
 }) => {
   let posts = 0;
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ json: admin }),
+    route.fulfill({ json: { data: admin, meta: {} } }),
   );
   await page.route('**/api/v1/admin/join-requests?*', (route) =>
-    route.fulfill({ json: posts ? [] : [applicant] }),
+    route.fulfill({ json: { data: posts ? [] : [applicant], meta: {} } }),
   );
   await page.route(
     `**/api/v1/admin/members/${applicant.id}/reject`,
     async (route) => {
       posts += 1;
       await route.fulfill({
-        json: { changed: false, member: { ...applicant, status: 'rejected' } },
+        json: {
+          data: {
+            changed: false,
+            member: { ...applicant, status: 'rejected' },
+          },
+          meta: {},
+        },
       });
     },
   );
@@ -227,12 +241,15 @@ test('pages requests and disables decisions until a pending response is reconcil
     display_name: `Applicant ${i}`,
   }));
   await page.route('**/api/v1/users/me', (route) =>
-    route.fulfill({ json: admin }),
+    route.fulfill({ json: { data: admin, meta: {} } }),
   );
   await page.route('**/api/v1/admin/join-requests?*', (route) => {
     const url = new URL(route.request().url());
     return route.fulfill({
-      json: url.searchParams.get('offset') === '0' ? firstPage : [applicant],
+      json: {
+        data: url.searchParams.get('offset') === '0' ? firstPage : [applicant],
+        meta: {},
+      },
     });
   });
   let finish!: () => void;
@@ -244,7 +261,13 @@ test('pages requests and disables decisions until a pending response is reconcil
     async (route) => {
       await pending;
       await route.fulfill({
-        json: { changed: true, member: { ...applicant, status: 'blocked' } },
+        json: {
+          data: {
+            changed: true,
+            member: { ...applicant, status: 'blocked' },
+          },
+          meta: {},
+        },
       });
     },
   );

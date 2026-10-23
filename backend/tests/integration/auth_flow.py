@@ -13,9 +13,9 @@ import httpx
 from api.containers import build_bot_command
 from application.commands.handle_bot_command import HandleBotCommandDto
 from application.ports import IdentityUnavailable
-from botflow_platform.resources import open_database
-from botflow_platform.settings import Settings
 from infrastructure.identity_gateway import HttpIdentityGateway
+from kernel_platform.resources import open_database
+from kernel_platform.settings import Settings
 from sqlalchemy import text
 
 ADMIN = int(os.environ["INITIAL_ADMIN_TELEGRAM_ID"])
@@ -87,11 +87,13 @@ class AuthFlow(unittest.IsolatedAsyncioTestCase):
 
     async def test_bot_code_exchange_current_member_and_revocation(self) -> None:
         await self.bot.execute(
-            update_id=100,
-            telegram_id=ADMIN,
-            chat_id=ADMIN,
-            text="/start",
-            private=True,
+            HandleBotCommandDto(
+                update_id=100,
+                telegram_id=ADMIN,
+                chat_id=ADMIN,
+                text="/start",
+                private=True,
+            )
         )
         self.assertEqual(
             self.telegram.messages,
@@ -99,11 +101,13 @@ class AuthFlow(unittest.IsolatedAsyncioTestCase):
         )
         code = await self.code()
         await self.bot.execute(
-            update_id=1,
-            telegram_id=ADMIN,
-            chat_id=ADMIN,
-            text="/login",
-            private=True,
+            HandleBotCommandDto(
+                update_id=1,
+                telegram_id=ADMIN,
+                chat_id=ADMIN,
+                text="/login",
+                private=True,
+            )
         )
         self.assertEqual(len(self.telegram.messages), 2)
         digest = hashlib.sha256(code.encode()).hexdigest()
@@ -131,8 +135,8 @@ class AuthFlow(unittest.IsolatedAsyncioTestCase):
         token = self.browser.cookies["botflow_session"]
         current = await self.browser.get("/api/v1/users/me")
         self.assertEqual(current.status_code, 200)
-        self.assertEqual(current.json()["telegram_id"], ADMIN)
-        self.assertEqual(current.json()["role"], "admin")
+        self.assertEqual(current.json()["data"]["telegram_id"], ADMIN)
+        self.assertEqual(current.json()["data"]["role"], "admin")
         self.assertEqual((await self.exchange(code)).status_code, 401)
 
         logout = await self.browser.post("/api/v1/auth/logout", headers=ORIGIN)
@@ -189,7 +193,7 @@ class AuthFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([response.status_code for response in issued], [200, 200])
 
         responses = await asyncio.gather(
-            *(self.exchange(response.json()["code"]) for response in issued)
+            *(self.exchange(response.json()["data"]["code"]) for response in issued)
         )
 
         self.assertEqual(

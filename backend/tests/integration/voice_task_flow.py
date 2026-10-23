@@ -28,38 +28,37 @@ from api.containers import (
     build_task_flow,
     build_voice_flow,
 )
-from application.commands.accept_text import AcceptTextDto, AcceptTextMessage
+from application.commands.accept_text import (
+    AcceptTextCommand,
+    AcceptTextCommandHandler,
+)
 from application.commands.accept_voice import (
-    VOICE_ROUTING_KEY,
-    AcceptVoiceDto,
-    AcceptVoiceMessage,
-    transcribe_outbox_id_for,
+    AcceptVoiceCommand,
+    AcceptVoiceCommandHandler,
 )
 from application.commands.handle_bot_command import HandleBotCommandDto
-from application.commands.process_task_result import ProcessTaskResult
-from application.commands.transcribe_voice import FAILURES, TranscribeVoice
+from application.commands.job_acceptance import Accepted, JobAcceptance
+from application.commands.record_task_result import RecordTaskResultCommandHandler
+from application.commands.transcribe_voice import TranscribeVoiceCommandHandler
 from application.ports import (
-    AcceptOutcome,
     AudioTooLong,
     CorruptedAudio,
     EmptyAudio,
-    NewJob,
-    NewVoiceJob,
-    OutboxMessage,
     TelegramFileUnavailable,
     Transcript,
     TranscriptionTimeout,
 )
-from botflow_platform.messaging import declare_task_topology
-from botflow_platform.resources import open_database, open_resources
-from botflow_platform.retry import RetryPolicy
-from botflow_platform.settings import Settings
-from botflow_platform.streams import RedisStream
-from domain.jobs import job_id_for, outbox_id_for
-from infrastructure.db.jobs import SqlJobStore
-from infrastructure.db.results import SqlTaskResultStore
-from infrastructure.db.voice import SqlVoiceStore
+from domain.entities.job import Job
+from domain.entities.voice_message import VoiceMessage
+from domain.notices import VOICE_FAILURES
+from domain.value_objects.job_id import JobId
+from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
 from infrastructure.identity_gateway import HttpIdentityGateway
+from infrastructure.messaging.envelopes import (
+    VOICE_ROUTING_KEY,
+    transcribe_outbox_id_for,
+)
+from infrastructure.messaging.task_result_consumer import TaskResultConsumer
 from infrastructure.s3_audio import S3AudioStore
 from infrastructure.streams import (
     NOTIFICATION_STREAM,
@@ -68,6 +67,12 @@ from infrastructure.streams import (
     RedisVoiceQueue,
 )
 from infrastructure.stt.runner import ReadinessMarker, run_worker
+from kernel_domain.result import Result
+from kernel_platform.messaging import declare_task_topology
+from kernel_platform.resources import open_database, open_resources
+from kernel_platform.retry import RetryPolicy
+from kernel_platform.settings import Settings
+from kernel_platform.streams import RedisStream
 from sqlalchemy import text
 from text_task_flow import TelegramPort
 
@@ -155,9 +160,13 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
         self.notifications = TelegramPort()  # messages sent by the notifier
         self.files = FakeFiles()
         self.stt = FakeStt()
-        self.store = SqlJobStore(self.automation_db.sessions)
-        self.accept_voice = AcceptVoiceMessage(self.gateway, self.store, self.telegram)
-        self.accept_text = AcceptTextMessage(self.gateway, self.store, self.telegram)
+        self.acceptance = JobAcceptance(self.uow)
+        self.accept_voice = AcceptVoiceCommandHandler(
+            self.gateway, self.uow, self.telegram
+        )
+        self.accept_text = AcceptTextCommandHandler(
+            self.gateway, self.uow, self.telegram
+        )
         self.login_bot = build_bot_command(
             self.automation_db, self.gateway, self.telegram
         )
@@ -287,11 +296,11 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
         audio: bytes = RU_AUDIO,
         *,
         duration: int = 12,
-    ) -> AcceptVoiceDto:
+    ) -> AcceptVoiceCommand:
         file_id = f"file-{telegram_id}-{message_id}"
         self.files.audio[file_id] = audio
         now = datetime.now(UTC)
-        command = AcceptVoiceDto(
+        command = AcceptVoiceCommand(
             bot_id=BOT_ID,
             chat_id=telegram_id,
             message_id=message_id,
@@ -311,7 +320,7 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
     async def send_text(self, telegram_id: int, message_id: int, body: str) -> None:
         now = datetime.now(UTC)
         await self.accept_text.execute(
-            AcceptTextDto(
+            AcceptTextCommand(
                 bot_id=BOT_ID,
                 chat_id=telegram_id,
                 message_id=message_id,
@@ -370,15 +379,15 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
             ),
             stuck_after_ms,
         )
-        handler = TranscribeVoice(
-            SqlVoiceStore(self.automation_db.sessions),
+        handler = TranscribeVoiceCommandHandler(
+            self.uow,
             self.files,
             S3AudioStore(self.resources.s3, self.bucket),
             self.stt,
             policy=RetryPolicy(jitter=0.0),
         )
 
-        async def load() -> TranscribeVoice:
+        async def load() -> TranscribeVoiceCommandHandler:
             return handler
 
         async def quick(seconds: float) -> None:
@@ -456,7 +465,7 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(committed, [True])
         job = await self.job(AUTHOR_A, 1)
-        job_id = job_id_for(BOT_ID, AUTHOR_A, 1)
+        job_id = JobId.from_source(BOT_ID, AUTHOR_A, 1).value
         self.assertEqual(job["id"], job_id)
         self.assertEqual(
             (job["status"], job["stage"], job["text"]), ("accepted", "queued", None)
@@ -600,7 +609,7 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
             return bool(self.notifications.to(AUTHOR_A))
 
         await self.pump(voice, tasks, pipeline, notified)
-        job_id = job_id_for(BOT_ID, AUTHOR_A, 1)
+        job_id = JobId.from_source(BOT_ID, AUTHOR_A, 1).value
 
         # The same entry arrives again after the job is done.
         await self.resources.redis.xadd(  # type: ignore[union-attr]
@@ -640,7 +649,7 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((job["status"], job["stage"]), ("failed", "failed"))
         self.assertEqual((job["error_code"], job["last_error"]), (code, code))
         self.assertIsNone(job["task_id"])
-        self.assertEqual(self.notifications.to(AUTHOR_A), [FAILURES[code]])
+        self.assertEqual(self.notifications.to(AUTHOR_A), [VOICE_FAILURES[code]])
         self.assertEqual(
             await self.rows(self.tasks_db, "SELECT count(*) FROM tasks"), [(0,)]
         )
@@ -697,43 +706,30 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
 
     # ---- limits -----------------------------------------------------------------
 
-    def new_voice_job(
-        self, author_id: UUID, telegram_id: int, message_id: int
-    ) -> tuple[NewVoiceJob, OutboxMessage]:
+    def new_voice_job(self, author_id: UUID, telegram_id: int, message_id: int) -> Job:
         now = datetime.now(UTC)
-        job_id = job_id_for(BOT_ID, telegram_id, message_id)
-        job = NewVoiceJob(
-            id=job_id,
+        return Job.accept_voice(
+            VoiceMessage(
+                file_id=f"limit-{telegram_id}-{message_id}",
+                file_unique_id=f"limit-unique-{telegram_id}-{message_id}",
+                duration_seconds=5,
+                file_size_bytes=100,
+                mime_type="audio/ogg",
+            ),
             bot_id=BOT_ID,
             chat_id=telegram_id,
             message_id=message_id,
             author_id=author_id,
             author_telegram_id=telegram_id,
             author_name="Smoke",
-            file_id=f"limit-{telegram_id}-{message_id}",
-            file_unique_id=f"limit-unique-{telegram_id}-{message_id}",
-            duration_seconds=5,
-            file_size_bytes=100,
-            mime_type="audio/ogg",
             message_date=now,
             received_at=now,
+            now=now,
         )
-        message = OutboxMessage(
-            id=transcribe_outbox_id_for(job_id),
-            correlation_id=job_id,
-            type="TranscribeVoice",
-            routing_key=VOICE_ROUTING_KEY,
-            payload={"payload": {"job_id": str(job_id)}},
-        )
-        return job, message
 
-    def new_text_job(
-        self, author_id: UUID, telegram_id: int, message_id: int
-    ) -> tuple[NewJob, OutboxMessage]:
+    def new_text_job(self, author_id: UUID, telegram_id: int, message_id: int) -> Job:
         now = datetime.now(UTC)
-        job_id = job_id_for(BOT_ID, telegram_id, message_id)
-        job = NewJob(
-            id=job_id,
+        return Job.accept_text(
             bot_id=BOT_ID,
             chat_id=telegram_id,
             message_id=message_id,
@@ -743,15 +739,18 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
             text="текст",
             message_date=now,
             received_at=now,
+            now=now,
         )
-        message = OutboxMessage(
-            id=outbox_id_for(job_id),
-            correlation_id=job_id,
-            type="CreateTask",
-            routing_key="task.create",
-            payload={"job_id": str(job_id)},
-        )
-        return job, message
+
+    def uow(self) -> SqlAutomationUnitOfWork:
+        return SqlAutomationUnitOfWork(self.automation_db.sessions)
+
+    @staticmethod
+    def outcome_of(result: Result[Accepted]) -> str:
+        """accepted / duplicate, or the name of the limit that refused the job."""
+        if result.is_ok:
+            return result.value.outcome.value
+        return {"job_limit": "limit", "voice_limit": "voice_limit"}[result.error.code]
 
     async def test_voice_limits_ten_and_two_hold_under_concurrent_acceptance(
         self,
@@ -763,16 +762,13 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
             for number in range(4)
         ]
 
-        outcomes = await asyncio.gather(
-            *(self.store.accept_voice(job, message) for job, message in batch)
-        )
+        outcomes = await asyncio.gather(*(self.acceptance.accept(j) for j in batch))
 
         pairs = list(zip(batch, outcomes, strict=True))
-        stored = [pair for pair, o in pairs if o.outcome is AcceptOutcome.ACCEPTED]
+        stored = [job for job, o in pairs if self.outcome_of(o) == "accepted"]
         self.assertEqual(len(stored), 10)  # 10 voice jobs in total
         self.assertEqual(
-            {o.outcome for _, o in pairs},
-            {AcceptOutcome.ACCEPTED, AcceptOutcome.VOICE_LIMIT},
+            {self.outcome_of(o) for _, o in pairs}, {"accepted", "voice_limit"}
         )
         per_author = await self.rows(
             self.automation_db,
@@ -786,63 +782,69 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
             [(10,)],
         )
         # A repeated message is no new load, even at the limit.
-        first_job, first_message = stored[0]
-        again = await self.store.accept_voice(first_job, first_message)
-        self.assertIs(again.outcome, AcceptOutcome.DUPLICATE)
+        first_job = stored[0]
+        again = await self.acceptance.accept(first_job)
+        self.assertEqual(self.outcome_of(again), "duplicate")
 
         # The voice slot is freed by the result (TaskCreated), not before it.
         author_id = first_job.author_id
         telegram_id = first_job.author_telegram_id
-        blocked = await self.store.accept_voice(
-            *self.new_voice_job(author_id, telegram_id, 90)
+        blocked = await self.acceptance.accept(
+            self.new_voice_job(author_id, telegram_id, 90)
         )
-        self.assertIs(blocked.outcome, AcceptOutcome.VOICE_LIMIT)
+        self.assertEqual(self.outcome_of(blocked), "voice_limit")
         await self.rows_exec(
-            "UPDATE jobs SET text = 'расшифровка' WHERE id = :id", id=first_job.id
+            "UPDATE jobs SET text = 'расшифровка' WHERE id = :id",
+            id=first_job.id.value,
         )
         result = {
             "envelope_version": 1,
-            "payload": {"job_id": str(first_job.id), "task_id": str(uuid4())},
+            "payload": {
+                "job_id": str(first_job.id.value),
+                "task_id": str(uuid4()),
+            },
         }
-        await ProcessTaskResult(
-            SqlTaskResultStore(self.automation_db.sessions)
-        ).execute(str(uuid4()), "TaskCreated", json.dumps(result).encode())
-        freed = await self.store.accept_voice(
-            *self.new_voice_job(author_id, telegram_id, 91)
+        await TaskResultConsumer(RecordTaskResultCommandHandler(self.uow)).handle(
+            str(uuid4()), "TaskCreated", json.dumps(result).encode()
         )
-        self.assertIs(freed.outcome, AcceptOutcome.ACCEPTED)
+        freed = await self.acceptance.accept(
+            self.new_voice_job(author_id, telegram_id, 91)
+        )
+        self.assertEqual(self.outcome_of(freed), "accepted")
 
         # ... or by a final error.
-        other_job, _ = stored[-1]
-        work = await SqlVoiceStore(self.automation_db.sessions).begin(
-            other_job.id, datetime.now(UTC), False
+        other_job = stored[-1]
+        async with self.uow() as uow:
+            running = await uow.jobs.get(other_job.id, lock=True)
+            assert running is not None
+            now = datetime.now(UTC)
+            running.begin_voice_attempt(now, False)
+            self.assertTrue(
+                running.fail_voice("empty_audio", VOICE_FAILURES["empty_audio"], now)
+            )
+            await uow.jobs.update(running)
+            await uow.commit()
+        freed_again = await self.acceptance.accept(
+            self.new_voice_job(other_job.author_id, other_job.author_telegram_id, 92)
         )
-        assert work is not None
-        failed = await SqlVoiceStore(self.automation_db.sessions).fail(
-            work, "empty_audio", FAILURES["empty_audio"], datetime.now(UTC)
-        )
-        self.assertTrue(failed)
-        freed_again = await self.store.accept_voice(
-            *self.new_voice_job(other_job.author_id, other_job.author_telegram_id, 92)
-        )
-        self.assertIs(freed_again.outcome, AcceptOutcome.ACCEPTED)
+        self.assertEqual(self.outcome_of(freed_again), "accepted")
 
     async def test_the_common_limits_still_apply_to_voice_jobs(self) -> None:
         # 9 text jobs plus one voice job fill this author's 10 common slots.
         author_id, telegram_id = uuid4(), LIMIT_AUTHORS
         for number in range(9):
-            outcome = await self.store.accept(
-                *self.new_text_job(author_id, telegram_id, number)
+            outcome = await self.acceptance.accept(
+                self.new_text_job(author_id, telegram_id, number)
             )
-            self.assertIs(outcome.outcome, AcceptOutcome.ACCEPTED)
-        one = await self.store.accept_voice(
-            *self.new_voice_job(author_id, telegram_id, 50)
+            self.assertEqual(self.outcome_of(outcome), "accepted")
+        one = await self.acceptance.accept(
+            self.new_voice_job(author_id, telegram_id, 50)
         )
-        self.assertIs(one.outcome, AcceptOutcome.ACCEPTED)
-        second = await self.store.accept_voice(
-            *self.new_voice_job(author_id, telegram_id, 51)
+        self.assertEqual(self.outcome_of(one), "accepted")
+        second = await self.acceptance.accept(
+            self.new_voice_job(author_id, telegram_id, 51)
         )
-        self.assertIs(second.outcome, AcceptOutcome.LIMIT)  # common 10 per author
+        self.assertEqual(self.outcome_of(second), "limit")  # common 10 per author
         self.assertEqual(
             await self.rows(self.automation_db, "SELECT count(*) FROM voice_jobs"),
             [(1,)],
@@ -851,17 +853,17 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
         # 100 unfinished jobs in total close the door to voice as well.
         for number, other in enumerate(range(LIMIT_AUTHORS + 1, LIMIT_AUTHORS + 10)):
             for message_id in range(10):
-                await self.store.accept(
-                    *self.new_text_job(uuid4(), other, number * 100 + message_id)
+                await self.acceptance.accept(
+                    self.new_text_job(uuid4(), other, number * 100 + message_id)
                 )
         total = await self.rows(
             self.automation_db, "SELECT count(*) FROM jobs WHERE status = 'accepted'"
         )
         self.assertEqual(total, [(100,)])
-        shut = await self.store.accept_voice(
-            *self.new_voice_job(uuid4(), LIMIT_AUTHORS + 500, 1)
+        shut = await self.acceptance.accept(
+            self.new_voice_job(uuid4(), LIMIT_AUTHORS + 500, 1)
         )
-        self.assertIs(shut.outcome, AcceptOutcome.LIMIT)
+        self.assertEqual(self.outcome_of(shut), "limit")
 
     async def rows_exec(self, statement: str, **params: object) -> None:
         async with self.automation_db.sessions() as session:
@@ -892,7 +894,9 @@ class VoiceTaskFlow(unittest.IsolatedAsyncioTestCase):
         job = await self.job(AUTHOR_A, 1)
         self.assertEqual((job["status"], job["stage"]), ("completed", "done"))
         self.assertEqual(job["attempts"], 2)
-        self.assertEqual(job["s3_key"], f"voice/{job_id_for(BOT_ID, AUTHOR_A, 1)}")
+        self.assertEqual(
+            job["s3_key"], f"voice/{JobId.from_source(BOT_ID, AUTHOR_A, 1).value}"
+        )
 
     # ---- recognition holds no transaction and blocks nothing ---------------------
 

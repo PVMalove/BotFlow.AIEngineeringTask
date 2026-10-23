@@ -2,9 +2,9 @@
 
 import json
 
-from botflow_platform.messaging import ConfirmedPublisher
+from kernel_platform.messaging import ConfirmedPublisher
 
-from domain.access import OutboxEntry
+from domain.outbox import OutboxEntry
 
 
 class RabbitEventPublisher:

@@ -5,9 +5,11 @@ from uuid import UUID
 import jwt
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from kernel_domain.result import Result
 
 from application.ports import TokenClaims
-from domain.entities.auth import AuthSession, InvalidSession
+from domain.entities.auth_session import AuthSession
+from domain.errors import IdentityErrors
 
 ISSUER = "botflow-identity"
 AUDIENCE = "botflow"
@@ -38,7 +40,7 @@ class Rs256Tokens:
             algorithm="RS256",
         )
 
-    def verify(self, token: str) -> TokenClaims:
+    def verify(self, token: str) -> Result[TokenClaims]:
         try:
             claims = jwt.decode(
                 token,
@@ -48,8 +50,10 @@ class Rs256Tokens:
                 issuer=ISSUER,
                 options={"require": _REQUIRED},
             )
-            return TokenClaims(
-                session_id=UUID(claims["jti"]), member_id=UUID(claims["sub"])
+            return Result[TokenClaims].ok(
+                TokenClaims(
+                    session_id=UUID(claims["jti"]), member_id=UUID(claims["sub"])
+                )
             )
         except (jwt.PyJWTError, ValueError, TypeError):
-            raise InvalidSession from None
+            return Result[TokenClaims].fail(IdentityErrors.invalid_session())

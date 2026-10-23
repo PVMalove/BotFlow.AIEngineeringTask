@@ -7,7 +7,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from application.commands.transcribe_voice import TranscribeOutcome, TranscribeResult
+from application.commands.transcribe_voice import (
+    TranscribeOutcome,
+    TranscribeResult,
+    TranscribeVoiceCommand,
+)
 from application.ports import QueuedVoice, StuckWorkerError
 from infrastructure.stt.runner import ReadinessMarker, SttConfig, run_worker
 
@@ -55,7 +59,8 @@ class Handler:
         self.seen: list[UUID] = []
         self.on_execute: Callable[[], None] | None = None
 
-    async def execute(self, job_id: UUID) -> TranscribeResult:
+    async def execute(self, command: TranscribeVoiceCommand) -> TranscribeResult:
+        job_id = command.job_id
         self.log.append("execute")
         self.seen.append(job_id)
         if self.on_execute:
