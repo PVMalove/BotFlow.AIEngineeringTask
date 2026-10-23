@@ -190,8 +190,9 @@ def main() -> int:
                     )
                 # Resource checks deliberately block the admin to verify that a
                 # repeated bootstrap after restart does not restore access.
-                # Browser login must run before that persistent state change.
-                if stage == "migrations and initial admin" and options.browser:
+                # Browser realtime also needs the actual CreateTask consumer.
+                # Both workers now run after migrations, before browser checks.
+                if stage == "tasks worker" and options.browser:
                     stage = "isolated browser checks"
                     address = subprocess.run(
                         [*compose, "port", "frontend", "8080"],

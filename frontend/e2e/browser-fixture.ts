@@ -9,9 +9,14 @@ type Action =
   | 'revoke'
   | 'board'
   | 'board-change'
-  | 'dnd-board';
+  | 'dnd-board'
+  | 'realtime-task';
 
-export function fixture(action: Action): { code?: string } {
+export function fixture(action: Action): {
+  code?: string;
+  task_id?: string;
+  text?: string;
+} {
   const raw = process.env.BOTFLOW_E2E_COMPOSE;
   if (!raw) throw new Error('Run browser checks through make e2e.');
   const compose: string[] = JSON.parse(raw);

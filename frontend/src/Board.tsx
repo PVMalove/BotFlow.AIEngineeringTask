@@ -23,25 +23,23 @@ import {
 import type { InfiniteData } from '@tanstack/react-query';
 import { Fragment, useEffect, useRef, useState } from 'react';
 
-import { ApiError, changeTaskStatus, getTask, listTasks } from './api';
+import { ApiError, changeTaskStatus, getTask } from './api';
 import type { Member, Task, TaskPage, TaskStatus } from './api';
 import type { Locale, Messages } from './locale';
 import { boardTasks } from './tasks';
 import { TaskCard, TaskColumn } from './TaskCard';
 import { TaskDialog } from './TaskDialog';
+import {
+  boardColumnOptions,
+  knownBoardTasks,
+  startBoardRealtime,
+} from './boardRealtime';
+import type { BoardConnection } from './boardRealtime';
 
 function useTaskColumn(memberId: string, status: TaskStatus) {
-  return useInfiniteQuery({
-    queryKey: ['tasks', memberId, status],
-    initialPageParam: null as string | null,
-    queryFn: ({ pageParam, signal }) => listTasks(status, pageParam, signal),
-    getNextPageParam: (page) =>
-      page.meta.has_more ? page.meta.next_cursor : undefined,
-    retry: false,
-    refetchInterval: 30_000,
-    refetchOnWindowFocus: 'always',
-    refetchOnReconnect: 'always',
-  });
+  return useInfiniteQuery(
+    boardColumnOptions(useQueryClient(), memberId, status),
+  );
 }
 
 type Notice =
@@ -70,6 +68,16 @@ export function Board({
   locale: Locale;
 }) {
   const client = useQueryClient();
+  const [connection, setConnection] = useState<BoardConnection>('connecting');
+  const realtime = useRef<ReturnType<typeof startBoardRealtime> | null>(null);
+  useEffect(() => {
+    const sync = startBoardRealtime(client, member.id, setConnection);
+    realtime.current = sync;
+    return () => {
+      sync.stop();
+      realtime.current = null;
+    };
+  }, [client, member.id]);
   const key = ['tasks', member.id];
   const pending = useTaskColumn(member.id, 'pending');
   const inProgress = useTaskColumn(member.id, 'in_progress');
@@ -108,17 +116,28 @@ export function Board({
   );
   const mayEdit = (task: Task) =>
     member.role === 'admin' || member.id === task.author_id;
-  const denied = [pending.error, inProgress.error, completed.error].some(
-    (error) => error instanceof ApiError && [401, 403].includes(error.status),
-  );
+  const denied =
+    connection === 'denied' ||
+    [pending.error, inProgress.error, completed.error].some(
+      (error) => error instanceof ApiError && [401, 403].includes(error.status),
+    );
   useEffect(() => {
-    if (denied) void client.invalidateQueries({ queryKey: ['session'] });
-  }, [client, denied]);
-  const tasks = boardTasks(
+    if (denied && connection !== 'denied')
+      void client.invalidateQueries({ queryKey: ['session'] });
+  }, [client, denied, connection]);
+  const observedTasks = boardTasks(
     columns.flatMap(
       ({ query }) => query.data?.pages.flatMap((page) => page.data) ?? [],
     ),
   );
+  // Keep the active source mounted until drop/cancel. Realtime may move its
+  // cached version meanwhile; the command still uses the drag-start snapshot.
+  const tasks = dragged
+    ? boardTasks([
+        ...observedTasks.filter((task) => task.id !== dragged.id),
+        dragged,
+      ])
+    : observedTasks;
   const dateFormat = new Intl.DateTimeFormat(locale, {
     dateStyle: 'medium',
     timeStyle: 'short',
@@ -153,11 +172,9 @@ export function Board({
 
   function putTask(task: Task | null, id: string) {
     // A delayed mutation/GET must not replace a newer REST (or future WS) version.
-    const known = boardTasks(
-      client
-        .getQueriesData<InfiniteData<TaskPage>>({ queryKey: key })
-        .flatMap(([, data]) => data?.pages.flatMap((page) => page.data) ?? []),
-    ).find((item) => item.id === id);
+    const known = knownBoardTasks(client, member.id).find(
+      (item) => item.id === id,
+    );
     if (task && known && known.version > task.version) task = known;
     for (const { status } of columns) {
       client.setQueryData<InfiniteData<TaskPage>>(
@@ -301,11 +318,19 @@ export function Board({
           color="secondary"
           variant="outlined"
           disabled={busy || columns.some(({ query }) => query.isFetching)}
-          onClick={() => void client.invalidateQueries({ queryKey: key })}
+          onClick={() => void realtime.current?.refresh()}
         >
           {messages.refreshBoard}
         </Button>
       </Stack>
+      <Typography
+        role="status"
+        aria-live="polite"
+        color="text.secondary"
+        sx={{ mb: 2 }}
+      >
+        {messages[connection]}
+      </Typography>
       {notice && !opened && (
         <Alert severity="error" sx={{ mb: 2 }}>
           {messages[notice]}
@@ -395,7 +420,8 @@ export function Board({
                     {query.isPending ? '…' : query.isError ? '?' : items.length}
                     {query.hasNextPage ? '+' : ''})
                   </Typography>
-                  {query.isFetching && (
+                  {/* Background reads must not move a handle under the pointer. */}
+                  {query.isPending && query.isFetching && (
                     <Typography role="status" sx={{ mb: 2 }}>
                       {messages.tasksLoading}
                     </Typography>
@@ -476,7 +502,7 @@ export function Board({
           </Box>
         </DndContext>
       )}
-      {opened && (
+      {opened && !denied && (
         <TaskDialog
           task={opened}
           selected={selected}

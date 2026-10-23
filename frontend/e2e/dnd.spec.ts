@@ -27,6 +27,7 @@ async function drag(
   handle: Locator,
   target: Locator,
   touch = false,
+  duringDrag?: () => Promise<void>,
 ) {
   await handle.scrollIntoViewIfNeeded();
   const start = await handle.boundingBox();
@@ -49,6 +50,7 @@ async function drag(
     await page.mouse.move(x - 12, y, { steps: 3 });
   }
   await expect(handle).toHaveAttribute('aria-pressed', 'true');
+  if (duringDrag) await duringDrag();
   await target.scrollIntoViewIfNeeded();
   const end = await target.boundingBox();
   if (!end) throw new Error('Expected a visible target');
@@ -177,20 +179,78 @@ test('cancels with Escape and ignores same-column and invalid drops against the 
   expect(await read(page, id)).toMatchObject({ status: 'pending', version: 1 });
 });
 
+test('starts dragging at the visible handle during a delayed real REST refresh', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const { id, card, patches } = await prepare(page);
+  const refresh = page.getByRole('button', {
+    name: 'Обновить доску',
+    exact: true,
+  });
+  await expect(
+    page.getByText('Обновления подключены', { exact: true }),
+  ).toBeVisible();
+  await expect(refresh).toBeEnabled();
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  const handle = card.getByRole('button', { name: /Перенести задачу/ });
+  await handle.scrollIntoViewIfNeeded();
+  const start = await handle.boundingBox();
+  if (!start) throw new Error('Expected a visible drag handle');
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  // Delay real responses without replacing the API data or WebSocket traffic.
+  await page.route('**/api/v1/tasks?**', async (route) => {
+    await gate;
+    await route.continue();
+  });
+
+  // Start the refresh without scrolling away from the measured handle.
+  await refresh.dispatchEvent('click');
+  await expect(refresh).toBeDisabled();
+  try {
+    await page.mouse.move(
+      start.x + start.width / 2,
+      start.y + start.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      start.x + start.width / 2 - 12,
+      start.y + start.height / 2,
+      { steps: 3 },
+    );
+    await expect(handle).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+  } finally {
+    await page.mouse.up();
+    finish();
+  }
+  await expect(refresh).toBeEnabled();
+  expect(patches).toEqual([]);
+  expect(await read(page, id)).toMatchObject({ status: 'pending', version: 1 });
+});
+
 test('reconciles a real version conflict after drop without repeating PATCH', async ({
   page,
 }) => {
   test.setTimeout(90_000);
   const { id, card, patches } = await prepare(page);
-  const concurrent = await page.request.patch('/api/v1/tasks/' + id, {
-    headers: { Origin: new URL(page.url()).origin },
-    data: { status: 'in_progress', expected_version: 1 },
-  });
-  expect(concurrent.status()).toBe(200);
   await drag(
     page,
     card.getByRole('button', { name: /Перенести задачу/ }),
     page.getByRole('region', { name: 'Завершено', exact: true }),
+    false,
+    async () => {
+      // Capture the drag's version before a concurrent writer changes it.
+      // Realtime may move the original card as soon as that writer commits.
+      const concurrent = await page.request.patch('/api/v1/tasks/' + id, {
+        headers: { Origin: new URL(page.url()).origin },
+        data: { status: 'in_progress', expected_version: 1 },
+      });
+      expect(concurrent.status()).toBe(200);
+    },
   );
   await expect(page.getByRole('alert')).toContainText('Задача изменилась');
   await expect(

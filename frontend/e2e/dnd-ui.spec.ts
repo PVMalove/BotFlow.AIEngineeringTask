@@ -53,11 +53,10 @@ async function pointerDrop(
   duringDrag?: () => Promise<void>,
 ) {
   const handle = page.getByRole('button', { name: /Перенести задачу/ });
+  await handle.scrollIntoViewIfNeeded();
   const start = await handle.boundingBox();
-  const target = await page
-    .getByRole('region', { name: label, exact: true })
-    .boundingBox();
-  if (!start || !target) throw new Error('Expected drag surfaces');
+  const column = page.getByRole('region', { name: label, exact: true });
+  if (!start) throw new Error('Expected a drag handle');
   await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
   await page.mouse.down();
   await page.mouse.move(
@@ -65,12 +64,22 @@ async function pointerDrop(
     start.y + start.height / 2,
     { steps: 3 },
   );
-  await page.mouse.move(
-    target.x + target.width / 2,
-    target.y + target.height / 2,
-    { steps: 10 },
-  );
+  async function moveToColumn() {
+    // On a narrow board the destination can start below the viewport, and
+    // auto-scroll during a delayed read changes its screen coordinates.
+    await column.scrollIntoViewIfNeeded();
+    const target = await column.boundingBox();
+    if (!target) throw new Error('Expected a drop column');
+    await page.mouse.move(target.x + target.width / 2, target.y + 24, {
+      steps: 10,
+    });
+  }
+  await moveToColumn();
   if (duringDrag) await duringDrag();
+  await moveToColumn();
+  await expect(
+    column.getByText('Перенести сюда', { exact: true }),
+  ).toBeVisible();
   await page.mouse.up();
 }
 
@@ -168,7 +177,7 @@ test('keeps a newer REST version when an older drag response arrives later', asy
   await expect(page.getByRole('listitem')).toHaveCount(1);
 });
 
-test('keeps the version observed at drag start when REST refreshes the same card during dragging', async ({
+test('keeps the source card and observed version when REST moves it during dragging', async ({
   page,
 }) => {
   await page.clock.install();
@@ -180,8 +189,14 @@ test('keeps the version observed at drag start when REST refreshes the same card
       json: {
         data:
           new URL(route.request().url()).searchParams.get('status') ===
-          'pending'
-            ? [{ ...initial, version }]
+          (version === 1 ? 'pending' : 'in_progress')
+            ? [
+                {
+                  ...initial,
+                  version,
+                  status: version === 1 ? 'pending' : 'in_progress',
+                },
+              ]
             : [],
         meta: { has_more: false },
       },
@@ -197,11 +212,21 @@ test('keeps the version observed at drag start when REST refreshes the same card
         },
       });
     }
-    return route.fulfill({ json: { data: { ...initial, version: 3 } } });
+    return route.fulfill({
+      json: { data: { ...initial, status: 'in_progress', version: 3 } },
+    });
   });
   await pointerDrop(page, 'В работе', async () => {
     version = 3;
     await page.clock.runFor(31_000);
+    await expect(
+      page.getByRole('button', { name: 'Обновить доску' }),
+    ).toBeEnabled();
+    await expect(
+      page
+        .getByRole('region', { name: 'Ожидает', exact: true })
+        .getByRole('listitem'),
+    ).toHaveCount(1);
   });
   await expect(page.getByRole('alert')).toContainText('Задача изменилась');
   expect(patches).toEqual([{ status: 'in_progress', expected_version: 1 }]);
@@ -268,4 +293,67 @@ test('changes status with the keyboard through the task dialog', async ({
       .getByRole('listitem'),
   ).toHaveCount(1);
   expect(patches).toEqual([{ status: 'in_progress', expected_version: 1 }]);
+});
+
+test('starts dragging at the visible handle while a realtime refresh is pending', async ({
+  page,
+}) => {
+  let socket!: import('@playwright/test').WebSocketRoute;
+  await page.routeWebSocket('**/ws/board', (connection) => {
+    socket = connection;
+  });
+  const patches = await board(page);
+  const refresh = page.getByRole('button', {
+    name: 'Обновить доску',
+    exact: true,
+  });
+  await expect(
+    page.getByText('Обновления подключены', { exact: true }),
+  ).toBeVisible();
+  await expect(refresh).toBeEnabled();
+  await page.evaluate(() => document.fonts.ready.then(() => undefined));
+  const handle = page.getByRole('button', { name: /Перенести задачу/ });
+  await handle.scrollIntoViewIfNeeded();
+  const start = await handle.boundingBox();
+  if (!start) throw new Error('Expected a visible drag handle');
+  let finish!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  await page.route('**/api/v1/tasks?**', async (route) => {
+    await gate;
+    await route.fulfill({
+      json: {
+        data:
+          new URL(route.request().url()).searchParams.get('status') ===
+          'pending'
+            ? [initial]
+            : [],
+        meta: { has_more: false },
+      },
+    });
+  });
+
+  socket.send(JSON.stringify({ type: 'board.changed' }));
+  await expect(refresh).toBeDisabled();
+  try {
+    await page.mouse.move(
+      start.x + start.width / 2,
+      start.y + start.height / 2,
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      start.x + start.width / 2 - 12,
+      start.y + start.height / 2,
+      { steps: 3 },
+    );
+    await expect(handle).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+  } finally {
+    await page.mouse.up();
+    finish();
+  }
+  await expect(refresh).toBeEnabled();
+  expect(patches).toEqual([]);
+  await expect(page.getByRole('listitem')).toContainText(initial.text);
 });

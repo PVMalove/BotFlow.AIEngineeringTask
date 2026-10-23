@@ -80,6 +80,8 @@ def test_browser_auth_runs_before_resource_checks_change_admin_access(
             assert env["BOTFLOW_E2E_BASE_URL"] == "http://127.0.0.1:43210"
             assert env["BOTFLOW_E2E_COMPOSE"]
             assert env["BOTFLOW_E2E_OUTPUT_DIR"].endswith("/browser-results")
+        elif command[-1] == "tasks-worker":
+            stages.append("tasks-worker")
         elif command[-1] == "reset":
             stages.append("reset")
         elif command[-1] == "smoke":
@@ -93,4 +95,4 @@ def test_browser_auth_runs_before_resource_checks_change_admin_access(
     monkeypatch.setattr(subprocess, "run", subprocess_boundary)
 
     assert module["main"]() == 0
-    assert stages == ["browser", "reset", "resources", "resources"]
+    assert stages == ["tasks-worker", "browser", "reset", "resources", "resources"]
