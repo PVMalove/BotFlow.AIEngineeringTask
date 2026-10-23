@@ -420,7 +420,8 @@ export function Board({
                     {query.isPending ? '…' : query.isError ? '?' : items.length}
                     {query.hasNextPage ? '+' : ''})
                   </Typography>
-                  {query.isFetching && (
+                  {/* Background reads must not move a handle under the pointer. */}
+                  {query.isPending && query.isFetching && (
                     <Typography role="status" sx={{ mb: 2 }}>
                       {messages.tasksLoading}
                     </Typography>
