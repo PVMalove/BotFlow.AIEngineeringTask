@@ -233,3 +233,20 @@ RU/hy и живой Telegram проверяются отдельно (#17).
 `postgresql+asyncpg://user:password@localhost:5432/test`. Тесты создают и очищают свои таблицы,
 поэтому указывать рабочую БД нельзя. Без переменной `make test` их не запускает; полный путь
 через PostgreSQL, RabbitMQ, Redis и MinIO проверяют `make smoke` и `make e2e`.
+
+## Тесты на Redis
+
+`tests/integration/test_board_realtime.py` проверяет сигнал `board.changed` и WS `/ws/board`
+на настоящем Redis и пропускается, пока не задан `BOTFLOW_TEST_REDIS_URL` — URL одноразового
+Redis без ACL, например `redis://localhost:6379/0`. Тесты только публикуют и подписываются на
+канал `botflow.board.changed`, но указывать рабочий Redis нельзя. Compose-Redis закрыт ACL с
+паролем из `.secrets` и для этого не подходит. Одноразовый Redis:
+
+```bash
+docker run -d --rm --name botflow-test-redis -p 127.0.0.1:6379:6379 redis:8-alpine
+BOTFLOW_TEST_REDIS_URL=redis://127.0.0.1:6379/0 make backend-test
+docker stop botflow-test-redis
+```
+
+Без переменной `make test` эти тесты пропускает (skip, не ошибка). Pub/Sub не журнал:
+тесты не требуют воспроизведения пропущенного сигнала.

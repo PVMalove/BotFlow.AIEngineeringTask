@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from typing import Any
 
 import pytest
-from conftest import AUTHOR, FakeBoardFeed
+from conftest import AUTHOR, FakeBoardFeed, TrackedApp, connected
 from kernel_domain.errors import Error
 from kernel_domain.result import Result
 from kernel_platform.security.actor import Actor, ActorRole
@@ -80,7 +80,7 @@ def client(identity: Identity, feed: FakeBoardFeed) -> Iterator[TestClient]:
         return services(identity, feed)
 
     app.dependency_overrides[get_services] = override
-    yield TestClient(app)
+    yield TestClient(TrackedApp(app))
 
 
 def refused_with(client: TestClient, headers: dict[str, str]) -> int:
@@ -143,7 +143,7 @@ def test_a_signal_reaches_an_approved_client_after_a_fresh_identity_check(
 ) -> None:
     feed.script = [True]
 
-    with client.websocket_connect("/ws/board", headers=HEADERS) as socket:
+    with connected(client, HEADERS) as socket:
         assert socket.receive_json() == SIGNAL
 
     assert identity.tokens == [TOKEN, TOKEN]  # on connect and before the frame
@@ -160,7 +160,7 @@ def test_after_a_block_no_further_frame_is_sent_and_the_socket_closes(
         AuthErrors.not_approved(),
     ]
 
-    with client.websocket_connect("/ws/board", headers=HEADERS) as socket:
+    with connected(client, HEADERS) as socket:
         assert socket.receive_json() == SIGNAL
         with pytest.raises(WebSocketDisconnect) as closed:
             socket.receive_json()
@@ -174,7 +174,7 @@ def test_identity_not_answering_before_a_send_closes_without_a_frame(
     feed.script = [True]
     identity.answers = [Actor(AUTHOR, ActorRole.USER), None]
 
-    with client.websocket_connect("/ws/board", headers=HEADERS) as socket:
+    with connected(client, HEADERS) as socket:
         with pytest.raises(WebSocketDisconnect) as closed:
             socket.receive_json()
 
@@ -191,7 +191,7 @@ def test_the_heartbeat_is_a_checked_frame_too(
         AuthErrors.unauthenticated(),
     ]
 
-    with client.websocket_connect("/ws/board", headers=HEADERS) as socket:
+    with connected(client, HEADERS) as socket:
         assert socket.receive_json() == PING
         with pytest.raises(WebSocketDisconnect) as closed:
             socket.receive_json()
@@ -204,7 +204,7 @@ def test_the_heartbeat_is_a_checked_frame_too(
 def test_a_clients_departure_releases_the_subscription(
     client: TestClient, feed: FakeBoardFeed
 ) -> None:
-    with client.websocket_connect("/ws/board", headers=HEADERS):
+    with connected(client, HEADERS):
         pass
 
     assert feed.subscribed == 1 and feed.unsubscribed == 1
@@ -223,7 +223,7 @@ def test_a_redis_that_fails_while_listening_closes_with_try_again_later(
 ) -> None:
     feed.script = [True, BoardFeedUnavailable()]
 
-    with client.websocket_connect("/ws/board", headers=HEADERS) as socket:
+    with connected(client, HEADERS) as socket:
         assert socket.receive_json() == SIGNAL
         with pytest.raises(WebSocketDisconnect) as closed:
             socket.receive_json()

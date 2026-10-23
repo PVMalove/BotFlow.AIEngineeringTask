@@ -2,16 +2,19 @@
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from contextlib import asynccontextmanager
+import time
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from types import TracebackType
-from typing import Self
+from typing import Any, Self, cast
 from uuid import UUID, uuid4
 
 from kernel_domain.domain_event import DomainEvent
 from kernel_platform.pagination import Cursor
+from starlette.testclient import TestClient, WebSocketTestSession
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from domain.entities.task import Task
 from domain.repositories import InboxRepository, TaskRepository
@@ -222,3 +225,42 @@ class FakeBoardFeed:
             yield FakeBoardSubscription(self.script, self.timeouts)
         finally:
             self.unsubscribed += 1
+
+
+class TrackedApp:
+    """TestClient cancels the app the moment a socket block is left; this lets a
+    test wait until the app has finished its own cleanup (unsubscribing)."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+        self.served = 0
+        self.finished = 0
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "websocket":
+            await self._app(scope, receive, send)
+            return
+        self.served += 1
+        try:
+            await self._app(scope, receive, send)
+        finally:
+            self.finished += 1
+
+    def wait_idle(self, timeout: float = 5.0) -> None:
+        deadline = time.monotonic() + timeout
+        while self.finished < self.served and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert self.finished == self.served, "the app did not finish serving"
+
+
+@contextmanager
+def connected(client: TestClient, headers: dict[str, str]) -> Iterator[Any]:
+    """An accepted board socket, left only after the app has cleaned up."""
+    app = cast(TrackedApp, client.app)
+    socket: WebSocketTestSession
+    with client.websocket_connect("/ws/board", headers=headers) as socket:
+        try:
+            yield socket
+        finally:
+            socket.close()
+            app.wait_idle()
