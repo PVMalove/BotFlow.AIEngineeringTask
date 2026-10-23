@@ -4,6 +4,7 @@ import re
 from datetime import UTC, datetime
 
 import pytest
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from application.queries.job_status import (
     JobStatusRecord,
@@ -14,6 +15,7 @@ from application.queries.job_status import (
 from domain.notices import VOICE_FAILURES
 from infrastructure.db.job_status_reader import STATUS_QUERY
 
+asyncpg_dialect = create_async_engine("postgresql+asyncpg://").dialect
 DUE = datetime(2026, 1, 1, 12, 0, 5, tzinfo=UTC)
 
 
@@ -115,3 +117,12 @@ def test_the_status_query_reads_no_text_file_id_object_key_or_author_name() -> N
     ):
         assert not re.search(forbidden, sql), forbidden
     assert "payload" not in sql
+
+
+def test_the_status_query_casts_every_uuid_bind_for_asyncpg() -> None:
+    # A bare $n inside CASE reaches PostgreSQL untyped, resolves to text, and
+    # `uuid = text` fails: each id bind must carry a ::UUID cast.
+    sql = str(STATUS_QUERY.compile(dialect=asyncpg_dialect))
+
+    assert len(re.findall(r"\$\d+::UUID", sql)) == 3
+    assert not re.search(r"\$\d+(?!\d|::UUID)", sql)

@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import Uuid, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from application.queries.job_status import JobStatusRecord
@@ -23,6 +23,12 @@ STATUS_QUERY = text(
         ELSE :create_id END
     WHERE j.id = :job_id
     """
+).bindparams(
+    # Typed binds: untyped ones inside CASE reach PostgreSQL as text and
+    # `uuid = text` fails; the asyncpg dialect renders a ::UUID cast for them.
+    bindparam("job_id", type_=Uuid),
+    bindparam("create_id", type_=Uuid),
+    bindparam("transcribe_id", type_=Uuid),
 )
 
 
