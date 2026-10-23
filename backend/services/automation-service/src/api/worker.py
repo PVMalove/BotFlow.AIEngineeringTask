@@ -3,9 +3,10 @@
 Jobs -> CreateTask outbox -> RabbitMQ; TaskCreated -> job result and intent
 (PostgreSQL); RabbitMQ consumer -> intents -> Redis Stream -> Telegram; voice jobs
 -> TranscribeVoice outbox -> Redis Stream (read by the STT worker).
-`replay <job_id>` re-sends the CreateTask of a failed job or runs a failed voice
-job again. `transcription` is the separate STT worker: it reads one voice record at
-a time from the Redis Stream and needs the Whisper weights, not RabbitMQ.
+`status <job_id>` prints the safe state of one job; `replay <job_id>` re-sends the
+CreateTask of a failed job or runs a failed voice job again. `transcription` is the
+separate STT worker: it reads one voice record at a time from the Redis Stream and
+needs the Whisper weights, not RabbitMQ.
 """
 
 import asyncio
@@ -30,6 +31,8 @@ from api.containers import (
     build_voice_flow,
 )
 from application.commands.transcribe_voice import TranscribeVoiceCommandHandler
+from application.queries.job_status import render, view_of
+from infrastructure.db.job_status_reader import read_job_status
 from infrastructure.db.replay import replay_job, replay_voice_job
 from infrastructure.db.unit_of_work import SqlAutomationUnitOfWork
 from infrastructure.identity_gateway import HttpIdentityGateway
@@ -146,16 +149,33 @@ async def replay(job_id: UUID) -> None:
     print("The job is due again.")
 
 
-def _replay_job_id() -> UUID:
+async def status(job_id: UUID) -> None:
+    container = Container()
+    try:
+        database = await container.database.async_()
+        async with database.sessions() as session:
+            record = await read_job_status(session, job_id)
+    finally:
+        await shutdown(container)
+    if record is None:
+        raise SystemExit("Job not found.")
+    print(render(view_of(record)))
+
+
+def _job_id_argument(command: str) -> UUID:
     try:
         return UUID(sys.argv[2])
     except ValueError:
-        raise SystemExit("Usage: python -m api.worker replay <job_id (UUID)>") from None
+        raise SystemExit(
+            f"Usage: python -m api.worker {command} <job_id (UUID)>"
+        ) from None
 
 
 if __name__ == "__main__":
     if len(sys.argv) == 3 and sys.argv[1] == "replay":
-        asyncio.run(replay(_replay_job_id()))
+        asyncio.run(replay(_job_id_argument("replay")))
+    elif len(sys.argv) == 3 and sys.argv[1] == "status":
+        asyncio.run(status(_job_id_argument("status")))
     elif sys.argv[1:] == ["transcription"]:
         run_process(
             transcription,
