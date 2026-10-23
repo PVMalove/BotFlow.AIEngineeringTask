@@ -10,7 +10,8 @@ type Action =
   | 'board'
   | 'board-change'
   | 'dnd-board'
-  | 'realtime-task';
+  | 'realtime-task'
+  | 'voice-task';
 
 export function fixture(action: Action): {
   code?: string;

@@ -14,6 +14,7 @@ export default defineConfig({
     'dnd.spec.ts',
     'realtime.spec.ts',
   ],
+  forbidOnly: true,
   workers: 1,
   outputDir: process.env.BOTFLOW_E2E_OUTPUT_DIR,
   use: { baseURL: process.env.BOTFLOW_E2E_BASE_URL },

@@ -96,3 +96,23 @@ def test_browser_auth_runs_before_resource_checks_change_admin_access(
 
     assert module["main"]() == 0
     assert stages == ["tasks-worker", "browser", "reset", "resources", "resources"]
+
+
+@pytest.mark.parametrize(
+    "stats",
+    [
+        {"expected": 0, "unexpected": 0, "skipped": 0},
+        {"expected": 9, "unexpected": 0, "skipped": 1},
+    ],
+)
+def test_empty_or_skipped_browser_run_is_not_a_green_result(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    stats: dict[str, int],
+) -> None:
+    report = json.dumps({"stats": stats, "suites": []}).encode()
+
+    with pytest.raises(subprocess.CalledProcessError):
+        launcher(monkeypatch)["report_browser_result"](report)
+
+    assert "Browser checks:" in capsys.readouterr().out
