@@ -266,6 +266,28 @@ async def test_one_failing_row_does_not_stop_the_rest_of_the_batch() -> None:
     assert [p[2] for p in flaky.published] == [str(second.id)]
 
 
+async def test_a_crash_after_the_confirm_publishes_the_same_message_id_again() -> None:
+    store, publisher = Store(), Publisher()
+    row = store.add()
+
+    class Crashing(Tx):
+        async def mark_published(self, entry_id: UUID, now: datetime) -> None:
+            raise OSError("process killed before the transaction ends")
+
+    @asynccontextmanager
+    async def dying() -> AsyncIterator[Tx]:
+        async with store.transaction() as tx:
+            yield Crashing(tx.rows)
+
+    with pytest.raises(OSError):
+        await RelayOutbox(dying, publisher, clock=lambda: NOW).execute()
+    assert store.rows[row.id].attempts == 0  # nothing was spent or marked
+
+    assert await relay(store, publisher).execute() == 1  # the restarted relay
+
+    assert [p[2] for p in publisher.published] == [str(row.id)] * 2  # same identity
+
+
 async def test_a_storage_error_propagates_and_rolls_back() -> None:
     store, publisher = Store(), Publisher()
     store.add()

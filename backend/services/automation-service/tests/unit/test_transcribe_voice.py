@@ -248,6 +248,40 @@ async def test_a_resumed_record_reads_the_object_and_never_asks_telegram() -> No
     assert h.telegram.calls == []
 
 
+async def test_a_restart_after_a_crash_in_recognition_resumes_from_the_checkpoint() -> (
+    None
+):
+    first = Harness()
+    first.stt.error = RuntimeError("worker killed during recognition")
+    with pytest.raises(RuntimeError):
+        await first.run()
+    restarted = Harness(None)
+    restarted.world = first.world  # a new process over the same database
+
+    result = await restarted.run()
+
+    assert result.outcome is TranscribeOutcome.COMPLETED
+    assert first.telegram.calls == ["AwACfile"]  # downloaded once, before the crash
+    assert restarted.telegram.calls == [] and restarted.audio.puts == []
+    assert restarted.log.events == ["committed", "get", "stt", "committed"]
+
+
+async def test_a_redelivered_entry_after_the_transcript_makes_no_second_task() -> None:
+    first = Harness()
+    await first.run()
+    commits = first.world.commits
+    tasks = dict(first.world.outbox)
+    restarted = Harness(None)
+    restarted.world = first.world  # the entry was never acknowledged: it comes back
+
+    result = await restarted.run()
+
+    assert result.outcome is TranscribeOutcome.SKIPPED
+    assert restarted.stt.heard == [] and restarted.telegram.calls == []
+    assert first.world.outbox == tasks and list(tasks) == [outbox_id_for(JOB_ID)]
+    assert first.world.commits == commits
+
+
 async def test_a_checkpointed_object_that_vanished_is_fetched_again() -> None:
     h = Harness(voice_job(stage=VoiceStage.STORED, s3_key=f"voice/{JOB_ID}"))
     h.audio.get_errors = [AudioMissing()]
